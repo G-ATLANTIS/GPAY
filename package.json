@@ -9,10 +9,16 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@mollie/api-client": "^4.3.3",
+    "axios": "^1.10.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.0",
     "ethers": "^6.15.0",
     "express": "^5.1.0",
+    "fs-extra": "^11.3.0",
+    "nodemailer": "^7.0.5",
+    "pdfkit": "^0.17.1",
+    "qrcode": "^1.5.4",
     "web3": "^4.16.0"
   },
   "description": ""
