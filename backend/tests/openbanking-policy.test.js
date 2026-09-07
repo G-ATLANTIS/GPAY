@@ -38,11 +38,13 @@ assert.equal(isValidIban('not-an-iban'), false);
 // Provider readiness probe is explicit opt-in and does not imply payment authority.
 process.env.TRUELAYER_ENV = 'sandbox';
 process.env.G_BANK_ENABLE_PROVIDER_PROBE = 'false';
-mustThrow(() => assertProviderProbeEnabled(), /disabled/);
+process.env.G_BANK_PROVIDER_PROBE_SECRET = 'probe-secret-012345678901234567890123';
+mustThrow(() => assertProviderProbeEnabled(process.env.G_BANK_PROVIDER_PROBE_SECRET), /disabled/);
 assert.equal(providerConfigStatus().provider_probe_enabled, false);
 
 process.env.G_BANK_ENABLE_PROVIDER_PROBE = 'true';
-assert.doesNotThrow(() => assertProviderProbeEnabled());
+assert.doesNotThrow(() => assertProviderProbeEnabled(process.env.G_BANK_PROVIDER_PROBE_SECRET));
+mustThrow(() => assertProviderProbeEnabled('wrong-probe-secret'), /authorization failed/);
 assert.equal(providerConfigStatus().provider_probe_enabled, true);
 
 const parsed = assertPaymentInput({
@@ -345,6 +347,7 @@ console.log('G-Bank approval CLI tests: PASS');
   const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp521r1' });
   process.env.TRUELAYER_ENV = 'sandbox';
   process.env.G_BANK_ENABLE_PROVIDER_PROBE = 'true';
+  process.env.G_BANK_PROVIDER_PROBE_SECRET = 'contract-probe-secret-012345678901234567890';
   process.env.TRUELAYER_CLIENT_ID = 'contract-client';
   process.env.TRUELAYER_CLIENT_SECRET = 'contract-secret';
   process.env.TRUELAYER_SIGNING_KID = 'contract-kid';
@@ -369,7 +372,7 @@ console.log('G-Bank approval CLI tests: PASS');
     }
   };
 
-  const result = await performProviderReadiness(fakeHttp);
+  const result = await performProviderReadiness(fakeHttp, process.env.G_BANK_PROVIDER_PROBE_SECRET);
   assert.equal(result.request_signature_accepted, true);
   assert.equal(result.provider_http_status, 204);
   assert.equal(result.payment_created, false);
