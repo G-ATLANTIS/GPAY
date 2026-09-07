@@ -4,8 +4,9 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "check:banking": "node --check backend/routes/openbanking.js && node --check backend/index.js",
-    "test:banking": "node backend/tests/openbanking-policy.test.js"
+    "check:banking": "node --check backend/routes/openbanking.js && node --check backend/index.js && node --check scripts/generate-truelayer-keypair.js",
+    "test:banking": "node backend/tests/openbanking-policy.test.js",
+    "keygen:banking": "node scripts/generate-truelayer-keypair.js"
   },
   "keywords": [],
   "author": "",
