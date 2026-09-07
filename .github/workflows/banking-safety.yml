@@ -8,6 +8,8 @@ on:
       - 'scripts/generate-truelayer-keypair.js'
       - 'scripts/generate-g-bank-approval.js'
       - 'scripts/record-banking-evidence.js'
+      - 'scripts/run-banking-sandbox-smoke.js'
+      - 'backend/tests/banking-smoke.test.js'
       - 'scripts/check-banking-readiness.js'
       - 'backend/index.js'
       - 'package.json'
@@ -41,6 +43,9 @@ jobs:
 
       - name: Offline banking policy tests
         run: npm run test:banking
+
+      - name: Sandbox banking smoke runner tests
+        run: npm run test:banking:smoke
 
       - name: Confirm no obvious live secrets in tracked files
         shell: bash
