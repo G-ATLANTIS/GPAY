@@ -48,6 +48,11 @@ const {
   validateStoredWebhookReceipt,
   observeWebhookEvent,
   verifyAndClassifyWebhook,
+  normalizeProviderPaymentStatus,
+  webhookEventToPaymentObservation,
+  listVerifiedWebhookReceiptsForPayment,
+  evaluateExternalAccountPaymentState,
+  reconcilePaymentState,
   fetchPaymentStatus
 } = router._test;
 
@@ -1126,6 +1131,183 @@ console.log('Durable payment-intent and HPP return tests: PASS');
   ]);
 
   console.log('Payment status read contract tests: PASS');
+})().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
+
+
+// External-account reconciliation never promotes executed to creditor settlement.
+assert.equal(normalizeProviderPaymentStatus('executed'), 'executed');
+assert.equal(normalizeProviderPaymentStatus('nonsense'), 'unknown');
+assert.equal(webhookEventToPaymentObservation('payment_executed'), 'executed');
+assert.equal(webhookEventToPaymentObservation('payment_settled'), 'settled');
+
+{
+  const executed = evaluateExternalAccountPaymentState({
+    providerStatus: 'executed',
+    webhookReceipts: [],
+    localBindingKnown: true
+  });
+  assert.equal(executed.state, 'BANK_ACCEPTED_NOT_SETTLEMENT_PROVEN');
+  assert.equal(executed.bank_accepted_execution, true);
+  assert.equal(executed.creditor_settlement_proven, false);
+  assert.equal(executed.verified_value_flow, false);
+}
+
+{
+  const failed = evaluateExternalAccountPaymentState({
+    providerStatus: 'failed',
+    webhookReceipts: [],
+    localBindingKnown: true
+  });
+  assert.equal(failed.state, 'FAILED');
+  assert.equal(failed.verified_value_flow, false);
+}
+
+{
+  const settledAnomaly = evaluateExternalAccountPaymentState({
+    providerStatus: 'settled',
+    webhookReceipts: [],
+    localBindingKnown: true
+  });
+  assert.equal(settledAnomaly.state, 'ANOMALY_BLOCKED');
+  assert.equal(
+    settledAnomaly.anomalies.includes('UNEXPECTED_SETTLED_STATUS_FOR_EXTERNAL_ACCOUNT'),
+    true
+  );
+}
+
+{
+  const creditableAnomaly = evaluateExternalAccountPaymentState({
+    providerStatus: 'executed',
+    webhookReceipts: [{
+      event_id: '11111111-2222-4333-8444-555555555555',
+      event_type: 'payment_creditable',
+      webhook_timestamp: new Date().toISOString()
+    }],
+    localBindingKnown: true
+  });
+  assert.equal(creditableAnomaly.state, 'ANOMALY_BLOCKED');
+  assert.equal(
+    creditableAnomaly.anomalies.includes('UNEXPECTED_PAYMENT_CREDITABLE_WEBHOOK_FOR_EXTERNAL_ACCOUNT'),
+    true
+  );
+}
+
+{
+  const conflict = evaluateExternalAccountPaymentState({
+    providerStatus: 'executed',
+    webhookReceipts: [{
+      event_id: '21111111-2222-4333-8444-555555555555',
+      event_type: 'payment_failed',
+      webhook_timestamp: new Date().toISOString()
+    }],
+    localBindingKnown: true
+  });
+  assert.equal(conflict.state, 'ANOMALY_BLOCKED');
+  assert.equal(
+    conflict.anomalies.includes('PROVIDER_EXECUTED_WEBHOOK_FAILED_CONFLICT'),
+    true
+  );
+}
+
+{
+  const pending = evaluateExternalAccountPaymentState({
+    providerStatus: 'authorized',
+    webhookReceipts: [],
+    localBindingKnown: true
+  });
+  assert.equal(pending.state, 'AUTHORIZED');
+  assert.equal(pending.verified_value_flow, false);
+}
+
+console.log('External-account reconciliation policy tests: PASS');
+
+// Reconciliation requires a local payment binding and reads only verified webhook receipts.
+(async () => {
+  const reconcileRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-reconcile-'));
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.G_BANK_PAYMENT_INTENT_DIR = path.join(reconcileRoot, 'payment-intents');
+  process.env.G_BANK_WEBHOOK_RECEIPT_DIR = path.join(reconcileRoot, 'webhook-events');
+  process.env.TRUELAYER_CLIENT_ID = 'reconcile-client';
+  process.env.TRUELAYER_CLIENT_SECRET = 'reconcile-secret';
+  process.env.TRUELAYER_SIGNING_KID = 'reconcile-kid';
+  process.env.TRUELAYER_PRIVATE_KEY_PEM = crypto.generateKeyPairSync('ec', {
+    namedCurve: 'secp521r1'
+  }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+
+  const paymentId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const idempotencyKey = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const rawBody = JSON.stringify({
+    amount_in_minor: 2500,
+    currency: 'EUR',
+    payment_method: { beneficiary: { type: 'external_account' } }
+  });
+
+  preparePaymentIntentReceipt({
+    idempotencyKey,
+    amountInMinor: 2500,
+    beneficiary: {
+      iban: 'NL91ABNA0417164300',
+      reference: 'RECONCILE-TEST'
+    },
+    rawBody,
+    environment: 'sandbox'
+  });
+
+  recordPaymentCreated({
+    idempotencyKey,
+    payment: {
+      id: paymentId,
+      status: 'authorization_required',
+      hosted_page: { uri: 'https://payment.truelayer-sandbox.com/example' }
+    },
+    rawBody,
+    environment: 'sandbox'
+  });
+
+  const fakeHttp = {
+    async post(url) {
+      assert.equal(url, 'https://auth.truelayer-sandbox.com/connect/token');
+      return { status: 200, data: { access_token: 'reconcile-access-token' } };
+    },
+    async get(url, options) {
+      assert.equal(
+        url,
+        `https://api.truelayer-sandbox.com/v3/payments/${paymentId}`
+      );
+      assert.equal(options.headers.Authorization, 'Bearer reconcile-access-token');
+      return {
+        status: 200,
+        data: {
+          id: paymentId,
+          status: 'executed',
+          executed_at: '2026-09-07T18:00:00.000Z'
+        }
+      };
+    }
+  };
+
+  const reconciled = await reconcilePaymentState(paymentId, fakeHttp);
+  assert.equal(reconciled.provider_status, 'executed');
+  assert.equal(
+    reconciled.reconciliation.state,
+    'BANK_ACCEPTED_NOT_SETTLEMENT_PROVEN'
+  );
+  assert.equal(reconciled.creditor_settlement_proven, false);
+  assert.equal(reconciled.verified_value_flow, false);
+
+  await assert.rejects(
+    reconcilePaymentState('ffffffff-ffff-4fff-8fff-ffffffffffff', fakeHttp),
+    /not bound to a local G-Bank payment intent/
+  );
+
+  fs.rmSync(reconcileRoot, { recursive: true, force: true });
+  delete process.env.G_BANK_PAYMENT_INTENT_DIR;
+  delete process.env.G_BANK_WEBHOOK_RECEIPT_DIR;
+
+  console.log('Payment reconciliation integration tests: PASS');
 })().catch((err) => {
   console.error(err);
   process.exitCode = 1;
