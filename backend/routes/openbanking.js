@@ -1496,6 +1496,204 @@ router.post('/create-payment', async (req, res) => {
   }
 });
 
+function normalizeProviderPaymentStatus(status) {
+  const value = String(status || '').toLowerCase();
+  const allowed = new Set([
+    'authorization_required',
+    'authorizing',
+    'authorized',
+    'executed',
+    'failed',
+    'settled'
+  ]);
+  return allowed.has(value) ? value : 'unknown';
+}
+
+function webhookEventToPaymentObservation(eventType) {
+  const value = String(eventType || '').toLowerCase();
+  const mapping = {
+    payment_executed: 'executed',
+    payment_failed: 'failed',
+    payment_settled: 'settled',
+    payment_creditable: 'creditable',
+    payment_settlement_stalled: 'settlement_stalled'
+  };
+  return mapping[value] || 'other';
+}
+
+function listVerifiedWebhookReceiptsForPayment(paymentId, environment = envMode()) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(paymentId || ''))) throw new Error('invalid_payment_binding_id');
+
+  const directory = webhookReceiptDirectory(environment);
+  if (!fs.existsSync(directory)) return [];
+
+  const receipts = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const fullPath = pathModule.join(directory, entry.name);
+
+    let receipt;
+    try {
+      receipt = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+      validateStoredWebhookReceipt(receipt);
+    } catch {
+      // A tampered/unreadable receipt is an integrity failure for reconciliation.
+      throw new Error('webhook_receipt_store_integrity_failure');
+    }
+
+    if (String(receipt.payment_id || '').toLowerCase() === String(paymentId).toLowerCase()) {
+      receipts.push({
+        event_id: receipt.event_id,
+        event_type: receipt.event_type,
+        event_version: receipt.event_version,
+        payment_id: receipt.payment_id,
+        webhook_timestamp: receipt.webhook_timestamp,
+        observed_at: receipt.observed_at,
+        raw_body_sha256: receipt.raw_body_sha256,
+        receipt_sha256: receipt.receipt_sha256,
+        signature_kid: receipt.signature_kid,
+        signature_jku: receipt.signature_jku
+      });
+    }
+  }
+
+  receipts.sort((a, b) => String(a.webhook_timestamp).localeCompare(String(b.webhook_timestamp)));
+  return receipts;
+}
+
+function evaluateExternalAccountPaymentState({
+  providerStatus,
+  webhookReceipts = [],
+  localBindingKnown
+}) {
+  const normalizedProvider = normalizeProviderPaymentStatus(providerStatus);
+  const observations = webhookReceipts.map(receipt => ({
+    event_id: receipt.event_id,
+    event_type: receipt.event_type,
+    observation: webhookEventToPaymentObservation(receipt.event_type),
+    webhook_timestamp: receipt.webhook_timestamp
+  }));
+
+  const observed = new Set(observations.map(item => item.observation));
+  const anomalies = [];
+
+  if (!localBindingKnown) anomalies.push('UNKNOWN_LOCAL_PAYMENT_BINDING');
+  if (normalizedProvider === 'unknown') anomalies.push('UNKNOWN_PROVIDER_STATUS');
+
+  // GPAY currently creates only external_account beneficiaries. For that
+  // payment type TrueLayer documents executed/failed as terminal; settled is
+  // a merchant-account/closed-loop status and must never be promoted here.
+  if (normalizedProvider === 'settled') {
+    anomalies.push('UNEXPECTED_SETTLED_STATUS_FOR_EXTERNAL_ACCOUNT');
+  }
+  if (observed.has('settled')) {
+    anomalies.push('UNEXPECTED_PAYMENT_SETTLED_WEBHOOK_FOR_EXTERNAL_ACCOUNT');
+  }
+  if (observed.has('creditable')) {
+    anomalies.push('UNEXPECTED_PAYMENT_CREDITABLE_WEBHOOK_FOR_EXTERNAL_ACCOUNT');
+  }
+  if (observed.has('settlement_stalled')) {
+    anomalies.push('UNEXPECTED_SETTLEMENT_STALLED_WEBHOOK_FOR_EXTERNAL_ACCOUNT');
+  }
+
+  const providerTerminal = normalizedProvider === 'executed' || normalizedProvider === 'failed';
+  const webhookExecuted = observed.has('executed');
+  const webhookFailed = observed.has('failed');
+
+  if (webhookExecuted && webhookFailed) {
+    anomalies.push('CONFLICTING_WEBHOOK_TERMINAL_EVIDENCE');
+  }
+  if (normalizedProvider === 'executed' && webhookFailed) {
+    anomalies.push('PROVIDER_EXECUTED_WEBHOOK_FAILED_CONFLICT');
+  }
+  if (normalizedProvider === 'failed' && webhookExecuted) {
+    anomalies.push('PROVIDER_FAILED_WEBHOOK_EXECUTED_CONFLICT');
+  }
+
+  let state = 'PENDING';
+  if (anomalies.length > 0) {
+    state = 'ANOMALY_BLOCKED';
+  } else if (normalizedProvider === 'failed') {
+    state = 'FAILED';
+  } else if (normalizedProvider === 'executed') {
+    state = 'BANK_ACCEPTED_NOT_SETTLEMENT_PROVEN';
+  } else if (webhookExecuted) {
+    state = 'WEBHOOK_EXECUTED_AWAITING_PROVIDER_CONSISTENCY';
+  } else if (normalizedProvider === 'authorized') {
+    state = 'AUTHORIZED';
+  } else if (normalizedProvider === 'authorizing') {
+    state = 'AUTHORIZING';
+  } else if (normalizedProvider === 'authorization_required') {
+    state = 'AUTHORIZATION_REQUIRED';
+  }
+
+  return {
+    payment_method_target: 'external_account',
+    provider_status: normalizedProvider,
+    provider_terminal: providerTerminal,
+    webhook_observations: observations,
+    anomalies,
+    state,
+    bank_accepted_execution: state === 'BANK_ACCEPTED_NOT_SETTLEMENT_PROVEN',
+    creditor_settlement_proven: false,
+    verified_value_flow: false,
+    value_flow_edge_active: false
+  };
+}
+
+async function reconcilePaymentState(paymentId, httpClient = axios) {
+  const environmentSnapshot = envMode();
+  const binding = lookupPaymentBinding(paymentId, environmentSnapshot);
+  if (!binding.known) {
+    const err = new Error('Payment ID is not bound to a local G-Bank payment intent.');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const providerResult = await fetchPaymentStatus(paymentId, httpClient);
+  if (providerResult.environment !== environmentSnapshot) {
+    throw new Error('payment_reconciliation_environment_mismatch');
+  }
+
+  const webhookReceipts = listVerifiedWebhookReceiptsForPayment(
+    paymentId,
+    environmentSnapshot
+  );
+
+  const evaluation = evaluateExternalAccountPaymentState({
+    providerStatus: providerResult.payment.status,
+    webhookReceipts,
+    localBindingKnown: true
+  });
+
+  return {
+    provider: 'truelayer',
+    environment: environmentSnapshot,
+    payment_id: String(paymentId).toLowerCase(),
+    local_payment_binding_sha256: binding.binding_sha256,
+    provider_read_performed: true,
+    provider_status: evaluation.provider_status,
+    provider_executed_at: providerResult.payment.executed_at || null,
+    provider_failed_at: providerResult.payment.failed_at || null,
+    provider_failure_reason: providerResult.payment.failure_reason || null,
+    provider_failure_stage: providerResult.payment.failure_stage || null,
+    verified_webhook_receipt_count: webhookReceipts.length,
+    reconciliation: evaluation,
+    creditor_settlement_proven: false,
+    verified_value_flow: false,
+    execution_graph: {
+      edge: 'VERIFIED_VALUE_FLOW_CANDIDATE',
+      active: false,
+      state: evaluation.state,
+      reason: evaluation.bank_accepted_execution
+        ? 'External-account executed proves bank acceptance only; creditor settlement remains unproven.'
+        : evaluation.anomalies.length
+          ? 'Conflicting or impossible evidence blocks promotion.'
+          : 'Payment remains below independently proven creditor settlement.'
+    }
+  };
+}
+
 async function fetchPaymentStatus(paymentId, httpClient = axios) {
   if (!/^[0-9a-f-]{36}$/i.test(String(paymentId || ''))) {
     const err = new Error('Invalid payment ID.');
@@ -1565,6 +1763,23 @@ router.get('/payment/:paymentId', async (req, res) => {
   }
 });
 
+router.get('/payment/:paymentId/reconcile', async (req, res) => {
+  try {
+    const result = await reconcilePaymentState(
+      String(req.params.paymentId || ''),
+      axios
+    );
+    res.json(result);
+  } catch (err) {
+    const status = err.statusCode || err.response?.status || 500;
+    res.status(status).json({
+      error: err.message || 'Payment reconciliation failed.',
+      creditor_settlement_proven: false,
+      verified_value_flow: false
+    });
+  }
+});
+
 router._test = {
   envMode,
   providerConfigStatus,
@@ -1609,6 +1824,11 @@ router._test = {
   validateStoredWebhookReceipt,
   observeWebhookEvent,
   verifyAndClassifyWebhook,
+  normalizeProviderPaymentStatus,
+  webhookEventToPaymentObservation,
+  listVerifiedWebhookReceiptsForPayment,
+  evaluateExternalAccountPaymentState,
+  reconcilePaymentState,
   fetchPaymentStatus
 };
 
