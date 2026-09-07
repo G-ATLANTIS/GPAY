@@ -4,10 +4,13 @@ const crypto = require('node:crypto');
 process.env.TRUELAYER_ENV = 'sandbox';
 process.env.G_BANK_MAX_PAYMENT_EUR = '100';
 process.env.G_BANK_ENABLE_LIVE = 'false';
+process.env.G_BANK_OPERATOR_SECRET = 'unit-test-operator-secret-012345678901234567890';
 
 const router = require('../routes/openbanking');
 const {
   providerConfigStatus,
+  assertOperatorAuthorization,
+  operatorAuthorizationMiddleware,
   assertProviderProbeEnabled,
   isValidIban,
   approvalMessage,
@@ -50,6 +53,65 @@ assert.equal(isValidIban('NL91 ABNA 0417 1643 00'), true);
 assert.equal(isValidIban('NL91 ABNA 0417 1643 01'), false);
 assert.equal(isValidIban('not-an-iban'), false);
 
+
+// All G-Bank operator routes require a separate authorization secret; webhook is signature-authenticated instead.
+assert.doesNotThrow(() => assertOperatorAuthorization(process.env.G_BANK_OPERATOR_SECRET));
+mustThrow(() => assertOperatorAuthorization('wrong-operator-secret'), /authorization failed/);
+mustThrow(() => assertOperatorAuthorization(''), /authorization failed/);
+
+{
+  let nextCalled = false;
+  operatorAuthorizationMiddleware(
+    {
+      path: '/health',
+      get: (name) => name === 'X-G-Bank-Operator-Authorization' ? process.env.G_BANK_OPERATOR_SECRET : ''
+    },
+    {
+      status() { throw new Error('authorized operator route should not return an error response'); }
+    },
+    () => { nextCalled = true; }
+  );
+  assert.equal(nextCalled, true);
+}
+
+{
+  let nextCalled = false;
+  operatorAuthorizationMiddleware(
+    {
+      path: '/webhook',
+      get: () => ''
+    },
+    {
+      status() { throw new Error('webhook operator bypass should not return an error response'); }
+    },
+    () => { nextCalled = true; }
+  );
+  assert.equal(nextCalled, true);
+}
+
+{
+  let statusCode = null;
+  let responseBody = null;
+  operatorAuthorizationMiddleware(
+    {
+      path: '/payment/77777777-7777-4777-8777-777777777777',
+      get: () => 'wrong-operator-secret'
+    },
+    {
+      status(code) {
+        statusCode = code;
+        return {
+          json(body) { responseBody = body; }
+        };
+      }
+    },
+    () => { throw new Error('unauthorized operator route must not call next'); }
+  );
+  assert.equal(statusCode, 403);
+  assert.equal(responseBody.verified_value_flow, false);
+}
+
+console.log('G-Bank operator authorization tests: PASS');
 
 // Provider readiness probe is explicit opt-in and does not imply payment authority.
 process.env.TRUELAYER_ENV = 'sandbox';
@@ -337,6 +399,7 @@ const readinessBlocked = spawnSync(process.execPath, [readinessScript], {
     TRUELAYER_PRIVATE_KEY_B64: '',
     TRUELAYER_RETURN_URI: '',
     G_BANK_MAX_PAYMENT_EUR: '100',
+    G_BANK_OPERATOR_SECRET: 'synthetic-operator-secret-012345678901234567890',
     G_BANK_ENABLE_LIVE: 'false',
     G_BANK_ENABLE_PROVIDER_PROBE: 'false',
     G_BANK_WEBHOOK_RECEIPT_DIR: ''
@@ -359,6 +422,7 @@ const readinessConfigured = spawnSync(process.execPath, [readinessScript], {
     TRUELAYER_PRIVATE_KEY_B64: '',
     TRUELAYER_RETURN_URI: 'http://localhost:5173/bank-return',
     G_BANK_MAX_PAYMENT_EUR: '100',
+    G_BANK_OPERATOR_SECRET: 'synthetic-operator-secret-012345678901234567890',
     G_BANK_ENABLE_LIVE: 'false',
     G_BANK_ENABLE_PROVIDER_PROBE: 'false'
   }
