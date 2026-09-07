@@ -891,7 +891,7 @@ console.log('Durable payment-intent and HPP return tests: PASS');
   });
   const webhookSignature = `${encodedWebhookHeader}..${webhookRawSignature.toString('base64url')}`;
 
-  assert.equal(expectedWebhookJku(), webhookJoseHeader.jku);
+  assert.equal(expectedWebhookJku('sandbox'), webhookJoseHeader.jku);
   assert.equal(parseDetachedTlSignature(webhookSignature).header.kid, webhookKid);
   assert.equal(validateWebhookTimestamp(webhookHeaders).timestamp, webhookTimestamp);
 
@@ -963,7 +963,11 @@ console.log('Durable payment-intent and HPP return tests: PASS');
   assert.equal(firstWebhook.durable_event_receipt, true);
   assert.match(firstWebhook.event_receipt_sha256, /^[0-9a-f]{64}$/);
 
-  const storedReceiptPath = webhookReceiptPath(webhookEvent.event_id);
+  const storedReceiptPath = webhookReceiptPath(
+    webhookEvent.event_id,
+    'sandbox',
+    webhookReceiptRoot
+  );
   assert.equal(fs.existsSync(storedReceiptPath), true);
   const storedReceipt = JSON.parse(fs.readFileSync(storedReceiptPath, 'utf8'));
   assert.equal(validateStoredWebhookReceipt(storedReceipt), storedReceipt.receipt_sha256);
