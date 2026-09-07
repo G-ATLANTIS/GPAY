@@ -43,6 +43,7 @@ function requiredConfig() {
     returnUri: process.env.TRUELAYER_RETURN_URI || '',
     webhookPath: process.env.TRUELAYER_WEBHOOK_PATH || '/api/open-banking/webhook',
     webhookReceiptDir: process.env.G_BANK_WEBHOOK_RECEIPT_DIR || '.secrets/runtime/webhook-events',
+    webhookReceiptDirExplicit: Boolean(process.env.G_BANK_WEBHOOK_RECEIPT_DIR),
     maxEur,
     liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
     providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
@@ -571,6 +572,7 @@ function configStatus() {
   if (live && !cfg.liveEnabled) missing.push('G_BANK_ENABLE_LIVE=true');
   const evidence = evidenceStatus();
   if (live && !cfg.approvalSecret) missing.push('G_BANK_APPROVAL_SECRET');
+  if (live && !cfg.webhookReceiptDirExplicit) missing.push('G_BANK_WEBHOOK_RECEIPT_DIR(explicit persistent location)');
   if (live && !evidence.secret_rotation.valid) missing.push('G_BANK_SECRET_ROTATION_RECEIPT_FILE(valid)');
   if (live && !evidence.sandbox_verification.valid) missing.push('G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE(valid,fresh)');
   if (live && cfg.allowedBeneficiaryIbans.length === 0) missing.push('G_BANK_ALLOWED_BENEFICIARY_IBANS');
@@ -874,7 +876,8 @@ function executionGraphStatus() {
       live_release_evidence_present: liveReleaseEvidencePresent,
       beneficiary_allowlist_configured: cfg.allowedBeneficiaryIbans.length > 0,
       transaction_approval_secret_configured: Boolean(cfg.approvalSecret),
-      webhook_receipt_store_configured: Boolean(cfg.webhookReceiptDir)
+      webhook_receipt_store_configured: Boolean(cfg.webhookReceiptDir),
+      webhook_receipt_store_explicit: cfg.webhookReceiptDirExplicit
     },
     verified_value_flow: false
   };
