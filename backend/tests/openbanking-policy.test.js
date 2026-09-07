@@ -24,6 +24,8 @@ const {
   validateWebhookTimestamp,
   buildWebhookSigningPayload,
   verifyWebhookSignature,
+  validateWebhookJwks,
+  clearWebhookJwksCache,
   fetchWebhookJwks,
   webhookReceiptDirectory,
   webhookReceiptPath,
