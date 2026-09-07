@@ -25,11 +25,20 @@ TRUELAYER_PRIVATE_KEY_B64=
 TRUELAYER_RETURN_URI=http://localhost:5173/bank-return
 G_BANK_MAX_PAYMENT_EUR=100
 G_BANK_ENABLE_LIVE=false
+G_BANK_ENABLE_PROVIDER_PROBE=false
 G_BANK_APPROVAL_SECRET=
 G_BANK_ALLOWED_BENEFICIARY_IBANS=
 ```
 
 Generate a P-521 / secp521r1 signing keypair and upload only the public key to the provider. Keep the private key in a secure secret store/KMS if possible.
+
+A local bootstrap command is included:
+
+```bash
+npm run keygen:banking
+```
+
+It writes the private/public keypair under `.secrets/truelayer/`, refuses to overwrite an existing keypair unless explicitly forced, and `.secrets/` is Git-ignored. Upload only the generated public key to TrueLayer Console.
 
 ### Native request signing
 
@@ -39,6 +48,11 @@ The backend implements TrueLayer request-signing v2 with Node's built-in `crypto
 
 - `GET /api/open-banking/health`
   - Reports environment, missing configuration, live gate and max amount.
+- `POST /api/open-banking/provider-readiness`
+  - Requires `G_BANK_ENABLE_PROVIDER_PROBE=true`.
+  - Obtains a Payments access token and submits a signed nonce to TrueLayer `/test-signature`.
+  - Expects HTTP 204 for a successful provider-authentication/signature check.
+  - Creates no payment, starts no bank authorization, and moves no value.
 - `POST /api/open-banking/create-payment`
   - Creates an EUR bank-transfer payment candidate.
   - Requires a beneficiary IBAN/name/reference and payer identity fields.
@@ -57,10 +71,11 @@ The backend implements TrueLayer request-signing v2 with Node's built-in `crypto
 5. Set a deliberately small `G_BANK_MAX_PAYMENT_EUR` for first live verification.
 6. Configure `G_BANK_ALLOWED_BENEFICIARY_IBANS` with only pre-verified recipients.
 7. Keep `G_BANK_APPROVAL_SECRET` outside Git. For each live payment compute HMAC-SHA256 over `Idempotency-Key|amount_in_minor|IBAN|reference` and send it as `X-G-Bank-Approval`.
-8. Validate the native P-521 / ES512 detached-JWS implementation against TrueLayer's sandbox `/test-signature` endpoint.
-9. Complete a sandbox payment through explicit user authorization.
-10. Only then consider enabling `G_BANK_ENABLE_LIVE=true`.
-11. For a real purchase, verify beneficiary, amount, contract/invoice and settlement receipt separately.
+8. Set `G_BANK_ENABLE_PROVIDER_PROBE=true` temporarily and call `POST /api/open-banking/provider-readiness`; require `request_signature_accepted=true` and provider HTTP 204.
+9. Set `G_BANK_ENABLE_PROVIDER_PROBE=false` again after the readiness check.
+10. Complete a sandbox payment through explicit user authorization.
+11. Only then consider enabling `G_BANK_ENABLE_LIVE=true`.
+12. For a real purchase, verify beneficiary, amount, contract/invoice and settlement receipt separately.
 
 ## Reality-bound graph states
 
