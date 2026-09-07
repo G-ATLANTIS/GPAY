@@ -947,6 +947,9 @@ console.log('Durable payment-intent and HPP return tests: PASS');
     }
   };
 
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.TRUELAYER_WEBHOOK_PATH = '/api/open-banking/webhook';
+  process.env.G_BANK_WEBHOOK_RECEIPT_DIR = webhookReceiptRoot;
   const firstWebhook = await verifyAndClassifyWebhook({
     signature: webhookSignature,
     path: webhookPath,
@@ -979,6 +982,9 @@ console.log('Durable payment-intent and HPP return tests: PASS');
   }
 
   // A second delivery is duplicate even though there is no in-memory replay state.
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.TRUELAYER_WEBHOOK_PATH = '/api/open-banking/webhook';
+  process.env.G_BANK_WEBHOOK_RECEIPT_DIR = webhookReceiptRoot;
   const duplicateWebhook = await verifyAndClassifyWebhook({
     signature: webhookSignature,
     path: webhookPath,
@@ -1023,6 +1029,9 @@ console.log('Durable payment-intent and HPP return tests: PASS');
   });
   const rotatedSignature = `${rotatedEncodedHeader}..${rotatedSignatureRaw.toString('base64url')}`;
 
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.TRUELAYER_WEBHOOK_PATH = '/api/open-banking/webhook';
+  process.env.G_BANK_WEBHOOK_RECEIPT_DIR = webhookReceiptRoot;
   const rotatedWebhook = await verifyAndClassifyWebhook({
     signature: rotatedSignature,
     path: webhookPath,
@@ -1034,6 +1043,9 @@ console.log('Durable payment-intent and HPP return tests: PASS');
   assert.equal(rotatedWebhook.jwks_cache, 'refresh');
   assert.equal(fetchCalls.length, 2);
 
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.TRUELAYER_WEBHOOK_PATH = '/api/open-banking/webhook';
+  process.env.G_BANK_WEBHOOK_RECEIPT_DIR = webhookReceiptRoot;
   const rotatedDuplicate = await verifyAndClassifyWebhook({
     signature: rotatedSignature,
     path: webhookPath,
@@ -1062,6 +1074,9 @@ console.log('Durable payment-intent and HPP return tests: PASS');
   });
   const conflictingSignature = `${encodedWebhookHeader}..${conflictingRawSignature.toString('base64url')}`;
 
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.TRUELAYER_WEBHOOK_PATH = '/api/open-banking/webhook';
+  process.env.G_BANK_WEBHOOK_RECEIPT_DIR = webhookReceiptRoot;
   await assert.rejects(
     verifyAndClassifyWebhook({
       signature: conflictingSignature,
