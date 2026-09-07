@@ -10,7 +10,8 @@
     "check:banking:env": "node scripts/check-banking-readiness.js",
     "approve:banking": "node scripts/generate-g-bank-approval.js",
     "evidence:banking": "node scripts/record-banking-evidence.js",
-    "smoke:banking": "node scripts/run-banking-sandbox-smoke.js"
+    "smoke:banking": "node scripts/run-banking-sandbox-smoke.js",
+    "test:banking:smoke": "node backend/tests/banking-smoke.test.js"
   },
   "keywords": [],
   "author": "",
