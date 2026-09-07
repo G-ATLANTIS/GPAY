@@ -5,6 +5,7 @@ on:
     paths:
       - 'backend/routes/openbanking.js'
       - 'backend/tests/openbanking-policy.test.js'
+      - 'scripts/generate-truelayer-keypair.js'
       - 'backend/index.js'
       - 'package.json'
       - 'package-lock.json'
