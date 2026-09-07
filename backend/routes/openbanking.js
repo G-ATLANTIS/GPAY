@@ -1065,9 +1065,9 @@ function assertPaymentInput(body) {
   return { amountEur, amountInMinor: normalizedAmountInMinor, beneficiary: { ...beneficiary, iban }, user: { ...user, address } };
 }
 
-async function getAccessToken(httpClient = axios) {
+async function getAccessToken(httpClient = axios, endpointSnapshot = endpoints()) {
   const cfg = assertProviderConfigured();
-  const { authBase } = endpoints();
+  const { authBase } = endpointSnapshot;
   const params = new URLSearchParams();
   params.set('grant_type', 'client_credentials');
   params.set('client_id', cfg.clientId);
@@ -1146,7 +1146,7 @@ async function performProviderReadiness(httpClient = axios, authorizationHeader 
   const nonce = crypto.randomUUID();
   const rawBody = JSON.stringify({ nonce });
   const idempotencyKey = crypto.randomUUID();
-  const token = await getAccessToken(httpClient);
+  const token = await getAccessToken(httpClient, endpointSnapshot);
   const signature = signRequest({
     method: 'POST',
     path,
@@ -1436,7 +1436,14 @@ router.post('/create-payment', async (req, res) => {
     };
 
     const rawBody = JSON.stringify(payload);
-    const environmentSnapshot = envMode();
+    const endpointSnapshot = endpoints();
+    const environmentSnapshot = endpointSnapshot.live ? 'live' : 'sandbox';
+
+    // Local token/signature preparation happens before the durable SUBMITTING
+    // receipt. Once the receipt exists, the provider POST is the next operation,
+    // so an incomplete receipt truthfully represents an ambiguous submission.
+    const token = await getAccessToken(axios, endpointSnapshot);
+    const signature = signRequest({ method: 'POST', path, body: rawBody, idempotencyKey });
     const intentReceipt = preparePaymentIntentReceipt({
       idempotencyKey,
       amountInMinor,
@@ -1444,9 +1451,7 @@ router.post('/create-payment', async (req, res) => {
       rawBody,
       environment: environmentSnapshot
     });
-    const token = await getAccessToken();
-    const signature = signRequest({ method: 'POST', path, body: rawBody, idempotencyKey });
-    const { apiBase } = endpoints();
+    const apiBase = endpointSnapshot.apiBase;
 
     const response = await axios.post(`${apiBase}${path}`, rawBody, {
       timeout: 20000,
@@ -1501,7 +1506,7 @@ async function fetchPaymentStatus(paymentId, httpClient = axios) {
   assertProviderConfigured();
   const endpointSnapshot = endpoints();
   const path = `/v3/payments/${paymentId}`;
-  const token = await getAccessToken(httpClient);
+  const token = await getAccessToken(httpClient, endpointSnapshot);
 
   const response = await httpClient.get(`${endpointSnapshot.apiBase}${path}`, {
     timeout: 15000,
