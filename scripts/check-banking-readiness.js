@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 
 function privateKeyPem() {
   if (process.env.TRUELAYER_PRIVATE_KEY_B64) {
@@ -34,6 +35,7 @@ function main() {
   const maxEur = Number(process.env.G_BANK_MAX_PAYMENT_EUR || '0');
   const liveEnabled = process.env.G_BANK_ENABLE_LIVE === 'true';
   const probeEnabled = process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true';
+  const webhookReceiptDir = process.env.G_BANK_WEBHOOK_RECEIPT_DIR || '';
 
   resultLine('environment', 'OK', env);
 
@@ -112,9 +114,37 @@ function main() {
       }
       const ibans = String(process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS || '').split(',').map(v => v.trim()).filter(Boolean);
       if (ibans.length === 0) errors.push('At least one G_BANK_ALLOWED_BENEFICIARY_IBANS entry is required when live execution is enabled.');
+      if (!webhookReceiptDir) {
+        errors.push('G_BANK_WEBHOOK_RECEIPT_DIR must be explicitly configured when live execution is enabled.');
+      }
     }
   } else {
     resultLine('live execution gate', 'SAFE', liveEnabled ? 'ignored in sandbox' : 'disabled');
+  }
+
+  if (webhookReceiptDir) {
+    try {
+      const environmentDir = path.resolve(webhookReceiptDir, env);
+      fs.mkdirSync(environmentDir, { recursive: true, mode: 0o700 });
+      const probePath = path.join(environmentDir, `.readiness-${process.pid}-${Date.now()}`);
+      const fd = fs.openSync(probePath, 'wx', 0o600);
+      try {
+        fs.writeFileSync(fd, 'g-bank-webhook-receipt-store-readiness\n', 'utf8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.unlinkSync(probePath);
+      resultLine('webhook receipt store', 'OK', environmentDir);
+      if (live && !path.isAbsolute(webhookReceiptDir)) {
+        warnings.push('Live webhook receipt directory is relative; independently confirm the underlying filesystem survives process/container restarts.');
+      }
+    } catch {
+      resultLine('webhook receipt store', 'FAIL');
+      errors.push('G_BANK_WEBHOOK_RECEIPT_DIR is not atomically writable.');
+    }
+  } else if (!live) {
+    resultLine('webhook receipt store', 'SAFE', 'not configured; sandbox default may be used by runtime');
   }
 
   if (probeEnabled && (process.env.G_BANK_PROVIDER_PROBE_SECRET || '').length < 32) {
