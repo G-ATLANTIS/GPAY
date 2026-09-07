@@ -75,6 +75,11 @@ The backend implements TrueLayer request-signing v2 with Node's built-in `crypto
   - Reads current provider/bank execution status using a backend bearer token.
   - Does not send modification-only Idempotency-Key/Tl-Signature headers.
   - Does not claim creditor settlement from `executed` alone.
+- `GET /api/open-banking/payment/:paymentId/reconcile`
+  - Requires a locally bound G-Bank payment ID.
+  - Combines the authenticated provider status with already signature-verified webhook receipts.
+  - Performs no payment write.
+  - Never activates `VERIFIED_VALUE_FLOW` for the current external-account payment path.
 
 ## Security blockers before live
 
@@ -369,3 +374,50 @@ The configured webhook path must likewise be exactly:
 ```
 
 This prevents a successful code deployment from silently using a less-protected redirect or a webhook path that the runtime route cannot actually verify.
+
+
+## External-account reconciliation
+
+GPAY currently creates bank-transfer payments to a TrueLayer `external_account` beneficiary.
+
+For that target, the provider state is interpreted as:
+
+```
+authorization_required -> AUTHORIZATION_REQUIRED
+authorizing           -> AUTHORIZING
+authorized            -> AUTHORIZED
+executed              -> BANK_ACCEPTED_NOT_SETTLEMENT_PROVEN
+failed                -> FAILED
+```
+
+TrueLayer documents `executed` as terminal for payments into an external account. It means the payment was successfully submitted to the bank and the bank accepted it; it explicitly does **not** prove that the payment settled in the creditor's account.
+
+`settled` is a merchant-account/closed-loop terminal status. Because this GPAY route targets an external account, a provider `settled` status or `payment_settled` / `payment_creditable` webhook is treated as an anomaly and blocks promotion rather than being interpreted as success.
+
+Reconciliation also fails closed on conflicting terminal evidence, for example:
+
+```
+provider = executed + verified webhook = payment_failed
+provider = failed   + verified webhook = payment_executed
+same payment has both payment_executed and payment_failed webhooks
+```
+
+The reconciliation endpoint reads:
+
+1. the immutable local payment-ID binding;
+2. the current authenticated TrueLayer GET payment status;
+3. signature-verified durable webhook receipts for that payment ID.
+
+It then returns an observational state only:
+
+```
+LOCAL PAYMENT BINDING
+  + PROVIDER READ
+  + VERIFIED WEBHOOK RECEIPTS
+  -> CONSISTENCY EVALUATION
+  -> BANK_ACCEPTED / FAILED / PENDING / ANOMALY
+  -> creditor_settlement_proven = false
+  -> verified_value_flow = false
+```
+
+For a real external-account purchase, independent creditor settlement/receipt evidence is still required outside this TrueLayer status model before G_REAL_EXECUTION_GRAPH can promote the value-flow edge.
