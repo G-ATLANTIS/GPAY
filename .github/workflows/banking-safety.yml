@@ -7,6 +7,7 @@ on:
       - 'backend/tests/openbanking-policy.test.js'
       - 'scripts/generate-truelayer-keypair.js'
       - 'scripts/generate-g-bank-approval.js'
+      - 'scripts/record-banking-evidence.js'
       - 'scripts/check-banking-readiness.js'
       - 'backend/index.js'
       - 'package.json'
