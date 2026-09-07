@@ -251,3 +251,88 @@ assert.equal(overwriteRun.status, 2);
 
 fs.rmSync(keygenDir, { recursive: true, force: true });
 console.log('TrueLayer key-bootstrap tests: PASS');
+
+
+// Banking readiness CLI fails closed with missing credentials and accepts a valid synthetic P-521 config.
+const readinessScript = path.join(__dirname, '..', '..', 'scripts', 'check-banking-readiness.js');
+const readinessBlocked = spawnSync(process.execPath, [readinessScript], {
+  encoding: 'utf8',
+  env: {
+    ...process.env,
+    TRUELAYER_ENV: 'sandbox',
+    TRUELAYER_CLIENT_ID: '',
+    TRUELAYER_CLIENT_SECRET: '',
+    TRUELAYER_SIGNING_KID: '',
+    TRUELAYER_PRIVATE_KEY_PEM: '',
+    TRUELAYER_PRIVATE_KEY_B64: '',
+    TRUELAYER_RETURN_URI: '',
+    G_BANK_MAX_PAYMENT_EUR: '100',
+    G_BANK_ENABLE_LIVE: 'false',
+    G_BANK_ENABLE_PROVIDER_PROBE: 'false'
+  }
+});
+assert.equal(readinessBlocked.status, 2);
+assert.match(readinessBlocked.stderr, /BLOCKED/);
+
+const syntheticPair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp521r1' });
+const syntheticPem = syntheticPair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+const readinessConfigured = spawnSync(process.execPath, [readinessScript], {
+  encoding: 'utf8',
+  env: {
+    ...process.env,
+    TRUELAYER_ENV: 'sandbox',
+    TRUELAYER_CLIENT_ID: 'synthetic-client',
+    TRUELAYER_CLIENT_SECRET: 'synthetic-secret',
+    TRUELAYER_SIGNING_KID: 'synthetic-kid',
+    TRUELAYER_PRIVATE_KEY_PEM: syntheticPem,
+    TRUELAYER_PRIVATE_KEY_B64: '',
+    TRUELAYER_RETURN_URI: 'http://localhost:5173/bank-return',
+    G_BANK_MAX_PAYMENT_EUR: '100',
+    G_BANK_ENABLE_LIVE: 'false',
+    G_BANK_ENABLE_PROVIDER_PROBE: 'false'
+  }
+});
+assert.equal(readinessConfigured.status, 0, readinessConfigured.stderr || readinessConfigured.stdout);
+assert.match(readinessConfigured.stdout, /CONFIGURED/);
+assert.match(readinessConfigured.stdout, /No payment was created/);
+
+console.log('Banking readiness CLI tests: PASS');
+
+// Approval CLI requires explicit confirmation, allowlist, max limit and writes a mode-0600 token file.
+const approvalScript = path.join(__dirname, '..', '..', 'scripts', 'generate-g-bank-approval.js');
+const approvalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-approval-'));
+const approvalEnv = {
+  ...process.env,
+  G_BANK_APPROVAL_SECRET: '0123456789012345678901234567890123456789',
+  G_BANK_ALLOWED_BENEFICIARY_IBANS: 'NL91ABNA0417164300',
+  G_BANK_MAX_PAYMENT_EUR: '100'
+};
+const approvalArgs = [
+  approvalScript,
+  '--confirm-approval',
+  '--idempotency-key', '33333333-3333-4333-8333-333333333333',
+  '--amount-eur', '12.34',
+  '--iban', 'NL91ABNA0417164300',
+  '--reference', 'TEST-APPROVAL'
+];
+
+const approvalRun = spawnSync(process.execPath, approvalArgs, {
+  encoding: 'utf8',
+  cwd: approvalRoot,
+  env: approvalEnv
+});
+assert.equal(approvalRun.status, 0, approvalRun.stderr || approvalRun.stdout);
+const approvalPath = path.join(approvalRoot, '.secrets', 'approvals', '33333333-3333-4333-8333-333333333333.approval');
+assert.equal(fs.existsSync(approvalPath), true);
+assert.match(fs.readFileSync(approvalPath, 'utf8').trim(), /^[0-9a-f]{64}$/);
+if (process.platform !== 'win32') assert.equal(fs.statSync(approvalPath).mode & 0o777, 0o600);
+
+const noConfirm = spawnSync(process.execPath, approvalArgs.filter(x => x !== '--confirm-approval'), {
+  encoding: 'utf8',
+  cwd: approvalRoot,
+  env: approvalEnv
+});
+assert.equal(noConfirm.status, 2);
+
+fs.rmSync(approvalRoot, { recursive: true, force: true });
+console.log('G-Bank approval CLI tests: PASS');
