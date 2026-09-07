@@ -334,7 +334,8 @@ const readinessBlocked = spawnSync(process.execPath, [readinessScript], {
     TRUELAYER_RETURN_URI: '',
     G_BANK_MAX_PAYMENT_EUR: '100',
     G_BANK_ENABLE_LIVE: 'false',
-    G_BANK_ENABLE_PROVIDER_PROBE: 'false'
+    G_BANK_ENABLE_PROVIDER_PROBE: 'false',
+    G_BANK_WEBHOOK_RECEIPT_DIR: ''
   }
 });
 assert.equal(readinessBlocked.status, 2);
@@ -678,6 +679,12 @@ console.log('Banking evidence integrity tests: PASS');
   assert.equal(fs.existsSync(storedReceiptPath), true);
   const storedReceipt = JSON.parse(fs.readFileSync(storedReceiptPath, 'utf8'));
   assert.equal(validateStoredWebhookReceipt(storedReceipt), storedReceipt.receipt_sha256);
+  assert.equal(storedReceipt.signature_kid, webhookKid);
+  assert.equal(storedReceipt.signature_jku, webhookJoseHeader.jku);
+  assert.equal(storedReceipt.environment, 'sandbox');
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(storedReceiptPath).mode & 0o777, 0o600);
+  }
 
   // A second delivery is duplicate even though there is no in-memory replay state.
   const duplicateWebhook = await verifyAndClassifyWebhook({
