@@ -1,7 +1,6 @@
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const tlSigning = require('truelayer-signing');
 
 const router = express.Router();
 
@@ -194,17 +193,56 @@ async function getAccessToken() {
   return response.data.access_token;
 }
 
+function base64url(value) {
+  return Buffer.from(value).toString('base64url');
+}
+
+function buildTrueLayerSigningPayload({ method, path, headers = {}, body = '' }) {
+  const normalizedMethod = String(method || '').toUpperCase();
+  if (!path || !String(path).startsWith('/')) {
+    throw new Error('TrueLayer signing path must start with /.');
+  }
+  if (typeof body !== 'string') {
+    throw new Error('TrueLayer signing body must be a string.');
+  }
+
+  let payload = `${normalizedMethod} ${path}\n`;
+  for (const [name, value] of Object.entries(headers)) {
+    payload += `${name}: ${value}\n`;
+  }
+  payload += body;
+  return payload;
+}
+
 function signRequest({ method, path, body = '', idempotencyKey }) {
   const cfg = assertConfigured();
-  const headers = idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {};
-  return tlSigning.sign({
+  if (!idempotencyKey) {
+    throw new Error('Idempotency-Key is required for TrueLayer request signing.');
+  }
+
+  const headers = { 'Idempotency-Key': idempotencyKey };
+  const joseHeader = {
+    alg: 'ES512',
     kid: cfg.signingKid,
-    privateKeyPem: cfg.privateKey,
-    method,
-    path,
-    headers,
-    body
+    tl_version: '2',
+    tl_headers: Object.keys(headers).join(',')
+  };
+
+  const encodedHeader = base64url(JSON.stringify(joseHeader));
+  const signingPayload = buildTrueLayerSigningPayload({ method, path, headers, body });
+  const encodedPayload = base64url(signingPayload);
+  const signingInput = `${encodedHeader}.${encodedPayload}`;
+
+  const signature = crypto.sign('sha512', Buffer.from(signingInput, 'utf8'), {
+    key: cfg.privateKey,
+    dsaEncoding: 'ieee-p1363'
   });
+
+  if (signature.length !== 132) {
+    throw new Error('TrueLayer ES512 signing requires a P-521 private key.');
+  }
+
+  return `${encodedHeader}..${signature.toString('base64url')}`;
 }
 
 router.get('/health', (req, res) => {
@@ -388,7 +426,9 @@ router._test = {
   isValidIban,
   approvalMessage,
   assertPaymentInput,
-  assertLiveApproval
+  assertLiveApproval,
+  buildTrueLayerSigningPayload,
+  signRequest
 };
 
 module.exports = router;
