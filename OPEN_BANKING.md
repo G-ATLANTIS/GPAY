@@ -26,6 +26,7 @@ TRUELAYER_RETURN_URI=http://localhost:5173/bank-return
 G_BANK_MAX_PAYMENT_EUR=100
 G_BANK_ENABLE_LIVE=false
 G_BANK_ENABLE_PROVIDER_PROBE=false
+G_BANK_PROVIDER_PROBE_SECRET=
 G_BANK_APPROVAL_SECRET=
 G_BANK_ALLOWED_BENEFICIARY_IBANS=
 G_BANK_SECRET_ROTATION_RECEIPT=
@@ -55,6 +56,7 @@ The backend implements TrueLayer request-signing v2 with Node's built-in `crypto
   - Local configuration never activates a verified edge by itself.
 - `POST /api/open-banking/provider-readiness`
   - Requires `G_BANK_ENABLE_PROVIDER_PROBE=true`.
+  - Requires a matching `X-G-Bank-Probe-Authorization` header backed by a separate `G_BANK_PROVIDER_PROBE_SECRET`.
   - Obtains a Payments access token and submits a signed nonce to TrueLayer `/test-signature`.
   - Expects HTTP 204 for a successful provider-authentication/signature check.
   - Creates no payment, starts no bank authorization, and moves no value.
