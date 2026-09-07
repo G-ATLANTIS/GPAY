@@ -382,4 +382,13 @@ router.get('/payment/:paymentId', async (req, res) => {
   }
 });
 
+router._test = {
+  envMode,
+  configStatus,
+  isValidIban,
+  approvalMessage,
+  assertPaymentInput,
+  assertLiveApproval
+};
+
 module.exports = router;
