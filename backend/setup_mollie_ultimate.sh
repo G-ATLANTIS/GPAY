@@ -6,13 +6,19 @@ echo "=== 🔁 MOLLIE ULTIMATE INTEGRATIE (MEER BETAALMETHODEN + FIXES) ==="
 PROJECT_ROOT="$HOME/g-token-shopify-plugin"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 FRONTEND_DIR="$PROJECT_ROOT/frontend/g-token-admin"
-MOLLIE_KEY="live_eS2CNC8nna9gjmBQvRdjNtxamn8hWe"
-WEBHOOK_SECRET="whsec_mock_123456789"
+MOLLIE_KEY="${MOLLIE_API_KEY:-}"
+WEBHOOK_SECRET="${MOLLIE_WEBHOOK_SECRET:-}"
 
 cd "$BACKEND_DIR"
+
+if [ -z "$MOLLIE_KEY" ] || [ -z "$WEBHOOK_SECRET" ]; then
+  echo "ERROR: set MOLLIE_API_KEY and MOLLIE_WEBHOOK_SECRET in the environment before running this script."
+  exit 1
+fi
+
 npm install @mollie/api-client fs-extra
 
-echo "▶️ Updaten .env met live key + webhook secret"
+echo "▶️ Schrijven lokale .env uit runtime environment (nooit committen)"
 cat > .env << EOF
 MOLLIE_API_KEY=$MOLLIE_KEY
 WEBHOOK_SECRET=$WEBHOOK_SECRET
@@ -197,7 +203,7 @@ fi
 
 echo ""
 echo "✅ MOLLIE ULTIMATE INTEGRATIE VOLTOOID"
-echo "- Back-end draait met live API key + webhook logging"
+echo "- Back-end gebruikt alleen runtime environment secrets + webhook logging"
 echo "- Front-end ondersteunt meerdere betaalmethoden"
 echo "- Start backend met: cd $BACKEND_DIR && node index.js"
 echo "- Start frontend met: cd $FRONTEND_DIR && npm run dev"
