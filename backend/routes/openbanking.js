@@ -670,6 +670,36 @@ function assertProviderProbeEnabled(authorizationHeader) {
   }
 }
 
+function validateConfiguredReturnUri(returnUri, live = envMode() === 'live') {
+  const result = { valid: false, error: null, normalized: null };
+
+  try {
+    const url = new URL(String(returnUri || ''));
+    const localHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+    if (url.username || url.password) throw new Error('userinfo_not_allowed');
+    if (url.hash) throw new Error('fragment_not_allowed');
+    if (url.search) throw new Error('query_not_allowed');
+    if (url.pathname !== '/api/open-banking/return') throw new Error('unexpected_return_path');
+
+    if (live) {
+      if (url.protocol !== 'https:') throw new Error('live_https_required');
+    } else {
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('sandbox_http_or_https_required');
+      if (url.protocol === 'http:' && !localHosts.has(url.hostname)) {
+        throw new Error('sandbox_remote_http_denied');
+      }
+    }
+
+    result.valid = true;
+    result.normalized = url.toString();
+    return result;
+  } catch (err) {
+    result.error = String(err.message || err);
+    return result;
+  }
+}
+
 function configStatus() {
   const cfg = requiredConfig();
   const { live } = endpoints();
@@ -678,9 +708,13 @@ function configStatus() {
   if (!cfg.clientSecret) missing.push('TRUELAYER_CLIENT_SECRET');
   if (!cfg.signingKid) missing.push('TRUELAYER_SIGNING_KID');
   if (!cfg.privateKey) missing.push('TRUELAYER_PRIVATE_KEY_B64 or TRUELAYER_PRIVATE_KEY_PEM');
-  if (!cfg.returnUri) missing.push('TRUELAYER_RETURN_URI');
+  if (!cfg.returnUri) {
+    missing.push('TRUELAYER_RETURN_URI');
+  } else if (!validateConfiguredReturnUri(cfg.returnUri, live).valid) {
+    missing.push('TRUELAYER_RETURN_URI(valid G-Bank return endpoint)');
+  }
   if (cfg.operatorSecret.length < 32) missing.push('G_BANK_OPERATOR_SECRET(min 32 chars)');
-  if (!cfg.webhookPath.startsWith('/') || cfg.webhookPath.includes('?')) missing.push('TRUELAYER_WEBHOOK_PATH(valid path without query)');
+  if (cfg.webhookPath !== '/api/open-banking/webhook') missing.push('TRUELAYER_WEBHOOK_PATH(exact /api/open-banking/webhook)');
   if (!Number.isFinite(cfg.maxEur) || cfg.maxEur <= 0) missing.push('G_BANK_MAX_PAYMENT_EUR');
   if (live && !cfg.liveEnabled) missing.push('G_BANK_ENABLE_LIVE=true');
   const evidence = evidenceStatus();
@@ -695,6 +729,7 @@ function configStatus() {
     provider: 'truelayer',
     environment: live ? 'live' : 'sandbox',
     provider_authentication: providerConfigStatus(),
+    return_uri_validation: cfg.returnUri ? validateConfiguredReturnUri(cfg.returnUri, live) : { valid: false, error: 'missing', normalized: null },
     configured: missing.length === 0,
     missing,
     live_execution_enabled: live && cfg.liveEnabled,
@@ -1528,6 +1563,7 @@ router.get('/payment/:paymentId', async (req, res) => {
 router._test = {
   envMode,
   providerConfigStatus,
+  validateConfiguredReturnUri,
   configStatus,
   assertOperatorAuthorization,
   operatorAuthorizationMiddleware,
