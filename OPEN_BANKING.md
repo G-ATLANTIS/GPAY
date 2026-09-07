@@ -421,3 +421,72 @@ LOCAL PAYMENT BINDING
 ```
 
 For a real external-account purchase, independent creditor settlement/receipt evidence is still required outside this TrueLayer status model before G_REAL_EXECUTION_GRAPH can promote the value-flow edge.
+
+
+## Sandbox smoke runner
+
+TrueLayer provides a Dutch sandbox redirect provider:
+
+```
+mock-payments-nl-redirect
+```
+
+GPAY pins sandbox payment creation to that provider while leaving live provider selection unchanged. TrueLayer's mock bank supports deterministic outcomes such as `test_executed`, `test_authorisation_failed`, `test_execution_rejected`, and cancellation.
+
+The smoke runner is deliberately sandbox-only:
+
+```bash
+npm run smoke:banking -- probe
+
+npm run smoke:banking -- create \
+  --confirm-sandbox-payment \
+  --amount-eur 0.01
+
+npm run smoke:banking -- status \
+  --payment-id <payment-id>
+
+npm run smoke:banking -- reconcile \
+  --payment-id <payment-id>
+```
+
+Required operator-side sandbox variables include:
+
+```
+TRUELAYER_ENV=sandbox
+G_BANK_ENABLE_LIVE=false
+G_BANK_SMOKE_BASE_URL=http://127.0.0.1:4000
+G_BANK_SANDBOX_SMOKE_BENEFICIARY_IBAN=<sandbox-test-beneficiary-iban>
+G_BANK_SANDBOX_SMOKE_BENEFICIARY_NAME=G-Bank Sandbox Beneficiary
+G_BANK_SANDBOX_SMOKE_REFERENCE=GBANK-SMOKE
+```
+
+For the readiness phase, temporarily enable:
+
+```
+G_BANK_ENABLE_PROVIDER_PROBE=true
+G_BANK_PROVIDER_PROBE_SECRET=<runtime-secret>
+```
+
+The runner also requires `G_BANK_OPERATOR_SECRET`.
+
+Safety properties:
+
+- refuses to run if `TRUELAYER_ENV` is not `sandbox`;
+- refuses to run if `G_BANK_ENABLE_LIVE=true`;
+- sandbox smoke amount is hard-capped at EUR 1.00;
+- readiness requires the exact provider proof contract, including TrueLayer HTTP 204;
+- payment creation still requires an explicit `--confirm-sandbox-payment`;
+- the HPP URL/resource token is not written into JSON evidence artifacts;
+- the HPP URL is written only to a mode-0600 file under `.secrets/smoke/`;
+- status and reconciliation artifacts are persisted under `.secrets/smoke/`;
+- the smoke runner never promotes `verified_value_flow`.
+
+After `create`, open the local HPP URL file, choose the Dutch mock redirect provider, and use the mock-bank outcome you want to test. For the successful execution path, use `test_executed`.
+
+### Local return versus webhook delivery
+
+A localhost `TRUELAYER_RETURN_URI` is suitable for a browser-based local sandbox HPP flow because the browser performs that redirect. Payment webhooks are different: TrueLayer sends them server-to-server to the single webhook URI registered for the Console app.
+
+Therefore a full webhook end-to-end sandbox test requires the registered webhook URI to route to the running G-Bank webhook endpoint. A purely local server without such routing can still test provider readiness, create/HPP, authenticated GET status and reconciliation, but cannot claim a live webhook receipt.
+
+Do not manufacture webhook evidence to fill this gap. The webhook edge remains unverified until an actual TrueLayer-signed webhook reaches the configured endpoint.
