@@ -221,7 +221,7 @@ function assertPaymentInput(body) {
   return { amountEur, amountInMinor: normalizedAmountInMinor, beneficiary: { ...beneficiary, iban }, user: { ...user, address } };
 }
 
-async function getAccessToken() {
+async function getAccessToken(httpClient = axios) {
   const cfg = assertProviderConfigured();
   const { authBase } = endpoints();
   const params = new URLSearchParams();
@@ -230,7 +230,7 @@ async function getAccessToken() {
   params.set('client_secret', cfg.clientSecret);
   params.set('scope', 'payments');
 
-  const response = await axios.post(`${authBase}/connect/token`, params.toString(), {
+  const response = await httpClient.post(`${authBase}/connect/token`, params.toString(), {
     timeout: 15000,
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
   });
@@ -291,6 +291,59 @@ function signRequest({ method, path, body = '', idempotencyKey }) {
   return `${encodedHeader}..${signature.toString('base64url')}`;
 }
 
+async function performProviderReadiness(httpClient = axios) {
+  assertProviderProbeEnabled();
+  assertProviderConfigured();
+
+  const path = '/test-signature';
+  const nonce = crypto.randomUUID();
+  const rawBody = JSON.stringify({ nonce });
+  const idempotencyKey = crypto.randomUUID();
+  const token = await getAccessToken(httpClient);
+  const signature = signRequest({
+    method: 'POST',
+    path,
+    body: rawBody,
+    idempotencyKey
+  });
+  const { apiBase } = endpoints();
+
+  const response = await httpClient.post(`${apiBase}${path}`, rawBody, {
+    timeout: 15000,
+    validateStatus: () => true,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey,
+      'Tl-Signature': signature
+    }
+  });
+
+  const signatureValid = response.status === 204;
+
+  return {
+    provider: 'truelayer',
+    environment: envMode(),
+    access_token_obtained: true,
+    request_signature_accepted: signatureValid,
+    provider_http_status: response.status,
+    payment_created: false,
+    bank_authorization_started: false,
+    value_moved: false,
+    verified_write: false,
+    verified_value_flow: false,
+    execution_graph: {
+      candidate_state: signatureValid ? 'AUTHENTICATED_TESTED' : 'AUTHENTICATION_OR_SIGNATURE_FAILED',
+      verified_read: false,
+      verified_write: false,
+      verified_value_flow: false,
+      reason: signatureValid
+        ? 'TrueLayer accepted the non-payment signed readiness request. This proves provider authentication/signing only.'
+        : 'TrueLayer did not return 204 for the non-payment signature test.'
+    }
+  };
+}
+
 router.get('/health', (req, res) => {
   res.json({
     ...configStatus(),
@@ -302,56 +355,8 @@ router.get('/health', (req, res) => {
 
 router.post('/provider-readiness', async (req, res) => {
   try {
-    assertProviderProbeEnabled();
-    assertProviderConfigured();
-
-    const path = '/test-signature';
-    const nonce = crypto.randomUUID();
-    const rawBody = JSON.stringify({ nonce });
-    const idempotencyKey = crypto.randomUUID();
-    const token = await getAccessToken();
-    const signature = signRequest({
-      method: 'POST',
-      path,
-      body: rawBody,
-      idempotencyKey
-    });
-    const { apiBase } = endpoints();
-
-    const response = await axios.post(`${apiBase}${path}`, rawBody, {
-      timeout: 15000,
-      validateStatus: () => true,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Idempotency-Key': idempotencyKey,
-        'Tl-Signature': signature
-      }
-    });
-
-    const signatureValid = response.status === 204;
-
-    res.status(signatureValid ? 200 : 502).json({
-      provider: 'truelayer',
-      environment: envMode(),
-      access_token_obtained: true,
-      request_signature_accepted: signatureValid,
-      provider_http_status: response.status,
-      payment_created: false,
-      bank_authorization_started: false,
-      value_moved: false,
-      verified_write: false,
-      verified_value_flow: false,
-      execution_graph: {
-        candidate_state: signatureValid ? 'AUTHENTICATED_TESTED' : 'AUTHENTICATION_OR_SIGNATURE_FAILED',
-        verified_read: false,
-        verified_write: false,
-        verified_value_flow: false,
-        reason: signatureValid
-          ? 'TrueLayer accepted the non-payment signed readiness request. This proves provider authentication/signing only.'
-          : 'TrueLayer did not return 204 for the non-payment signature test.'
-      }
-    });
+    const result = await performProviderReadiness();
+    res.status(result.request_signature_accepted ? 200 : 502).json(result);
   } catch (err) {
     const status = err.statusCode || err.response?.status || 500;
     res.status(status).json({
@@ -541,7 +546,9 @@ router._test = {
   assertPaymentInput,
   assertLiveApproval,
   buildTrueLayerSigningPayload,
-  signRequest
+  signRequest,
+  getAccessToken,
+  performProviderReadiness
 };
 
 module.exports = router;
