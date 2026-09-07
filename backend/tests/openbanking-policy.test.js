@@ -142,6 +142,7 @@ const approvalEvidenceFs = require('node:fs');
 const approvalEvidenceOs = require('node:os');
 const approvalEvidencePath = require('node:path');
 const approvalEvidenceDir = approvalEvidenceFs.mkdtempSync(approvalEvidencePath.join(approvalEvidenceOs.tmpdir(), 'g-bank-live-approval-evidence-'));
+process.env.G_BANK_WEBHOOK_RECEIPT_DIR = approvalEvidencePath.join(approvalEvidenceDir, 'webhook-receipts');
 
 function writeSyntheticEvidence(filename, type, provider, evidenceRef, artifactSha256 = null) {
   const record = {
@@ -218,6 +219,7 @@ mustThrow(() => assertLiveApproval({
 approvalEvidenceFs.rmSync(approvalEvidenceDir, { recursive: true, force: true });
 delete process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE;
 delete process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE;
+delete process.env.G_BANK_WEBHOOK_RECEIPT_DIR;
 
 console.log('Open Banking policy tests: PASS');
 
@@ -559,12 +561,14 @@ process.env.TRUELAYER_CLIENT_SECRET = 'test-secret';
 process.env.TRUELAYER_SIGNING_KID = 'test-kid';
 process.env.TRUELAYER_PRIVATE_KEY_PEM = syntheticPem;
 process.env.TRUELAYER_RETURN_URI = 'https://example.invalid/return';
+process.env.G_BANK_WEBHOOK_RECEIPT_DIR = path.join(evidenceRoot, 'webhook-receipts');
 
 const evidenceLiveStatus = router._test.configStatus();
 assert.equal(evidenceLiveStatus.historical_secret_rotation_receipt_present, true);
 assert.equal(evidenceLiveStatus.sandbox_verification_receipt_present, true);
 assert.equal(evidenceLiveStatus.configured, true);
 
+delete process.env.G_BANK_WEBHOOK_RECEIPT_DIR;
 fs.rmSync(evidenceRoot, { recursive: true, force: true });
 console.log('Banking evidence integrity tests: PASS');
 
