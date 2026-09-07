@@ -312,6 +312,8 @@ function canonicalWebhookReceipt(receipt) {
     event_version: receipt.event_version,
     payment_id: receipt.payment_id,
     webhook_timestamp: receipt.webhook_timestamp,
+    signature_kid: receipt.signature_kid,
+    signature_jku: receipt.signature_jku,
     raw_body_sha256: receipt.raw_body_sha256,
     observed_at: receipt.observed_at
   });
@@ -322,6 +324,12 @@ function validateStoredWebhookReceipt(receipt) {
   if (receipt.version !== 1) throw new Error('stored_webhook_receipt_version_invalid');
   if (receipt.provider !== 'truelayer') throw new Error('stored_webhook_receipt_provider_invalid');
   if (!/^[0-9a-f-]{36}$/i.test(String(receipt.event_id || ''))) throw new Error('stored_webhook_receipt_event_id_invalid');
+  if (typeof receipt.signature_kid !== 'string' || !receipt.signature_kid) throw new Error('stored_webhook_receipt_signature_kid_invalid');
+  if (typeof receipt.signature_jku !== 'string' || receipt.signature_jku !== (receipt.environment === 'sandbox'
+    ? 'https://webhooks.truelayer-sandbox.com/.well-known/jwks'
+    : 'https://webhooks.truelayer.com/.well-known/jwks')) {
+    throw new Error('stored_webhook_receipt_signature_jku_invalid');
+  }
   if (!/^[0-9a-f]{64}$/i.test(String(receipt.raw_body_sha256 || ''))) throw new Error('stored_webhook_receipt_body_hash_invalid');
   if (!/^[0-9a-f]{64}$/i.test(String(receipt.receipt_sha256 || ''))) throw new Error('stored_webhook_receipt_hash_invalid');
 
@@ -342,7 +350,9 @@ function observeWebhookEvent({
   paymentId,
   webhookTimestamp,
   rawBodySha256,
-  environment
+  environment,
+  signatureKid,
+  signatureJku
 }) {
   if (!/^[0-9a-f-]{36}$/i.test(String(eventId || ''))) throw new Error('invalid_webhook_event_id');
   if (!/^[0-9a-f]{64}$/i.test(String(rawBodySha256 || ''))) throw new Error('invalid_webhook_body_hash');
@@ -361,6 +371,8 @@ function observeWebhookEvent({
     event_version: eventVersion,
     payment_id: paymentId || null,
     webhook_timestamp: webhookTimestamp,
+    signature_kid: String(signatureKid || ''),
+    signature_jku: String(signatureJku || ''),
     raw_body_sha256: String(rawBodySha256).toLowerCase(),
     observed_at: new Date().toISOString()
   };
@@ -452,7 +464,9 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
     paymentId,
     webhookTimestamp: verification.timestamp.timestamp,
     rawBodySha256,
-    environment: verification.environment
+    environment: verification.environment,
+    signatureKid: verification.kid,
+    signatureJku: verification.jku
   });
 
   return {
