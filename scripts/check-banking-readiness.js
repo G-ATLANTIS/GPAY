@@ -31,6 +31,7 @@ function main() {
   const clientSecret = process.env.TRUELAYER_CLIENT_SECRET || '';
   const signingKid = process.env.TRUELAYER_SIGNING_KID || '';
   const returnUri = process.env.TRUELAYER_RETURN_URI || '';
+  const webhookPath = process.env.TRUELAYER_WEBHOOK_PATH || '/api/open-banking/webhook';
   const keyPem = privateKeyPem();
   const maxEur = Number(process.env.G_BANK_MAX_PAYMENT_EUR || '0');
   const liveEnabled = process.env.G_BANK_ENABLE_LIVE === 'true';
@@ -89,19 +90,35 @@ function main() {
   if (returnUri) {
     try {
       const url = new URL(returnUri);
+      const localHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+      if (url.username || url.password) throw new Error('userinfo not allowed');
+      if (url.hash) throw new Error('fragment not allowed');
+      if (url.search) throw new Error('query not allowed');
+      if (url.pathname !== '/api/open-banking/return') throw new Error('unexpected return path');
+
       if (live && url.protocol !== 'https:') {
-        resultLine('live return URI', 'FAIL', 'HTTPS required');
-        errors.push('Live TRUELAYER_RETURN_URI must use HTTPS.');
-      } else if (!live && !['https:', 'http:'].includes(url.protocol)) {
-        resultLine('sandbox return URI', 'FAIL');
-        errors.push('Sandbox TRUELAYER_RETURN_URI must use HTTP or HTTPS.');
-      } else {
-        resultLine('return URI scheme', 'OK', url.protocol);
+        throw new Error('live HTTPS required');
       }
-    } catch {
-      resultLine('return URI parse', 'FAIL');
-      errors.push('TRUELAYER_RETURN_URI is not a valid URL.');
+      if (!live && !['https:', 'http:'].includes(url.protocol)) {
+        throw new Error('sandbox HTTP/HTTPS required');
+      }
+      if (!live && url.protocol === 'http:' && !localHosts.has(url.hostname)) {
+        throw new Error('remote sandbox HTTP denied');
+      }
+
+      resultLine('return URI', 'OK', `${url.protocol}//${url.host}${url.pathname}`);
+    } catch (err) {
+      resultLine('return URI', 'FAIL', String(err.message || err));
+      errors.push('TRUELAYER_RETURN_URI must target the safe G-Bank /api/open-banking/return endpoint with an allowed scheme and no query/fragment/userinfo.');
     }
+  }
+
+  if (webhookPath !== '/api/open-banking/webhook') {
+    resultLine('webhook path', 'FAIL', webhookPath);
+    errors.push('TRUELAYER_WEBHOOK_PATH must equal /api/open-banking/webhook.');
+  } else {
+    resultLine('webhook path', 'OK', webhookPath);
   }
 
   if (live) {
