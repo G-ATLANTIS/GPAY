@@ -28,6 +28,8 @@ G_BANK_ENABLE_LIVE=false
 G_BANK_ENABLE_PROVIDER_PROBE=false
 G_BANK_APPROVAL_SECRET=
 G_BANK_ALLOWED_BENEFICIARY_IBANS=
+G_BANK_SECRET_ROTATION_RECEIPT=
+G_BANK_SANDBOX_VERIFICATION_RECEIPT=
 ```
 
 Generate a P-521 / secp521r1 signing keypair and upload only the public key to the provider. Keep the private key in a secure secret store/KMS if possible.
@@ -113,3 +115,13 @@ npm run approve:banking -- \
 ```
 
 The generator is offline, requires an explicit confirmation flag, enforces the configured beneficiary allowlist and payment ceiling, and writes the HMAC token to `.secrets/approvals/` instead of printing it. The token is bound to the exact idempotency key, amount-in-minor, IBAN and reference. Generating a token does not contact a bank or create a payment.
+
+
+## Evidence receipts are release gates
+
+Live mode now requires two non-secret receipt references:
+
+- `G_BANK_SECRET_ROTATION_RECEIPT`: reference to external/provider-side evidence that the historically exposed payment credential was revoked or rotated.
+- `G_BANK_SANDBOX_VERIFICATION_RECEIPT`: reference to evidence that sandbox provider authentication/signing and the intended authorization path were verified.
+
+These environment values are **references**, not proof by themselves. The underlying evidence must be independently reviewable. Their purpose is to prevent the runtime from being switched to live while the required evidence has not even been recorded.
