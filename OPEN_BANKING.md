@@ -175,6 +175,7 @@ Configure the TrueLayer Console webhook URI so its path exactly matches:
 
 ```
 TRUELAYER_WEBHOOK_PATH=/api/open-banking/webhook
+G_BANK_WEBHOOK_RECEIPT_DIR=.secrets/runtime/webhook-events
 ```
 
 The backend preserves the exact raw JSON bytes for this route before parsing. Incoming webhooks are accepted only after:
@@ -189,7 +190,11 @@ The backend preserves the exact raw JSON bytes for this route before parsing. In
 
 The JWKS fetch forbids redirects. This prevents an attacker-controlled JKU from becoming an SSRF/open-redirect path.
 
-TrueLayer may deliver the same webhook more than once. Duplicate `event_id` values are acknowledged idempotently within the running process. The in-memory duplicate cache is not durable across process restarts, so any future side-effecting webhook consumer must use a persistent datastore with a unique event-id constraint.
+TrueLayer may deliver the same webhook more than once. Duplicate `event_id` values are recorded in an atomically-created receipt file under `G_BANK_WEBHOOK_RECEIPT_DIR/<environment>/`. The receipt binds event ID, event type/version, payment ID, webhook timestamp, raw-body SHA-256, TrueLayer signing `kid`/`jku`, environment and an integrity hash.
+
+A second delivery with the same event ID and same raw body is acknowledged as a duplicate. The same event ID with a different raw-body hash is rejected as an event-ID/body conflict. Receipt files are written mode 0600 and fsynced before the handler acknowledges the event.
+
+This survives application/process restarts only when `G_BANK_WEBHOOK_RECEIPT_DIR` is backed by storage that itself survives those restarts. The runtime cannot infer whether a container filesystem is persistent. Live configuration therefore requires the receipt directory to be explicitly set, and `npm run check:banking:env` performs a local atomic write/fsync/delete readiness probe. Infrastructure-level persistence still requires independent deployment evidence.
 
 A verified webhook remains an observation only:
 
@@ -202,3 +207,23 @@ WEBHOOK_SIGNATURE_VERIFIED
 ```
 
 Even `payment_executed` does not prove that an external creditor received funds. Independent settlement/receipt evidence remains required for the G_REAL_EXECUTION_GRAPH value-flow edge.
+
+
+### Webhook receipt storage
+
+For sandbox, the default local location is:
+
+```
+G_BANK_WEBHOOK_RECEIPT_DIR=.secrets/runtime/webhook-events
+```
+
+For live use, set this explicitly to a protected persistent volume/disk location. Do not place it in Git or a public/shared directory. The runtime separates receipts into `sandbox/` and `live/` subdirectories.
+
+Operational invariants:
+
+- first valid event: atomic create + file fsync;
+- exact duplicate: 2xx acknowledgement, no second side effect;
+- same event ID with different raw body: fail closed;
+- tampered stored receipt: fail closed;
+- receipt includes TrueLayer signing key provenance;
+- receipt persistence across machine/container replacement is **not verified** until the deployment storage itself is independently verified.
