@@ -30,6 +30,10 @@ function privateKeyPem() {
 
 function requiredConfig() {
   const maxEur = Number(process.env.G_BANK_MAX_PAYMENT_EUR || (envMode() === 'sandbox' ? '100' : '0'));
+  const allowedBeneficiaryIbans = String(process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS || '')
+    .split(',')
+    .map((value) => value.replace(/\s+/g, '').toUpperCase())
+    .filter(Boolean);
   return {
     clientId: process.env.TRUELAYER_CLIENT_ID || '',
     clientSecret: process.env.TRUELAYER_CLIENT_SECRET || '',
@@ -37,7 +41,9 @@ function requiredConfig() {
     privateKey: privateKeyPem(),
     returnUri: process.env.TRUELAYER_RETURN_URI || '',
     maxEur,
-    liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true'
+    liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
+    approvalSecret: process.env.G_BANK_APPROVAL_SECRET || '',
+    allowedBeneficiaryIbans
   };
 }
 
@@ -52,6 +58,8 @@ function configStatus() {
   if (!cfg.returnUri) missing.push('TRUELAYER_RETURN_URI');
   if (!Number.isFinite(cfg.maxEur) || cfg.maxEur <= 0) missing.push('G_BANK_MAX_PAYMENT_EUR');
   if (live && !cfg.liveEnabled) missing.push('G_BANK_ENABLE_LIVE=true');
+  if (live && !cfg.approvalSecret) missing.push('G_BANK_APPROVAL_SECRET');
+  if (live && cfg.allowedBeneficiaryIbans.length === 0) missing.push('G_BANK_ALLOWED_BENEFICIARY_IBANS');
 
   return {
     provider: 'truelayer',
@@ -59,6 +67,9 @@ function configStatus() {
     configured: missing.length === 0,
     missing,
     live_execution_enabled: live && cfg.liveEnabled,
+    live_approval_required: live,
+    live_approval_configured: live ? Boolean(cfg.approvalSecret) : false,
+    allowed_beneficiary_count: cfg.allowedBeneficiaryIbans.length,
     max_payment_eur: Number.isFinite(cfg.maxEur) ? cfg.maxEur : 0
   };
 }
@@ -72,6 +83,56 @@ function assertConfigured() {
     throw err;
   }
   return requiredConfig();
+}
+
+function isValidIban(iban) {
+  const compact = String(iban || '').replace(/\s+/g, '').toUpperCase();
+  if (!/^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/.test(compact)) return false;
+
+  const rearranged = compact.slice(4) + compact.slice(0, 4);
+  let remainder = 0;
+
+  for (const ch of rearranged) {
+    const fragment = /[A-Z]/.test(ch) ? String(ch.charCodeAt(0) - 55) : ch;
+    for (const digit of fragment) {
+      remainder = (remainder * 10 + Number(digit)) % 97;
+    }
+  }
+
+  return remainder === 1;
+}
+
+function approvalMessage({ idempotencyKey, amountInMinor, iban, reference }) {
+  return [idempotencyKey, String(amountInMinor), iban, String(reference)].join('|');
+}
+
+function assertLiveApproval({ idempotencyKey, amountInMinor, iban, reference, approvalHeader }) {
+  if (envMode() !== 'live') return;
+
+  const cfg = assertConfigured();
+  if (!cfg.allowedBeneficiaryIbans.includes(iban)) {
+    throw Object.assign(new Error('Beneficiary is not present in the live G-Bank allowlist.'), { statusCode: 403 });
+  }
+
+  if (!idempotencyKey) {
+    throw Object.assign(new Error('A caller-supplied Idempotency-Key is required for live payments.'), { statusCode: 400 });
+  }
+
+  const supplied = String(approvalHeader || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(supplied)) {
+    throw Object.assign(new Error('Valid X-G-Bank-Approval is required for live payments.'), { statusCode: 403 });
+  }
+
+  const expected = crypto
+    .createHmac('sha256', cfg.approvalSecret)
+    .update(approvalMessage({ idempotencyKey, amountInMinor, iban, reference }))
+    .digest('hex');
+
+  const suppliedBuffer = Buffer.from(supplied, 'hex');
+  const expectedBuffer = Buffer.from(expected, 'hex');
+  if (suppliedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(suppliedBuffer, expectedBuffer)) {
+    throw Object.assign(new Error('Live G-Bank approval did not match this payment intent.'), { statusCode: 403 });
+  }
 }
 
 function assertPaymentInput(body) {
@@ -96,8 +157,8 @@ function assertPaymentInput(body) {
   const address = user.address || {};
 
   const iban = String(beneficiary.iban || '').replace(/\s+/g, '').toUpperCase();
-  if (!/^[A-Z]{2}[0-9A-Z]{13,32}$/.test(iban)) {
-    throw Object.assign(new Error('beneficiary.iban is required and must be a valid-looking IBAN.'), { statusCode: 400 });
+  if (!isValidIban(iban)) {
+    throw Object.assign(new Error('beneficiary.iban is required and must pass IBAN checksum validation.'), { statusCode: 400 });
   }
   if (!beneficiary.name || !beneficiary.reference) {
     throw Object.assign(new Error('beneficiary.name and beneficiary.reference are required.'), { statusCode: 400 });
@@ -159,7 +220,16 @@ router.post('/create-payment', async (req, res) => {
     assertConfigured();
     const { amountEur, amountInMinor, beneficiary, user } = assertPaymentInput(req.body);
     const path = '/v3/payments';
-    const idempotencyKey = req.get('Idempotency-Key') || crypto.randomUUID();
+    const callerIdempotencyKey = req.get('Idempotency-Key');
+    const idempotencyKey = callerIdempotencyKey || crypto.randomUUID();
+
+    assertLiveApproval({
+      idempotencyKey: callerIdempotencyKey,
+      amountInMinor,
+      iban: beneficiary.iban,
+      reference: beneficiary.reference,
+      approvalHeader: req.get('X-G-Bank-Approval')
+    });
 
     const payload = {
       amount_in_minor: amountInMinor,
