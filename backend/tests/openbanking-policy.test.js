@@ -577,6 +577,7 @@ console.log('Banking evidence integrity tests: PASS');
 (async () => {
   process.env.TRUELAYER_ENV = 'sandbox';
   process.env.TRUELAYER_WEBHOOK_PATH = '/api/open-banking/webhook';
+  clearWebhookJwksCache();
   const webhookReceiptRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-webhook-receipts-'));
   process.env.G_BANK_WEBHOOK_RECEIPT_DIR = webhookReceiptRoot;
 
@@ -637,6 +638,14 @@ console.log('Banking evidence integrity tests: PASS');
   });
   assert.equal(verification.valid, true);
 
+  assert.throws(() => validateWebhookJwks({ keys: [] }), /webhook_jwks_key_count_invalid/);
+  assert.throws(() => validateWebhookJwks({
+    keys: Array.from({ length: 51 }, (_, i) => ({ kid: String(i), kty: 'EC', crv: 'P-521' }))
+  }), /webhook_jwks_key_count_invalid/);
+  assert.throws(() => validateWebhookJwks({
+    keys: [{ kid: 'bad-rsa', kty: 'RSA' }]
+  }), /webhook_jwks_key_type_invalid/);
+
   mustThrow(() => verifyWebhookSignature({
     signature: webhookSignature,
     method: 'POST',
@@ -655,12 +664,19 @@ console.log('Banking evidence integrity tests: PASS');
   mustThrow(() => parseDetachedTlSignature(wrongJkuSignature), /untrusted_header_jku/);
 
   const fetchCalls = [];
+  let currentJwks = { keys: [webhookJwk] };
   const fakeWebhookHttp = {
     async get(url, options) {
       fetchCalls.push({ url, options });
       assert.equal(url, 'https://webhooks.truelayer-sandbox.com/.well-known/jwks');
       assert.equal(options.maxRedirects, 0);
-      return { status: 200, data: { keys: [webhookJwk] } };
+      assert.equal(options.maxContentLength, 64 * 1024);
+      assert.equal(options.maxBodyLength, 64 * 1024);
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        data: currentJwks
+      };
     }
   };
 
@@ -673,6 +689,7 @@ console.log('Banking evidence integrity tests: PASS');
   });
   assert.equal(firstWebhook.webhook_verified, true);
   assert.equal(firstWebhook.duplicate, false);
+  assert.equal(firstWebhook.jwks_cache, 'miss');
   assert.equal(firstWebhook.payment_write_performed, false);
   assert.equal(firstWebhook.value_moved_by_handler, false);
   assert.equal(firstWebhook.verified_value_flow, false);
@@ -700,7 +717,61 @@ console.log('Banking evidence integrity tests: PASS');
   });
   assert.equal(duplicateWebhook.webhook_verified, true);
   assert.equal(duplicateWebhook.duplicate, true);
+  assert.equal(duplicateWebhook.jwks_cache, 'hit');
   assert.equal(duplicateWebhook.verified_value_flow, false);
+  assert.equal(fetchCalls.length, 1);
+
+  // A new signing kid refreshes JWKS exactly once and then becomes cacheable.
+  const rotatedPair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp521r1' });
+  const rotatedKid = '88888888-8888-4888-8888-888888888888';
+  const rotatedJwk = rotatedPair.publicKey.export({ format: 'jwk' });
+  rotatedJwk.kid = rotatedKid;
+  rotatedJwk.alg = 'ES512';
+  rotatedJwk.use = 'sig';
+  currentJwks = { keys: [webhookJwk, rotatedJwk] };
+
+  const rotatedEvent = {
+    ...webhookEvent,
+    event_id: '99999999-9999-4999-8999-999999999999',
+    type: 'payment_failed'
+  };
+  const rotatedBody = Buffer.from(JSON.stringify(rotatedEvent), 'utf8');
+  const rotatedJoseHeader = { ...webhookJoseHeader, kid: rotatedKid };
+  const rotatedEncodedHeader = Buffer.from(JSON.stringify(rotatedJoseHeader)).toString('base64url');
+  const rotatedPayload = buildWebhookSigningPayload({
+    method: 'POST',
+    path: webhookPath,
+    signedHeaders: signedHeaderNames,
+    headers: webhookHeaders,
+    body: rotatedBody.toString('utf8')
+  });
+  const rotatedInput = `${rotatedEncodedHeader}.${Buffer.from(rotatedPayload).toString('base64url')}`;
+  const rotatedSignatureRaw = crypto.sign('sha512', Buffer.from(rotatedInput), {
+    key: rotatedPair.privateKey,
+    dsaEncoding: 'ieee-p1363'
+  });
+  const rotatedSignature = `${rotatedEncodedHeader}..${rotatedSignatureRaw.toString('base64url')}`;
+
+  const rotatedWebhook = await verifyAndClassifyWebhook({
+    signature: rotatedSignature,
+    path: webhookPath,
+    headers: webhookHeaders,
+    rawBody: rotatedBody,
+    httpClient: fakeWebhookHttp
+  });
+  assert.equal(rotatedWebhook.webhook_verified, true);
+  assert.equal(rotatedWebhook.jwks_cache, 'refresh');
+  assert.equal(fetchCalls.length, 2);
+
+  const rotatedDuplicate = await verifyAndClassifyWebhook({
+    signature: rotatedSignature,
+    path: webhookPath,
+    headers: webhookHeaders,
+    rawBody: rotatedBody,
+    httpClient: fakeWebhookHttp
+  });
+  assert.equal(rotatedDuplicate.duplicate, true);
+  assert.equal(rotatedDuplicate.jwks_cache, 'hit');
   assert.equal(fetchCalls.length, 2);
 
   // Same event ID but a different signed body must never be treated as a benign duplicate.
@@ -741,6 +812,7 @@ console.log('Banking evidence integrity tests: PASS');
 
   fs.rmSync(webhookReceiptRoot, { recursive: true, force: true });
   delete process.env.G_BANK_WEBHOOK_RECEIPT_DIR;
+  clearWebhookJwksCache();
 
   console.log('TrueLayer webhook verification tests: PASS');
 })().catch((err) => {
