@@ -36,8 +36,16 @@ function main() {
   const liveEnabled = process.env.G_BANK_ENABLE_LIVE === 'true';
   const probeEnabled = process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true';
   const webhookReceiptDir = process.env.G_BANK_WEBHOOK_RECEIPT_DIR || '';
+  const operatorSecret = process.env.G_BANK_OPERATOR_SECRET || '';
 
   resultLine('environment', 'OK', env);
+
+  if (operatorSecret.length < 32) {
+    resultLine('G_BANK_OPERATOR_SECRET', 'FAIL', 'minimum 32 characters');
+    errors.push('G_BANK_OPERATOR_SECRET must be at least 32 characters.');
+  } else {
+    resultLine('G_BANK_OPERATOR_SECRET', 'OK');
+  }
 
   for (const [name, value] of [
     ['TRUELAYER_CLIENT_ID', clientId],
