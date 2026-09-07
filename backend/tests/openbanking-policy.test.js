@@ -9,6 +9,7 @@ process.env.G_BANK_OPERATOR_SECRET = 'unit-test-operator-secret-0123456789012345
 const router = require('../routes/openbanking');
 const {
   providerConfigStatus,
+  validateConfiguredReturnUri,
   assertOperatorAuthorization,
   operatorAuthorizationMiddleware,
   assertProviderProbeEnabled,
@@ -64,6 +65,41 @@ function mustThrow(fn, pattern) {
 assert.equal(isValidIban('NL91 ABNA 0417 1643 00'), true);
 assert.equal(isValidIban('NL91 ABNA 0417 1643 01'), false);
 assert.equal(isValidIban('not-an-iban'), false);
+
+
+assert.equal(
+  validateConfiguredReturnUri('http://localhost:4000/api/open-banking/return', false).valid,
+  true
+);
+assert.equal(
+  validateConfiguredReturnUri('https://sandbox.example.test/api/open-banking/return', false).valid,
+  true
+);
+assert.equal(
+  validateConfiguredReturnUri('http://sandbox.example.test/api/open-banking/return', false).valid,
+  false
+);
+assert.equal(
+  validateConfiguredReturnUri('http://localhost:4000/wrong-return', false).valid,
+  false
+);
+assert.equal(
+  validateConfiguredReturnUri('https://example.com/api/open-banking/return?x=1', true).valid,
+  false
+);
+assert.equal(
+  validateConfiguredReturnUri('https://user:pass@example.com/api/open-banking/return', true).valid,
+  false
+);
+assert.equal(
+  validateConfiguredReturnUri('http://example.com/api/open-banking/return', true).valid,
+  false
+);
+assert.equal(
+  validateConfiguredReturnUri('https://example.com/api/open-banking/return', true).valid,
+  true
+);
+console.log('Return URI policy tests: PASS');
 
 
 // All G-Bank operator routes require a separate authorization secret; webhook is signature-authenticated instead.
@@ -277,7 +313,7 @@ process.env.TRUELAYER_CLIENT_ID = 'test-client';
 process.env.TRUELAYER_CLIENT_SECRET = 'test-secret';
 process.env.TRUELAYER_SIGNING_KID = 'test-kid';
 process.env.TRUELAYER_PRIVATE_KEY_PEM = 'test-key';
-process.env.TRUELAYER_RETURN_URI = 'https://example.invalid/return';
+process.env.TRUELAYER_RETURN_URI = 'https://example.invalid/api/open-banking/return';
 
 const intent = {
   idempotencyKey: '11111111-1111-4111-8111-111111111111',
@@ -449,7 +485,7 @@ const readinessConfigured = spawnSync(process.execPath, [readinessScript], {
     TRUELAYER_SIGNING_KID: 'synthetic-kid',
     TRUELAYER_PRIVATE_KEY_PEM: syntheticPem,
     TRUELAYER_PRIVATE_KEY_B64: '',
-    TRUELAYER_RETURN_URI: 'http://localhost:5173/bank-return',
+    TRUELAYER_RETURN_URI: 'http://localhost:4000/api/open-banking/return',
     G_BANK_MAX_PAYMENT_EUR: '100',
     G_BANK_OPERATOR_SECRET: 'synthetic-operator-secret-012345678901234567890',
     G_BANK_ENABLE_LIVE: 'false',
@@ -655,7 +691,7 @@ process.env.TRUELAYER_CLIENT_ID = 'test-client';
 process.env.TRUELAYER_CLIENT_SECRET = 'test-secret';
 process.env.TRUELAYER_SIGNING_KID = 'test-kid';
 process.env.TRUELAYER_PRIVATE_KEY_PEM = syntheticPem;
-process.env.TRUELAYER_RETURN_URI = 'https://example.invalid/return';
+process.env.TRUELAYER_RETURN_URI = 'https://example.invalid/api/open-banking/return';
 process.env.G_BANK_WEBHOOK_RECEIPT_DIR = path.join(evidenceRoot, 'webhook-receipts');
 process.env.G_BANK_PAYMENT_INTENT_DIR = path.join(evidenceRoot, 'payment-intents');
 
