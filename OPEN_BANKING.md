@@ -166,3 +166,38 @@ G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE=.secrets/evidence/sandbox-verification.
 ```
 
 A valid local record is still not treated as independent external proof; it is an audit-bound reference to evidence that must remain reviewable.
+
+
+## Verified payment webhooks
+
+Configure the TrueLayer Console webhook URI so its path exactly matches:
+
+```
+TRUELAYER_WEBHOOK_PATH=/api/open-banking/webhook
+```
+
+The backend preserves the exact raw JSON bytes for this route before parsing. Incoming webhooks are accepted only after:
+
+1. `Tl-Signature` parses as a detached v2 JWS.
+2. `alg=ES512` and `tl_version=2`.
+3. `jku` exactly equals the expected TrueLayer well-known JWKS URL for the selected environment.
+4. The JWK selected by `kid` is a P-521 EC public key.
+5. `X-TL-Webhook-Timestamp` is included in `tl_headers`, present in the request and within the supported retry/freshness window.
+6. The signature verifies against the exact HTTP method, configured path, signed headers and raw request body.
+7. The JSON contains an event ID and event version.
+
+The JWKS fetch forbids redirects. This prevents an attacker-controlled JKU from becoming an SSRF/open-redirect path.
+
+TrueLayer may deliver the same webhook more than once. Duplicate `event_id` values are acknowledged idempotently within the running process. The in-memory duplicate cache is not durable across process restarts, so any future side-effecting webhook consumer must use a persistent datastore with a unique event-id constraint.
+
+A verified webhook remains an observation only:
+
+```
+WEBHOOK_SIGNATURE_VERIFIED
+  -> PROVIDER_EVENT_OBSERVED
+  -> PAYMENT_STATUS_EVIDENCE_CANDIDATE
+  -> NO AUTOMATIC PAYMENT WRITE
+  -> NO AUTOMATIC VERIFIED_VALUE_FLOW
+```
+
+Even `payment_executed` does not prove that an external creditor received funds. Independent settlement/receipt evidence remains required for the G_REAL_EXECUTION_GRAPH value-flow edge.
