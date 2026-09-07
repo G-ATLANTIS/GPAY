@@ -10,7 +10,9 @@ const {
   isValidIban,
   approvalMessage,
   assertPaymentInput,
-  assertLiveApproval
+  assertLiveApproval,
+  buildTrueLayerSigningPayload,
+  signRequest
 } = router._test;
 
 function mustThrow(fn, pattern) {
@@ -139,3 +141,61 @@ mustThrow(() => assertLiveApproval({
 }), /allowlist/);
 
 console.log('Open Banking policy tests: PASS');
+
+
+// Request-signing v2: verify detached ES512 JWS locally with a generated P-521 key.
+const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'secp521r1' });
+process.env.TRUELAYER_PRIVATE_KEY_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' });
+process.env.TRUELAYER_SIGNING_KID = '11111111-2222-4333-8444-555555555555';
+
+const signingBody = JSON.stringify({ amount_in_minor: 1234, currency: 'EUR' });
+const signingIdempotencyKey = '22222222-2222-4222-8222-222222222222';
+const signingPath = '/v3/payments';
+const detached = signRequest({
+  method: 'POST',
+  path: signingPath,
+  body: signingBody,
+  idempotencyKey: signingIdempotencyKey
+});
+
+const [protectedHeader, emptyPayload, encodedSignature] = detached.split('.');
+assert.equal(emptyPayload, '');
+
+const parsedHeader = JSON.parse(Buffer.from(protectedHeader, 'base64url').toString('utf8'));
+assert.deepEqual(parsedHeader, {
+  alg: 'ES512',
+  kid: process.env.TRUELAYER_SIGNING_KID,
+  tl_version: '2',
+  tl_headers: 'Idempotency-Key'
+});
+
+const signingPayload = buildTrueLayerSigningPayload({
+  method: 'POST',
+  path: signingPath,
+  headers: { 'Idempotency-Key': signingIdempotencyKey },
+  body: signingBody
+});
+const encodedSigningPayload = Buffer.from(signingPayload).toString('base64url');
+const signingInput = `${protectedHeader}.${encodedSigningPayload}`;
+const rawSignature = Buffer.from(encodedSignature, 'base64url');
+
+assert.equal(rawSignature.length, 132);
+assert.equal(
+  crypto.verify('sha512', Buffer.from(signingInput, 'utf8'), {
+    key: publicKey,
+    dsaEncoding: 'ieee-p1363'
+  }, rawSignature),
+  true
+);
+
+mustThrow(() => {
+  process.env.TRUELAYER_PRIVATE_KEY_PEM = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+  signRequest({
+    method: 'POST',
+    path: signingPath,
+    body: signingBody,
+    idempotencyKey: signingIdempotencyKey
+  });
+}, /P-521/);
+
+console.log('TrueLayer request-signing tests: PASS');
