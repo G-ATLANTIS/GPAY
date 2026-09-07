@@ -444,20 +444,20 @@ console.log('G-Bank approval CLI tests: PASS');
 });
 
 
-// Live mode requires recorded evidence receipts in addition to credentials and approval controls.
+// Live mode requires valid evidence receipt files in addition to credentials and approval controls.
 process.env.TRUELAYER_ENV = 'live';
 process.env.G_BANK_ENABLE_LIVE = 'true';
 process.env.G_BANK_APPROVAL_SECRET = 'unit-test-approval-secret-012345678901234567890';
 process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS = 'NL91ABNA0417164300';
+delete process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE;
+delete process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE;
 
 let liveStatus = router._test.configStatus();
 assert.equal(liveStatus.configured, false);
-assert.equal(liveStatus.missing.includes('G_BANK_SECRET_ROTATION_RECEIPT'), true);
-assert.equal(liveStatus.missing.includes('G_BANK_SANDBOX_VERIFICATION_RECEIPT'), true);
-
-liveStatus = router._test.configStatus();
-assert.equal(liveStatus.historical_secret_rotation_receipt_present, true);
-assert.equal(liveStatus.sandbox_verification_receipt_present, true);
+assert.equal(liveStatus.missing.includes('G_BANK_SECRET_ROTATION_RECEIPT_FILE(valid)'), true);
+assert.equal(liveStatus.missing.includes('G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE(valid,fresh)'), true);
+assert.equal(liveStatus.historical_secret_rotation_receipt_present, false);
+assert.equal(liveStatus.sandbox_verification_receipt_present, false);
 
 console.log('Live evidence receipt gate tests: PASS');
 
