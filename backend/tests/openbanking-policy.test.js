@@ -124,6 +124,50 @@ process.env.G_BANK_ENABLE_LIVE = 'true';
 process.env.G_BANK_MAX_PAYMENT_EUR = '100';
 process.env.G_BANK_APPROVAL_SECRET = 'unit-test-secret';
 process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS = 'NL91ABNA0417164300';
+
+// Synthetic release evidence for the live approval unit test.
+const approvalEvidenceFs = require('node:fs');
+const approvalEvidenceOs = require('node:os');
+const approvalEvidencePath = require('node:path');
+const approvalEvidenceDir = approvalEvidenceFs.mkdtempSync(approvalEvidencePath.join(approvalEvidenceOs.tmpdir(), 'g-bank-live-approval-evidence-'));
+
+function writeSyntheticEvidence(filename, type, provider, evidenceRef, artifactSha256 = null) {
+  const record = {
+    version: 1,
+    type,
+    provider,
+    observed_at: new Date().toISOString(),
+    evidence_ref: evidenceRef,
+    artifact_sha256: artifactSha256
+  };
+  const canonical = JSON.stringify({
+    version: record.version,
+    type: record.type,
+    provider: record.provider,
+    observed_at: record.observed_at,
+    evidence_ref: record.evidence_ref,
+    artifact_sha256: record.artifact_sha256
+  });
+  record.record_sha256 = crypto.createHash('sha256').update(canonical).digest('hex');
+  const target = approvalEvidencePath.join(approvalEvidenceDir, filename);
+  approvalEvidenceFs.writeFileSync(target, JSON.stringify(record, null, 2) + '\n');
+  return target;
+}
+
+process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE = writeSyntheticEvidence(
+  'secret-rotation.json',
+  'SECRET_ROTATION',
+  'mollie',
+  'UNIT-TEST-ROTATION'
+);
+process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE = writeSyntheticEvidence(
+  'sandbox-verification.json',
+  'SANDBOX_VERIFICATION',
+  'truelayer',
+  'UNIT-TEST-SANDBOX',
+  crypto.createHash('sha256').update('synthetic-sandbox-artifact').digest('hex')
+);
+
 process.env.TRUELAYER_CLIENT_ID = 'test-client';
 process.env.TRUELAYER_CLIENT_SECRET = 'test-secret';
 process.env.TRUELAYER_SIGNING_KID = 'test-kid';
@@ -158,6 +202,10 @@ mustThrow(() => assertLiveApproval({
   iban: 'NL02RABO0123456789',
   approvalHeader: approval
 }), /allowlist/);
+
+approvalEvidenceFs.rmSync(approvalEvidenceDir, { recursive: true, force: true });
+delete process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE;
+delete process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE;
 
 console.log('Open Banking policy tests: PASS');
 
