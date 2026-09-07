@@ -912,36 +912,44 @@ router.post('/create-payment', async (req, res) => {
   }
 });
 
+async function fetchPaymentStatus(paymentId, httpClient = axios) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(paymentId || ''))) {
+    const err = new Error('Invalid payment ID.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  assertProviderConfigured();
+  const endpointSnapshot = endpoints();
+  const path = `/v3/payments/${paymentId}`;
+  const token = await getAccessToken(httpClient);
+
+  const response = await httpClient.get(`${endpointSnapshot.apiBase}${path}`, {
+    timeout: 15000,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json; charset=UTF-8'
+    }
+  });
+
+  return {
+    environment: endpointSnapshot.live ? 'live' : 'sandbox',
+    payment: response.data || {}
+  };
+}
+
 router.get('/payment/:paymentId', async (req, res) => {
   try {
-    assertConfigured();
     const paymentId = String(req.params.paymentId || '');
-    if (!/^[0-9a-f-]{36}$/i.test(paymentId)) {
-      return res.status(400).json({ error: 'Invalid payment ID.' });
-    }
-
-    const path = `/v3/payments/${paymentId}`;
-    const idempotencyKey = crypto.randomUUID();
-    const token = await getAccessToken();
-    const signature = signRequest({ method: 'GET', path, body: '', idempotencyKey });
-    const { apiBase } = endpoints();
-
-    const response = await axios.get(`${apiBase}${path}`, {
-      timeout: 15000,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Idempotency-Key': idempotencyKey,
-        'Tl-Signature': signature
-      }
-    });
-
-    const payment = response.data || {};
+    const result = await fetchPaymentStatus(paymentId, axios);
+    const payment = result.payment;
     const status = String(payment.status || '');
     const executed = status === 'executed' || status === 'payment_executed';
     const failed = status === 'failed' || status === 'payment_failed';
 
     res.json({
       provider: 'truelayer',
+      environment: result.environment,
       payment_id: payment.id || paymentId,
       status,
       failed,
@@ -996,7 +1004,8 @@ router._test = {
   verifyWebhookSignature,
   fetchWebhookJwks,
   observeWebhookEvent,
-  verifyAndClassifyWebhook
+  verifyAndClassifyWebhook,
+  fetchPaymentStatus
 };
 
 module.exports = router;
