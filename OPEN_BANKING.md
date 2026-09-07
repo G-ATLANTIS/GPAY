@@ -50,6 +50,9 @@ The backend implements TrueLayer request-signing v2 with Node's built-in `crypto
 
 - `GET /api/open-banking/health`
   - Reports environment, missing configuration, live gate and max amount.
+- `GET /api/open-banking/graph-status`
+  - Returns a non-secret G_REAL_EXECUTION_GRAPH view of provider-auth, payment-write and value-flow edges.
+  - Local configuration never activates a verified edge by itself.
 - `POST /api/open-banking/provider-readiness`
   - Requires `G_BANK_ENABLE_PROVIDER_PROBE=true`.
   - Obtains a Payments access token and submits a signed nonce to TrueLayer `/test-signature`.
