@@ -6,6 +6,11 @@ const pathModule = require('node:path');
 
 const router = express.Router();
 
+const webhookJwksCache = new Map();
+const WEBHOOK_JWKS_CACHE_TTL_MS = 10 * 60 * 1000;
+const WEBHOOK_JWKS_MAX_KEYS = 50;
+const WEBHOOK_JWKS_MAX_BYTES = 64 * 1024;
+
 function envMode() {
   return (process.env.TRUELAYER_ENV || 'sandbox').toLowerCase() === 'live' ? 'live' : 'sandbox';
 }
@@ -276,20 +281,75 @@ function verifyWebhookSignature({ signature, method = 'POST', path, headers, raw
   };
 }
 
-async function fetchWebhookJwks(httpClient = axios, jku = expectedWebhookJku()) {
+function validateWebhookJwks(jwks) {
+  if (!jwks || !Array.isArray(jwks.keys)) throw new Error('webhook_jwks_invalid');
+  if (jwks.keys.length === 0 || jwks.keys.length > WEBHOOK_JWKS_MAX_KEYS) {
+    throw new Error('webhook_jwks_key_count_invalid');
+  }
+
+  for (const key of jwks.keys) {
+    if (!key || typeof key !== 'object') throw new Error('webhook_jwks_key_invalid');
+    if (typeof key.kid !== 'string' || !key.kid) throw new Error('webhook_jwks_kid_invalid');
+    if (key.kty && key.kty !== 'EC') throw new Error('webhook_jwks_key_type_invalid');
+    if (key.crv && key.crv !== 'P-521') throw new Error('webhook_jwks_curve_invalid');
+  }
+
+  return jwks;
+}
+
+function clearWebhookJwksCache() {
+  webhookJwksCache.clear();
+}
+
+async function fetchWebhookJwks(httpClient = axios, jku = expectedWebhookJku(), kid = '') {
   if (jku !== expectedWebhookJku()) throw new Error('untrusted_webhook_jwks_url');
+  if (!kid) throw new Error('webhook_jwks_kid_required');
+
+  const now = Date.now();
+  const cached = webhookJwksCache.get(jku);
+  if (
+    cached &&
+    now - cached.fetched_at <= WEBHOOK_JWKS_CACHE_TTL_MS &&
+    cached.jwks.keys.some(key => key.kid === kid)
+  ) {
+    return {
+      jwks: cached.jwks,
+      cache: 'hit'
+    };
+  }
 
   const response = await httpClient.get(jku, {
     timeout: 10000,
     maxRedirects: 0,
+    maxContentLength: WEBHOOK_JWKS_MAX_BYTES,
+    maxBodyLength: WEBHOOK_JWKS_MAX_BYTES,
     validateStatus: () => true,
     headers: { Accept: 'application/json' }
   });
 
-  if (response.status !== 200 || !Array.isArray(response.data?.keys)) {
+  const contentType = String(response.headers?.['content-type'] || response.headers?.['Content-Type'] || '');
+  if (contentType && !/^application\/json(?:\s*;|$)/i.test(contentType)) {
+    throw new Error('webhook_jwks_content_type_invalid');
+  }
+
+  if (response.status !== 200) {
     throw new Error('webhook_jwks_fetch_failed');
   }
-  return response.data;
+
+  const jwks = validateWebhookJwks(response.data);
+  if (!jwks.keys.some(key => key.kid === kid)) {
+    throw new Error('webhook_jwk_not_found_after_refresh');
+  }
+
+  webhookJwksCache.set(jku, {
+    fetched_at: now,
+    jwks
+  });
+
+  return {
+    jwks,
+    cache: cached ? 'refresh' : 'miss'
+  };
 }
 
 function webhookReceiptDirectory(environment = envMode()) {
@@ -435,14 +495,18 @@ function observeWebhookEvent({
 
 async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, httpClient = axios }) {
   const parsedSignature = parseDetachedTlSignature(signature);
-  const jwks = await fetchWebhookJwks(httpClient, parsedSignature.header.jku);
+  const jwksResult = await fetchWebhookJwks(
+    httpClient,
+    parsedSignature.header.jku,
+    parsedSignature.header.kid
+  );
   const verification = verifyWebhookSignature({
     signature,
     method: 'POST',
     path,
     headers,
     rawBody,
-    jwks
+    jwks: jwksResult.jwks
   });
 
   let event;
@@ -480,6 +544,7 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
     event_version: event.event_version,
     payment_id: paymentId,
     signature_kid: verification.kid,
+    jwks_cache: jwksResult.cache,
     webhook_timestamp: verification.timestamp.timestamp,
     raw_body_sha256: rawBodySha256,
     durable_event_receipt: true,
@@ -1135,6 +1200,8 @@ router._test = {
   validateWebhookTimestamp,
   buildWebhookSigningPayload,
   verifyWebhookSignature,
+  validateWebhookJwks,
+  clearWebhookJwksCache,
   fetchWebhookJwks,
   webhookReceiptDirectory,
   webhookReceiptPath,
