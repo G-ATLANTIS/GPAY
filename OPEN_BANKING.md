@@ -22,7 +22,7 @@ TRUELAYER_CLIENT_ID=
 TRUELAYER_CLIENT_SECRET=
 TRUELAYER_SIGNING_KID=
 TRUELAYER_PRIVATE_KEY_B64=
-TRUELAYER_RETURN_URI=http://localhost:5173/bank-return
+TRUELAYER_RETURN_URI=http://localhost:4000/api/open-banking/return
 G_BANK_MAX_PAYMENT_EUR=100
 G_BANK_ENABLE_LIVE=false
 G_BANK_ENABLE_PROVIDER_PROBE=false
@@ -332,3 +332,40 @@ HPP RETURN
 ```
 
 A random or unknown payment ID is rejected. Even a locally known payment ID never becomes successful from the return URL alone.
+
+
+## HTTP surface isolation
+
+The Open Banking router is mounted before the application's general CORS middleware. Operator/payment APIs are therefore not exposed through the application's broad browser CORS policy.
+
+The G-Bank surface also applies:
+
+- JSON request body limit: 64 KiB;
+- `Cache-Control: no-store`;
+- `Pragma: no-cache`;
+- `X-Content-Type-Options: nosniff`;
+- `Referrer-Policy: no-referrer`;
+- `Cross-Origin-Resource-Policy: same-origin`;
+- explicit G-Bank 404 handling so unknown banking paths do not fall through into the general application middleware.
+
+This does not replace operator authentication. Non-webhook/non-return routes still require `X-G-Bank-Operator-Authorization`.
+
+
+### Return URI runtime policy
+
+Payment creation is fail-closed unless `TRUELAYER_RETURN_URI` satisfies the runtime policy:
+
+- path must be exactly `/api/open-banking/return`;
+- no username/password component;
+- no query string;
+- no fragment;
+- live environment requires HTTPS;
+- sandbox allows HTTPS, or HTTP only for localhost/loopback.
+
+The configured webhook path must likewise be exactly:
+
+```
+/api/open-banking/webhook
+```
+
+This prevents a successful code deployment from silently using a less-protected redirect or a webhook path that the runtime route cannot actually verify.
