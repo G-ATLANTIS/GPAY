@@ -49,6 +49,8 @@ function requiredConfig() {
     webhookPath: process.env.TRUELAYER_WEBHOOK_PATH || '/api/open-banking/webhook',
     webhookReceiptDir: process.env.G_BANK_WEBHOOK_RECEIPT_DIR || '.secrets/runtime/webhook-events',
     webhookReceiptDirExplicit: Boolean(process.env.G_BANK_WEBHOOK_RECEIPT_DIR),
+    paymentIntentDir: process.env.G_BANK_PAYMENT_INTENT_DIR || '.secrets/runtime/payment-intents',
+    paymentIntentDirExplicit: Boolean(process.env.G_BANK_PAYMENT_INTENT_DIR),
     maxEur,
     liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
     providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
@@ -523,6 +525,9 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
 
   const paymentId = typeof event.payment_id === 'string' ? event.payment_id : null;
   const rawBodySha256 = crypto.createHash('sha256').update(rawBody).digest('hex');
+  const localPaymentBinding = paymentId
+    ? lookupPaymentBinding(paymentId, verification.environment)
+    : { known: false };
   const replay = observeWebhookEvent({
     eventId: event.event_id,
     eventType: event.type,
@@ -544,6 +549,8 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
     event_type: event.type,
     event_version: event.event_version,
     payment_id: paymentId,
+    known_local_payment_intent: localPaymentBinding.known,
+    local_payment_binding_sha256: localPaymentBinding.binding_sha256 || null,
     signature_kid: verification.kid,
     jwks_cache: jwksResult.cache,
     webhook_timestamp: verification.timestamp.timestamp,
@@ -616,7 +623,7 @@ function assertOperatorAuthorization(authorizationHeader) {
 function operatorAuthorizationMiddleware(req, res, next) {
   // TrueLayer must be able to reach the webhook without a G-Bank operator secret.
   // Its authentication boundary is the verified Tl-Signature/JWKS path instead.
-  if (req.path === '/webhook') return next();
+  if (req.path === '/webhook' || req.path === '/return') return next();
 
   try {
     assertOperatorAuthorization(req.get('X-G-Bank-Operator-Authorization') || '');
@@ -640,7 +647,7 @@ function assertProviderProbeEnabled(authorizationHeader) {
     err.statusCode = 403;
     err.publicDetails = {
       provider: 'truelayer',
-      environment: envMode(),
+      environment: environmentSnapshot,
       provider_probe_enabled: false,
       payment_created: false,
       value_moved: false
@@ -679,6 +686,7 @@ function configStatus() {
   const evidence = evidenceStatus();
   if (live && !cfg.approvalSecret) missing.push('G_BANK_APPROVAL_SECRET');
   if (live && !cfg.webhookReceiptDirExplicit) missing.push('G_BANK_WEBHOOK_RECEIPT_DIR(explicit persistent location)');
+  if (live && !cfg.paymentIntentDirExplicit) missing.push('G_BANK_PAYMENT_INTENT_DIR(explicit persistent location)');
   if (live && !evidence.secret_rotation.valid) missing.push('G_BANK_SECRET_ROTATION_RECEIPT_FILE(valid)');
   if (live && !evidence.sandbox_verification.valid) missing.push('G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE(valid,fresh)');
   if (live && cfg.allowedBeneficiaryIbans.length === 0) missing.push('G_BANK_ALLOWED_BENEFICIARY_IBANS');
@@ -760,6 +768,225 @@ function assertLiveApproval({ idempotencyKey, amountInMinor, iban, reference, ap
   if (suppliedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(suppliedBuffer, expectedBuffer)) {
     throw Object.assign(new Error('Live G-Bank approval did not match this payment intent.'), { statusCode: 403 });
   }
+}
+
+function hashText(value) {
+  return crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex');
+}
+
+function paymentIntentDirectory(environment = envMode()) {
+  if (!['sandbox', 'live'].includes(String(environment))) throw new Error('invalid_payment_intent_environment');
+  return pathModule.resolve(requiredConfig().paymentIntentDir, String(environment));
+}
+
+function paymentIntentReceiptPath(idempotencyKey, environment = envMode()) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(idempotencyKey || ''))) throw new Error('invalid_payment_intent_idempotency_key');
+  return pathModule.join(paymentIntentDirectory(environment), `${String(idempotencyKey).toLowerCase()}.intent.json`);
+}
+
+function paymentCreatedReceiptPath(idempotencyKey, environment = envMode()) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(idempotencyKey || ''))) throw new Error('invalid_payment_intent_idempotency_key');
+  return pathModule.join(paymentIntentDirectory(environment), `${String(idempotencyKey).toLowerCase()}.created.json`);
+}
+
+function paymentBindingPath(paymentId, environment = envMode()) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(paymentId || ''))) throw new Error('invalid_payment_binding_id');
+  return pathModule.join(paymentIntentDirectory(environment), `payment-${String(paymentId).toLowerCase()}.json`);
+}
+
+function canonicalPaymentIntentReceipt(receipt) {
+  return JSON.stringify({
+    version: receipt.version,
+    provider: receipt.provider,
+    environment: receipt.environment,
+    idempotency_key: receipt.idempotency_key,
+    amount_in_minor: receipt.amount_in_minor,
+    request_body_sha256: receipt.request_body_sha256,
+    beneficiary_iban_sha256: receipt.beneficiary_iban_sha256,
+    reference_sha256: receipt.reference_sha256,
+    created_at: receipt.created_at
+  });
+}
+
+function canonicalPaymentCreatedReceipt(receipt) {
+  return JSON.stringify({
+    version: receipt.version,
+    provider: receipt.provider,
+    environment: receipt.environment,
+    idempotency_key: receipt.idempotency_key,
+    payment_id: receipt.payment_id,
+    provider_status: receipt.provider_status,
+    request_body_sha256: receipt.request_body_sha256,
+    hosted_page_uri_sha256: receipt.hosted_page_uri_sha256,
+    created_at: receipt.created_at
+  });
+}
+
+function canonicalPaymentBinding(receipt) {
+  return JSON.stringify({
+    version: receipt.version,
+    provider: receipt.provider,
+    environment: receipt.environment,
+    payment_id: receipt.payment_id,
+    idempotency_key_sha256: receipt.idempotency_key_sha256,
+    request_body_sha256: receipt.request_body_sha256,
+    created_receipt_sha256: receipt.created_receipt_sha256,
+    created_at: receipt.created_at
+  });
+}
+
+function integrityHash(canonical) {
+  return crypto.createHash('sha256').update(canonical).digest('hex');
+}
+
+function atomicCreateJson(filePath, record) {
+  const directory = pathModule.dirname(filePath);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const fd = fs.openSync(filePath, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, JSON.stringify(record, null, 2) + '\n', 'utf8');
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    const dirFd = fs.openSync(directory, 'r');
+    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+  } catch {
+    // Directory fsync portability varies; file fsync above is mandatory.
+  }
+}
+
+function readAndValidatePaymentIntentReceipt(filePath) {
+  const receipt = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (receipt.version !== 1 || receipt.provider !== 'truelayer') throw new Error('payment_intent_receipt_invalid');
+  const calculated = integrityHash(canonicalPaymentIntentReceipt(receipt));
+  if (calculated !== receipt.receipt_sha256) throw new Error('payment_intent_receipt_integrity_mismatch');
+  return receipt;
+}
+
+function readAndValidatePaymentCreatedReceipt(filePath) {
+  const receipt = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (receipt.version !== 1 || receipt.provider !== 'truelayer') throw new Error('payment_created_receipt_invalid');
+  const calculated = integrityHash(canonicalPaymentCreatedReceipt(receipt));
+  if (calculated !== receipt.receipt_sha256) throw new Error('payment_created_receipt_integrity_mismatch');
+  return receipt;
+}
+
+function readAndValidatePaymentBinding(filePath) {
+  const receipt = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (receipt.version !== 1 || receipt.provider !== 'truelayer') throw new Error('payment_binding_invalid');
+  const calculated = integrityHash(canonicalPaymentBinding(receipt));
+  if (calculated !== receipt.binding_sha256) throw new Error('payment_binding_integrity_mismatch');
+  return receipt;
+}
+
+function preparePaymentIntentReceipt({ idempotencyKey, amountInMinor, beneficiary, rawBody, environment }) {
+  const receiptPath = paymentIntentReceiptPath(idempotencyKey, environment);
+  const requestBodySha256 = hashText(rawBody);
+  const expected = {
+    version: 1,
+    provider: 'truelayer',
+    environment,
+    idempotency_key: String(idempotencyKey).toLowerCase(),
+    amount_in_minor: amountInMinor,
+    request_body_sha256: requestBodySha256,
+    beneficiary_iban_sha256: hashText(String(beneficiary.iban).toUpperCase()),
+    reference_sha256: hashText(String(beneficiary.reference)),
+    created_at: new Date().toISOString()
+  };
+  expected.receipt_sha256 = integrityHash(canonicalPaymentIntentReceipt(expected));
+
+  try {
+    atomicCreateJson(receiptPath, expected);
+    return { created: true, receipt: expected, receipt_path: receiptPath };
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+
+  const stored = readAndValidatePaymentIntentReceipt(receiptPath);
+  if (
+    stored.request_body_sha256 !== requestBodySha256 ||
+    stored.amount_in_minor !== amountInMinor ||
+    stored.beneficiary_iban_sha256 !== expected.beneficiary_iban_sha256 ||
+    stored.reference_sha256 !== expected.reference_sha256
+  ) {
+    throw Object.assign(new Error('Idempotency-Key was already bound to a different payment intent.'), { statusCode: 409 });
+  }
+
+  const createdPath = paymentCreatedReceiptPath(idempotencyKey, environment);
+  if (fs.existsSync(createdPath)) {
+    const created = readAndValidatePaymentCreatedReceipt(createdPath);
+    throw Object.assign(new Error('Payment intent was already created at the provider; use its payment ID for status instead of creating again.'), {
+      statusCode: 409,
+      publicDetails: {
+        payment_id: created.payment_id,
+        provider_status: created.provider_status,
+        retry_create_denied: true
+      }
+    });
+  }
+
+  throw Object.assign(new Error('A prior submission with this Idempotency-Key has no confirmed provider result. Automatic retry is denied; review provider state before any retry.'), {
+    statusCode: 409,
+    publicDetails: {
+      ambiguous_prior_submission: true,
+      retry_create_denied: true
+    }
+  });
+}
+
+function recordPaymentCreated({ idempotencyKey, payment, rawBody, environment }) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(payment?.id || ''))) {
+    throw new Error('TrueLayer payment creation response did not contain a valid payment ID.');
+  }
+
+  const createdPath = paymentCreatedReceiptPath(idempotencyKey, environment);
+  const receipt = {
+    version: 1,
+    provider: 'truelayer',
+    environment,
+    idempotency_key: String(idempotencyKey).toLowerCase(),
+    payment_id: String(payment.id).toLowerCase(),
+    provider_status: String(payment.status || ''),
+    request_body_sha256: hashText(rawBody),
+    hosted_page_uri_sha256: payment.hosted_page?.uri ? hashText(payment.hosted_page.uri) : null,
+    created_at: new Date().toISOString()
+  };
+  receipt.receipt_sha256 = integrityHash(canonicalPaymentCreatedReceipt(receipt));
+  atomicCreateJson(createdPath, receipt);
+
+  const bindingPath = paymentBindingPath(payment.id, environment);
+  const binding = {
+    version: 1,
+    provider: 'truelayer',
+    environment,
+    payment_id: String(payment.id).toLowerCase(),
+    idempotency_key_sha256: hashText(String(idempotencyKey).toLowerCase()),
+    request_body_sha256: receipt.request_body_sha256,
+    created_receipt_sha256: receipt.receipt_sha256,
+    created_at: receipt.created_at
+  };
+  binding.binding_sha256 = integrityHash(canonicalPaymentBinding(binding));
+  atomicCreateJson(bindingPath, binding);
+
+  return {
+    created_receipt_sha256: receipt.receipt_sha256,
+    payment_binding_sha256: binding.binding_sha256
+  };
+}
+
+function lookupPaymentBinding(paymentId, environment = envMode()) {
+  const filePath = paymentBindingPath(paymentId, environment);
+  if (!fs.existsSync(filePath)) return { known: false };
+  const binding = readAndValidatePaymentBinding(filePath);
+  return {
+    known: true,
+    environment: binding.environment,
+    payment_id: binding.payment_id,
+    binding_sha256: binding.binding_sha256,
+    created_receipt_sha256: binding.created_receipt_sha256
+  };
 }
 
 function assertPaymentInput(body) {
@@ -985,7 +1212,9 @@ function executionGraphStatus() {
       beneficiary_allowlist_configured: cfg.allowedBeneficiaryIbans.length > 0,
       transaction_approval_secret_configured: Boolean(cfg.approvalSecret),
       webhook_receipt_store_configured: Boolean(cfg.webhookReceiptDir),
-      webhook_receipt_store_explicit: cfg.webhookReceiptDirExplicit
+      webhook_receipt_store_explicit: cfg.webhookReceiptDirExplicit,
+      payment_intent_store_configured: Boolean(cfg.paymentIntentDir),
+      payment_intent_store_explicit: cfg.paymentIntentDirExplicit
     },
     verified_value_flow: false
   };
@@ -1003,6 +1232,46 @@ router.get('/graph-status', (req, res) => {
   res.json(executionGraphStatus());
 });
 
+
+router.get('/return', (req, res) => {
+  const paymentId = String(req.query.payment_id || '');
+  const error = String(req.query.error || '');
+
+  if (!/^[0-9a-f-]{36}$/i.test(paymentId)) {
+    return res.status(400).json({
+      error: 'Invalid or missing payment_id.',
+      payment_success: null,
+      verified_value_flow: false
+    });
+  }
+
+  const binding = lookupPaymentBinding(paymentId, envMode());
+  if (!binding.known) {
+    return res.status(404).json({
+      provider: 'truelayer',
+      payment_id: paymentId,
+      known_local_payment_intent: false,
+      payment_success: null,
+      verified_value_flow: false,
+      next_action: 'Do not infer payment outcome from this return URL.'
+    });
+  }
+
+  return res.status(200).json({
+    provider: 'truelayer',
+    environment: binding.environment,
+    payment_id: paymentId,
+    known_local_payment_intent: true,
+    authorization_flow_returned: true,
+    authorization_abandoned: error === 'tl_hpp_abandoned',
+    return_error: error === 'tl_hpp_abandoned' ? 'tl_hpp_abandoned' : null,
+    payment_success: null,
+    bank_accepted_execution: false,
+    creditor_settlement_proven: false,
+    verified_value_flow: false,
+    next_action: 'Wait for a signature-verified webhook or use the authenticated payment-status endpoint.'
+  });
+});
 
 router.post('/provider-readiness', async (req, res) => {
   try {
@@ -1115,6 +1384,14 @@ router.post('/create-payment', async (req, res) => {
     };
 
     const rawBody = JSON.stringify(payload);
+    const environmentSnapshot = envMode();
+    const intentReceipt = preparePaymentIntentReceipt({
+      idempotencyKey,
+      amountInMinor,
+      beneficiary,
+      rawBody,
+      environment: environmentSnapshot
+    });
     const token = await getAccessToken();
     const signature = signRequest({ method: 'POST', path, body: rawBody, idempotencyKey });
     const { apiBase } = endpoints();
@@ -1130,6 +1407,12 @@ router.post('/create-payment', async (req, res) => {
     });
 
     const payment = response.data || {};
+    const creationReceipts = recordPaymentCreated({
+      idempotencyKey,
+      payment,
+      rawBody,
+      environment: environmentSnapshot
+    });
     res.status(201).json({
       provider: 'truelayer',
       environment: envMode(),
@@ -1138,6 +1421,9 @@ router.post('/create-payment', async (req, res) => {
       authorization_required: true,
       authorization_url: payment.hosted_page?.uri || null,
       idempotency_key: idempotencyKey,
+      intent_receipt_sha256: intentReceipt.receipt.receipt_sha256,
+      created_receipt_sha256: creationReceipts.created_receipt_sha256,
+      payment_binding_sha256: creationReceipts.payment_binding_sha256,
       execution_graph: {
         edge: 'VERIFIED_VALUE_FLOW_CANDIDATE',
         active: false,
@@ -1231,6 +1517,17 @@ router._test = {
   assertProviderProbeEnabled,
   isValidIban,
   approvalMessage,
+  hashText,
+  paymentIntentDirectory,
+  paymentIntentReceiptPath,
+  paymentCreatedReceiptPath,
+  paymentBindingPath,
+  readAndValidatePaymentIntentReceipt,
+  readAndValidatePaymentCreatedReceipt,
+  readAndValidatePaymentBinding,
+  preparePaymentIntentReceipt,
+  recordPaymentCreated,
+  lookupPaymentBinding,
   assertPaymentInput,
   assertLiveApproval,
   buildTrueLayerSigningPayload,
