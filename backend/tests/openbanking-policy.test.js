@@ -26,7 +26,8 @@ const {
   verifyWebhookSignature,
   fetchWebhookJwks,
   observeWebhookEvent,
-  verifyAndClassifyWebhook
+  verifyAndClassifyWebhook,
+  fetchPaymentStatus
 } = router._test;
 
 function mustThrow(fn, pattern) {
@@ -679,6 +680,55 @@ console.log('Banking evidence integrity tests: PASS');
   assert.equal(fetchCalls.length, 2);
 
   console.log('TrueLayer webhook verification tests: PASS');
+})().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
+
+
+// Payment status read contract: backend bearer only; no idempotency/signature write headers.
+(async () => {
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.TRUELAYER_CLIENT_ID = 'read-contract-client';
+  process.env.TRUELAYER_CLIENT_SECRET = 'read-contract-secret';
+  process.env.TRUELAYER_SIGNING_KID = 'read-contract-kid';
+  process.env.TRUELAYER_PRIVATE_KEY_PEM = crypto.generateKeyPairSync('ec', { namedCurve: 'secp521r1' }).privateKey.export({ type: 'pkcs8', format: 'pem' });
+
+  const paymentId = '77777777-7777-4777-8777-777777777777';
+  const calls = [];
+  const fakeReadHttp = {
+    async post(url, body, options) {
+      calls.push({ method: 'POST', url, body, options });
+      assert.equal(url, 'https://auth.truelayer-sandbox.com/connect/token');
+      return { status: 200, data: { access_token: 'read-access-token' } };
+    },
+    async get(url, options) {
+      calls.push({ method: 'GET', url, options });
+      assert.equal(url, `https://api.truelayer-sandbox.com/v3/payments/${paymentId}`);
+      assert.equal(options.headers.Authorization, 'Bearer read-access-token');
+      assert.equal(options.headers.Accept, 'application/json; charset=UTF-8');
+      assert.equal('Idempotency-Key' in options.headers, false);
+      assert.equal('Tl-Signature' in options.headers, false);
+      return {
+        status: 200,
+        data: {
+          id: paymentId,
+          status: 'executed'
+        }
+      };
+    }
+  };
+
+  const readResult = await fetchPaymentStatus(paymentId, fakeReadHttp);
+  assert.equal(readResult.environment, 'sandbox');
+  assert.equal(readResult.payment.id, paymentId);
+  assert.equal(readResult.payment.status, 'executed');
+  assert.deepEqual(calls.map(call => [call.method, call.url]), [
+    ['POST', 'https://auth.truelayer-sandbox.com/connect/token'],
+    ['GET', `https://api.truelayer-sandbox.com/v3/payments/${paymentId}`]
+  ]);
+
+  console.log('Payment status read contract tests: PASS');
 })().catch((err) => {
   console.error(err);
   process.exitCode = 1;
