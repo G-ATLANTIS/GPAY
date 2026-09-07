@@ -29,8 +29,8 @@ G_BANK_ENABLE_PROVIDER_PROBE=false
 G_BANK_PROVIDER_PROBE_SECRET=
 G_BANK_APPROVAL_SECRET=
 G_BANK_ALLOWED_BENEFICIARY_IBANS=
-G_BANK_SECRET_ROTATION_RECEIPT=
-G_BANK_SANDBOX_VERIFICATION_RECEIPT=
+G_BANK_SECRET_ROTATION_RECEIPT_FILE=.secrets/evidence/secret-rotation.json
+G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE=.secrets/evidence/sandbox-verification.json
 ```
 
 Generate a P-521 / secp521r1 signing keypair and upload only the public key to the provider. Keep the private key in a secure secret store/KMS if possible.
@@ -130,3 +130,39 @@ Live mode now requires two non-secret receipt references:
 - `G_BANK_SANDBOX_VERIFICATION_RECEIPT`: reference to evidence that sandbox provider authentication/signing and the intended authorization path were verified.
 
 These environment values are **references**, not proof by themselves. The underlying evidence must be independently reviewable. Their purpose is to prevent the runtime from being switched to live while the required evidence has not even been recorded.
+
+
+## Recording release evidence
+
+Record provider-side secret rotation evidence:
+
+```bash
+npm run evidence:banking -- \
+  --confirm-evidence \
+  --type SECRET_ROTATION \
+  --provider mollie \
+  --evidence-ref <provider-ticket-or-console-reference> \
+  --artifact <optional-local-evidence-file>
+```
+
+Record sandbox provider verification evidence:
+
+```bash
+npm run evidence:banking -- \
+  --confirm-evidence \
+  --type SANDBOX_VERIFICATION \
+  --provider truelayer \
+  --evidence-ref <sandbox-test-reference> \
+  --artifact <saved-provider-readiness-json>
+```
+
+The sandbox record requires an artifact so its SHA-256 is bound into the receipt. Both records contain their own integrity hash. Runtime validation checks record integrity and timestamp freshness; sandbox verification expires after 30 days, while secret-rotation evidence is accepted for up to 10 years.
+
+Set live runtime paths to:
+
+```
+G_BANK_SECRET_ROTATION_RECEIPT_FILE=.secrets/evidence/secret-rotation.json
+G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE=.secrets/evidence/sandbox-verification.json
+```
+
+A valid local record is still not treated as independent external proof; it is an audit-bound reference to evidence that must remain reviewable.
