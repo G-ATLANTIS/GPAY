@@ -66,7 +66,8 @@ The backend implements TrueLayer request-signing v2 with Node's built-in `crypto
   - Uses an idempotency key and signed request.
   - Returns a hosted bank-authorization URL.
 - `GET /api/open-banking/payment/:paymentId`
-  - Reads current provider/bank execution status.
+  - Reads current provider/bank execution status using a backend bearer token.
+  - Does not send modification-only Idempotency-Key/Tl-Signature headers.
   - Does not claim creditor settlement from `executed` alone.
 
 ## Security blockers before live
