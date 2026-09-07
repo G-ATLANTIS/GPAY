@@ -388,3 +388,25 @@ console.log('G-Bank approval CLI tests: PASS');
   console.error(err);
   process.exitCode = 1;
 });
+
+
+// Live mode requires recorded evidence receipts in addition to credentials and approval controls.
+process.env.TRUELAYER_ENV = 'live';
+process.env.G_BANK_ENABLE_LIVE = 'true';
+process.env.G_BANK_APPROVAL_SECRET = 'unit-test-approval-secret-012345678901234567890';
+process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS = 'NL91ABNA0417164300';
+process.env.G_BANK_SECRET_ROTATION_RECEIPT = '';
+process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT = '';
+
+let liveStatus = router._test.configStatus();
+assert.equal(liveStatus.configured, false);
+assert.equal(liveStatus.missing.includes('G_BANK_SECRET_ROTATION_RECEIPT'), true);
+assert.equal(liveStatus.missing.includes('G_BANK_SANDBOX_VERIFICATION_RECEIPT'), true);
+
+process.env.G_BANK_SECRET_ROTATION_RECEIPT = 'provider-rotation-receipt-test';
+process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT = 'sandbox-signature-receipt-test';
+liveStatus = router._test.configStatus();
+assert.equal(liveStatus.historical_secret_rotation_receipt_present, true);
+assert.equal(liveStatus.sandbox_verification_receipt_present, true);
+
+console.log('Live evidence receipt gate tests: PASS');
