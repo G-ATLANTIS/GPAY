@@ -114,7 +114,12 @@ function main() {
     resultLine('live execution gate', 'SAFE', liveEnabled ? 'ignored in sandbox' : 'disabled');
   }
 
-  resultLine('provider readiness probe', probeEnabled ? 'OPEN' : 'SAFE', probeEnabled ? 'non-payment probe enabled' : 'disabled');
+  if (probeEnabled && (process.env.G_BANK_PROVIDER_PROBE_SECRET || '').length < 32) {
+    resultLine('provider readiness probe', 'FAIL', 'authorization secret missing/too short');
+    errors.push('G_BANK_PROVIDER_PROBE_SECRET must be at least 32 characters when the provider probe is enabled.');
+  } else {
+    resultLine('provider readiness probe', probeEnabled ? 'OPEN' : 'SAFE', probeEnabled ? 'non-payment probe enabled and authenticated' : 'disabled');
+  }
 
   console.log('');
   if (errors.length) {
