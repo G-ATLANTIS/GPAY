@@ -101,6 +101,12 @@ function main() {
       if (!(process.env.G_BANK_APPROVAL_SECRET || '')) {
         errors.push('G_BANK_APPROVAL_SECRET is required when live execution is enabled.');
       }
+      if (!(process.env.G_BANK_SECRET_ROTATION_RECEIPT || '')) {
+        errors.push('G_BANK_SECRET_ROTATION_RECEIPT is required when live execution is enabled.');
+      }
+      if (!(process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT || '')) {
+        errors.push('G_BANK_SANDBOX_VERIFICATION_RECEIPT is required when live execution is enabled.');
+      }
       const ibans = String(process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS || '').split(',').map(v => v.trim()).filter(Boolean);
       if (ibans.length === 0) errors.push('At least one G_BANK_ALLOWED_BENEFICIARY_IBANS entry is required when live execution is enabled.');
     }
