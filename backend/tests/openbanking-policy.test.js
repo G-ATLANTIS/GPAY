@@ -25,6 +25,9 @@ const {
   buildWebhookSigningPayload,
   verifyWebhookSignature,
   fetchWebhookJwks,
+  webhookReceiptDirectory,
+  webhookReceiptPath,
+  validateStoredWebhookReceipt,
   observeWebhookEvent,
   verifyAndClassifyWebhook,
   fetchPaymentStatus
@@ -569,6 +572,8 @@ console.log('Banking evidence integrity tests: PASS');
 (async () => {
   process.env.TRUELAYER_ENV = 'sandbox';
   process.env.TRUELAYER_WEBHOOK_PATH = '/api/open-banking/webhook';
+  const webhookReceiptRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-webhook-receipts-'));
+  process.env.G_BANK_WEBHOOK_RECEIPT_DIR = webhookReceiptRoot;
 
   const webhookPair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp521r1' });
   const webhookKid = '44444444-4444-4444-8444-444444444444';
@@ -666,7 +671,15 @@ console.log('Banking evidence integrity tests: PASS');
   assert.equal(firstWebhook.payment_write_performed, false);
   assert.equal(firstWebhook.value_moved_by_handler, false);
   assert.equal(firstWebhook.verified_value_flow, false);
+  assert.equal(firstWebhook.durable_event_receipt, true);
+  assert.match(firstWebhook.event_receipt_sha256, /^[0-9a-f]{64}$/);
 
+  const storedReceiptPath = webhookReceiptPath(webhookEvent.event_id);
+  assert.equal(fs.existsSync(storedReceiptPath), true);
+  const storedReceipt = JSON.parse(fs.readFileSync(storedReceiptPath, 'utf8'));
+  assert.equal(validateStoredWebhookReceipt(storedReceipt), storedReceipt.receipt_sha256);
+
+  // A second delivery is duplicate even though there is no in-memory replay state.
   const duplicateWebhook = await verifyAndClassifyWebhook({
     signature: webhookSignature,
     path: webhookPath,
@@ -678,6 +691,45 @@ console.log('Banking evidence integrity tests: PASS');
   assert.equal(duplicateWebhook.duplicate, true);
   assert.equal(duplicateWebhook.verified_value_flow, false);
   assert.equal(fetchCalls.length, 2);
+
+  // Same event ID but a different signed body must never be treated as a benign duplicate.
+  const conflictingEvent = { ...webhookEvent, type: 'payment_failed' };
+  const conflictingBody = Buffer.from(JSON.stringify(conflictingEvent), 'utf8');
+  const conflictingPayload = buildWebhookSigningPayload({
+    method: 'POST',
+    path: webhookPath,
+    signedHeaders: signedHeaderNames,
+    headers: webhookHeaders,
+    body: conflictingBody.toString('utf8')
+  });
+  const conflictingInput = `${encodedWebhookHeader}.${Buffer.from(conflictingPayload).toString('base64url')}`;
+  const conflictingRawSignature = crypto.sign('sha512', Buffer.from(conflictingInput), {
+    key: webhookPair.privateKey,
+    dsaEncoding: 'ieee-p1363'
+  });
+  const conflictingSignature = `${encodedWebhookHeader}..${conflictingRawSignature.toString('base64url')}`;
+
+  await assert.rejects(
+    verifyAndClassifyWebhook({
+      signature: conflictingSignature,
+      path: webhookPath,
+      headers: webhookHeaders,
+      rawBody: conflictingBody,
+      httpClient: fakeWebhookHttp
+    }),
+    /webhook_event_id_body_conflict/
+  );
+
+  // Tampering with the durable receipt itself must be detected.
+  const tamperedReceipt = JSON.parse(fs.readFileSync(storedReceiptPath, 'utf8'));
+  tamperedReceipt.event_type = 'tampered';
+  fs.writeFileSync(storedReceiptPath, JSON.stringify(tamperedReceipt, null, 2) + '\n');
+  assert.throws(() => validateStoredWebhookReceipt(
+    JSON.parse(fs.readFileSync(storedReceiptPath, 'utf8'))
+  ), /stored_webhook_receipt_integrity_mismatch/);
+
+  fs.rmSync(webhookReceiptRoot, { recursive: true, force: true });
+  delete process.env.G_BANK_WEBHOOK_RECEIPT_DIR;
 
   console.log('TrueLayer webhook verification tests: PASS');
 })().catch((err) => {
