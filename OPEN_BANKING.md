@@ -6,6 +6,7 @@ This integration is **fail-closed**.
 
 - Default environment: `sandbox`
 - Live execution is denied unless `TRUELAYER_ENV=live` **and** `G_BANK_ENABLE_LIVE=true`.
+- Live payments also require the beneficiary IBAN to be allowlisted and a transaction-bound `X-G-Bank-Approval` HMAC.
 - A payment is never considered complete merely because a payment object was created.
 - The user must authorize the payment in the bank/TrueLayer hosted flow.
 - For external-account payments, TrueLayer `executed` means the bank accepted the submitted payment. It is **not proof that the creditor account settled**.
@@ -24,6 +25,8 @@ TRUELAYER_PRIVATE_KEY_B64=
 TRUELAYER_RETURN_URI=http://localhost:5173/bank-return
 G_BANK_MAX_PAYMENT_EUR=100
 G_BANK_ENABLE_LIVE=false
+G_BANK_APPROVAL_SECRET=
+G_BANK_ALLOWED_BENEFICIARY_IBANS=
 ```
 
 Generate a P-521 / secp521r1 signing keypair and upload only the public key to the provider. Keep the private key in a secure secret store/KMS if possible.
@@ -48,11 +51,13 @@ Generate a P-521 / secp521r1 signing keypair and upload only the public key to t
 3. Generate a fresh signing keypair; upload public key; store private key outside Git.
 4. Register the production return URI in provider settings.
 5. Set a deliberately small `G_BANK_MAX_PAYMENT_EUR` for first live verification.
-6. Validate signing against TrueLayer's sandbox signature-test endpoint.
-7. Complete a sandbox payment through explicit user authorization.
-8. Regenerate and commit `package-lock.json` after installing `truelayer-signing`.
-9. Only then consider enabling `G_BANK_ENABLE_LIVE=true`.
-10. For a real purchase, verify beneficiary, amount, contract/invoice and settlement receipt separately.
+6. Configure `G_BANK_ALLOWED_BENEFICIARY_IBANS` with only pre-verified recipients.
+7. Keep `G_BANK_APPROVAL_SECRET` outside Git. For each live payment compute HMAC-SHA256 over `Idempotency-Key|amount_in_minor|IBAN|reference` and send it as `X-G-Bank-Approval`.
+8. Validate signing against TrueLayer's sandbox signature-test endpoint.
+9. Complete a sandbox payment through explicit user authorization.
+10. Regenerate and commit `package-lock.json` after installing `truelayer-signing`.
+11. Only then consider enabling `G_BANK_ENABLE_LIVE=true`.
+12. For a real purchase, verify beneficiary, amount, contract/invoice and settlement receipt separately.
 
 ## Reality-bound graph states
 
