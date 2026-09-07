@@ -7,6 +7,8 @@ process.env.G_BANK_ENABLE_LIVE = 'false';
 
 const router = require('../routes/openbanking');
 const {
+  providerConfigStatus,
+  assertProviderProbeEnabled,
   isValidIban,
   approvalMessage,
   assertPaymentInput,
