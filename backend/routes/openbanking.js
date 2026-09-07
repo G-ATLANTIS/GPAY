@@ -43,6 +43,8 @@ function requiredConfig() {
     liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
     providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
     approvalSecret: process.env.G_BANK_APPROVAL_SECRET || '',
+    secretRotationReceipt: process.env.G_BANK_SECRET_ROTATION_RECEIPT || '',
+    sandboxVerificationReceipt: process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT || '',
     allowedBeneficiaryIbans
   };
 }
@@ -103,6 +105,8 @@ function configStatus() {
   if (!Number.isFinite(cfg.maxEur) || cfg.maxEur <= 0) missing.push('G_BANK_MAX_PAYMENT_EUR');
   if (live && !cfg.liveEnabled) missing.push('G_BANK_ENABLE_LIVE=true');
   if (live && !cfg.approvalSecret) missing.push('G_BANK_APPROVAL_SECRET');
+  if (live && !cfg.secretRotationReceipt) missing.push('G_BANK_SECRET_ROTATION_RECEIPT');
+  if (live && !cfg.sandboxVerificationReceipt) missing.push('G_BANK_SANDBOX_VERIFICATION_RECEIPT');
   if (live && cfg.allowedBeneficiaryIbans.length === 0) missing.push('G_BANK_ALLOWED_BENEFICIARY_IBANS');
 
   return {
@@ -114,6 +118,8 @@ function configStatus() {
     live_execution_enabled: live && cfg.liveEnabled,
     live_approval_required: live,
     live_approval_configured: live ? Boolean(cfg.approvalSecret) : false,
+    historical_secret_rotation_receipt_present: Boolean(cfg.secretRotationReceipt),
+    sandbox_verification_receipt_present: Boolean(cfg.sandboxVerificationReceipt),
     allowed_beneficiary_count: cfg.allowedBeneficiaryIbans.length,
     max_payment_eur: Number.isFinite(cfg.maxEur) ? cfg.maxEur : 0
   };
