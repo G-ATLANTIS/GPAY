@@ -41,9 +41,54 @@ function requiredConfig() {
     returnUri: process.env.TRUELAYER_RETURN_URI || '',
     maxEur,
     liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
+    providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
     approvalSecret: process.env.G_BANK_APPROVAL_SECRET || '',
     allowedBeneficiaryIbans
   };
+}
+
+function providerConfigStatus() {
+  const cfg = requiredConfig();
+  const missing = [];
+  if (!cfg.clientId) missing.push('TRUELAYER_CLIENT_ID');
+  if (!cfg.clientSecret) missing.push('TRUELAYER_CLIENT_SECRET');
+  if (!cfg.signingKid) missing.push('TRUELAYER_SIGNING_KID');
+  if (!cfg.privateKey) missing.push('TRUELAYER_PRIVATE_KEY_B64 or TRUELAYER_PRIVATE_KEY_PEM');
+
+  return {
+    provider: 'truelayer',
+    environment: envMode(),
+    configured: missing.length === 0,
+    provider_probe_enabled: cfg.providerProbeEnabled,
+    missing
+  };
+}
+
+function assertProviderConfigured() {
+  const status = providerConfigStatus();
+  if (!status.configured) {
+    const err = new Error('TrueLayer provider authentication is fail-closed: required credentials/signing configuration is missing.');
+    err.statusCode = 503;
+    err.publicDetails = status;
+    throw err;
+  }
+  return requiredConfig();
+}
+
+function assertProviderProbeEnabled() {
+  const cfg = requiredConfig();
+  if (!cfg.providerProbeEnabled) {
+    const err = new Error('Provider readiness probe is disabled. Set G_BANK_ENABLE_PROVIDER_PROBE=true to allow a non-payment TrueLayer authentication/signature check.');
+    err.statusCode = 403;
+    err.publicDetails = {
+      provider: 'truelayer',
+      environment: envMode(),
+      provider_probe_enabled: false,
+      payment_created: false,
+      value_moved: false
+    };
+    throw err;
+  }
 }
 
 function configStatus() {
@@ -63,6 +108,7 @@ function configStatus() {
   return {
     provider: 'truelayer',
     environment: live ? 'live' : 'sandbox',
+    provider_authentication: providerConfigStatus(),
     configured: missing.length === 0,
     missing,
     live_execution_enabled: live && cfg.liveEnabled,
@@ -176,7 +222,7 @@ function assertPaymentInput(body) {
 }
 
 async function getAccessToken() {
-  const cfg = assertConfigured();
+  const cfg = assertProviderConfigured();
   const { authBase } = endpoints();
   const params = new URLSearchParams();
   params.set('grant_type', 'client_credentials');
@@ -215,7 +261,7 @@ function buildTrueLayerSigningPayload({ method, path, headers = {}, body = '' })
 }
 
 function signRequest({ method, path, body = '', idempotencyKey }) {
-  const cfg = assertConfigured();
+  const cfg = assertProviderConfigured();
   if (!idempotencyKey) {
     throw new Error('Idempotency-Key is required for TrueLayer request signing.');
   }
@@ -251,6 +297,71 @@ router.get('/health', (req, res) => {
     bank_authorization_required: true,
     verified_value_flow: false
   });
+});
+
+
+router.post('/provider-readiness', async (req, res) => {
+  try {
+    assertProviderProbeEnabled();
+    assertProviderConfigured();
+
+    const path = '/test-signature';
+    const nonce = crypto.randomUUID();
+    const rawBody = JSON.stringify({ nonce });
+    const idempotencyKey = crypto.randomUUID();
+    const token = await getAccessToken();
+    const signature = signRequest({
+      method: 'POST',
+      path,
+      body: rawBody,
+      idempotencyKey
+    });
+    const { apiBase } = endpoints();
+
+    const response = await axios.post(`${apiBase}${path}`, rawBody, {
+      timeout: 15000,
+      validateStatus: () => true,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey,
+        'Tl-Signature': signature
+      }
+    });
+
+    const signatureValid = response.status === 204;
+
+    res.status(signatureValid ? 200 : 502).json({
+      provider: 'truelayer',
+      environment: envMode(),
+      access_token_obtained: true,
+      request_signature_accepted: signatureValid,
+      provider_http_status: response.status,
+      payment_created: false,
+      bank_authorization_started: false,
+      value_moved: false,
+      verified_write: false,
+      verified_value_flow: false,
+      execution_graph: {
+        candidate_state: signatureValid ? 'AUTHENTICATED_TESTED' : 'AUTHENTICATION_OR_SIGNATURE_FAILED',
+        verified_read: false,
+        verified_write: false,
+        verified_value_flow: false,
+        reason: signatureValid
+          ? 'TrueLayer accepted the non-payment signed readiness request. This proves provider authentication/signing only.'
+          : 'TrueLayer did not return 204 for the non-payment signature test.'
+      }
+    });
+  } catch (err) {
+    const status = err.statusCode || err.response?.status || 500;
+    res.status(status).json({
+      error: err.message || 'TrueLayer provider readiness check failed.',
+      details: err.publicDetails || err.response?.data || undefined,
+      payment_created: false,
+      value_moved: false,
+      verified_value_flow: false
+    });
+  }
 });
 
 router.post('/create-payment', async (req, res) => {
@@ -422,7 +533,9 @@ router.get('/payment/:paymentId', async (req, res) => {
 
 router._test = {
   envMode,
+  providerConfigStatus,
   configStatus,
+  assertProviderProbeEnabled,
   isValidIban,
   approvalMessage,
   assertPaymentInput,
