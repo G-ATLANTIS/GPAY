@@ -647,7 +647,7 @@ function assertProviderProbeEnabled(authorizationHeader) {
     err.statusCode = 403;
     err.publicDetails = {
       provider: 'truelayer',
-      environment: environmentSnapshot,
+      environment: envMode(),
       provider_probe_enabled: false,
       payment_created: false,
       value_moved: false
@@ -1415,7 +1415,7 @@ router.post('/create-payment', async (req, res) => {
     });
     res.status(201).json({
       provider: 'truelayer',
-      environment: envMode(),
+      environment: environmentSnapshot,
       payment_id: payment.id,
       status: payment.status,
       authorization_required: true,
