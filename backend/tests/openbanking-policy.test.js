@@ -16,7 +16,9 @@ const {
   buildTrueLayerSigningPayload,
   signRequest,
   performProviderReadiness,
-  executionGraphStatus
+  executionGraphStatus,
+  validateEvidenceReceipt,
+  evidenceStatus
 } = router._test;
 
 function mustThrow(fn, pattern) {
@@ -122,8 +124,6 @@ process.env.G_BANK_ENABLE_LIVE = 'true';
 process.env.G_BANK_MAX_PAYMENT_EUR = '100';
 process.env.G_BANK_APPROVAL_SECRET = 'unit-test-secret';
 process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS = 'NL91ABNA0417164300';
-process.env.G_BANK_SECRET_ROTATION_RECEIPT = 'unit-test-rotation-receipt';
-process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT = 'unit-test-sandbox-receipt';
 process.env.TRUELAYER_CLIENT_ID = 'test-client';
 process.env.TRUELAYER_CLIENT_SECRET = 'test-secret';
 process.env.TRUELAYER_SIGNING_KID = 'test-kid';
@@ -401,16 +401,12 @@ process.env.TRUELAYER_ENV = 'live';
 process.env.G_BANK_ENABLE_LIVE = 'true';
 process.env.G_BANK_APPROVAL_SECRET = 'unit-test-approval-secret-012345678901234567890';
 process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS = 'NL91ABNA0417164300';
-process.env.G_BANK_SECRET_ROTATION_RECEIPT = '';
-process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT = '';
 
 let liveStatus = router._test.configStatus();
 assert.equal(liveStatus.configured, false);
 assert.equal(liveStatus.missing.includes('G_BANK_SECRET_ROTATION_RECEIPT'), true);
 assert.equal(liveStatus.missing.includes('G_BANK_SANDBOX_VERIFICATION_RECEIPT'), true);
 
-process.env.G_BANK_SECRET_ROTATION_RECEIPT = 'provider-rotation-receipt-test';
-process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT = 'sandbox-signature-receipt-test';
 liveStatus = router._test.configStatus();
 assert.equal(liveStatus.historical_secret_rotation_receipt_present, true);
 assert.equal(liveStatus.sandbox_verification_receipt_present, true);
@@ -429,3 +425,84 @@ assert.equal(graphStatus.edges.value_flow.active, false);
 assert.equal(graphStatus.verified_value_flow, false);
 assert.equal(graphStatus.edges.value_flow.class, 'VERIFIED_VALUE_FLOW');
 console.log('Execution graph status tests: PASS');
+
+
+// Banking evidence records are integrity-checked and freshness-bound.
+const evidenceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-evidence-'));
+const evidenceScript = path.join(__dirname, '..', '..', 'scripts', 'record-banking-evidence.js');
+
+const rotationArtifact = path.join(evidenceRoot, 'rotation-proof.txt');
+fs.writeFileSync(rotationArtifact, 'provider-side rotation confirmation test artifact\n');
+
+const sandboxArtifact = path.join(evidenceRoot, 'sandbox-readiness.json');
+fs.writeFileSync(sandboxArtifact, JSON.stringify({
+  request_signature_accepted: true,
+  provider_http_status: 204,
+  payment_created: false,
+  value_moved: false
+}));
+
+const rotationRun = spawnSync(process.execPath, [
+  evidenceScript,
+  '--confirm-evidence',
+  '--type', 'SECRET_ROTATION',
+  '--provider', 'mollie',
+  '--evidence-ref', 'TEST-ROTATION-TICKET-123',
+  '--artifact', rotationArtifact
+], { encoding: 'utf8', cwd: evidenceRoot });
+assert.equal(rotationRun.status, 0, rotationRun.stderr || rotationRun.stdout);
+
+const sandboxRun = spawnSync(process.execPath, [
+  evidenceScript,
+  '--confirm-evidence',
+  '--type', 'SANDBOX_VERIFICATION',
+  '--provider', 'truelayer',
+  '--evidence-ref', 'TEST-SANDBOX-204-123',
+  '--artifact', sandboxArtifact
+], { encoding: 'utf8', cwd: evidenceRoot });
+assert.equal(sandboxRun.status, 0, sandboxRun.stderr || sandboxRun.stdout);
+
+const rotationReceipt = path.join(evidenceRoot, '.secrets', 'evidence', 'secret-rotation.json');
+const sandboxReceipt = path.join(evidenceRoot, '.secrets', 'evidence', 'sandbox-verification.json');
+
+assert.equal(validateEvidenceReceipt(rotationReceipt, 'SECRET_ROTATION', 10 * 365 * 24 * 60 * 60 * 1000).valid, true);
+assert.equal(validateEvidenceReceipt(sandboxReceipt, 'SANDBOX_VERIFICATION', 30 * 24 * 60 * 60 * 1000).valid, true);
+
+// Tampering must invalidate the record.
+const tampered = JSON.parse(fs.readFileSync(sandboxReceipt, 'utf8'));
+tampered.evidence_ref = 'TAMPERED-REFERENCE';
+fs.writeFileSync(sandboxReceipt, JSON.stringify(tampered, null, 2) + '\n');
+assert.equal(validateEvidenceReceipt(sandboxReceipt, 'SANDBOX_VERIFICATION', 30 * 24 * 60 * 60 * 1000).valid, false);
+
+// Recreate valid sandbox record after tamper test.
+fs.rmSync(sandboxReceipt, { force: true });
+const sandboxRun2 = spawnSync(process.execPath, [
+  evidenceScript,
+  '--confirm-evidence',
+  '--type', 'SANDBOX_VERIFICATION',
+  '--provider', 'truelayer',
+  '--evidence-ref', 'TEST-SANDBOX-204-456',
+  '--artifact', sandboxArtifact
+], { encoding: 'utf8', cwd: evidenceRoot });
+assert.equal(sandboxRun2.status, 0, sandboxRun2.stderr || sandboxRun2.stdout);
+
+// Live config consumes the evidence files, not bare strings.
+process.env.TRUELAYER_ENV = 'live';
+process.env.G_BANK_ENABLE_LIVE = 'true';
+process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE = rotationReceipt;
+process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE = sandboxReceipt;
+process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS = 'NL91ABNA0417164300';
+process.env.G_BANK_APPROVAL_SECRET = 'unit-test-approval-secret-012345678901234567890';
+process.env.TRUELAYER_CLIENT_ID = 'test-client';
+process.env.TRUELAYER_CLIENT_SECRET = 'test-secret';
+process.env.TRUELAYER_SIGNING_KID = 'test-kid';
+process.env.TRUELAYER_PRIVATE_KEY_PEM = syntheticPem;
+process.env.TRUELAYER_RETURN_URI = 'https://example.invalid/return';
+
+const evidenceLiveStatus = router._test.configStatus();
+assert.equal(evidenceLiveStatus.historical_secret_rotation_receipt_present, true);
+assert.equal(evidenceLiveStatus.sandbox_verification_receipt_present, true);
+assert.equal(evidenceLiveStatus.configured, true);
+
+fs.rmSync(evidenceRoot, { recursive: true, force: true });
+console.log('Banking evidence integrity tests: PASS');
