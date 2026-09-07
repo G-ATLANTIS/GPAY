@@ -350,12 +350,68 @@ async function performProviderReadiness(httpClient = axios) {
   };
 }
 
+function executionGraphStatus() {
+  const cfg = requiredConfig();
+  const provider = providerConfigStatus();
+  const live = envMode() === 'live';
+
+  const providerState = !provider.configured
+    ? 'CREDENTIAL_REQUIRED'
+    : cfg.providerProbeEnabled
+      ? 'PROBE_ENABLED_NOT_YET_VERIFIED'
+      : 'CONFIGURED_NOT_EXTERNALLY_VERIFIED';
+
+  const liveReleaseEvidencePresent =
+    Boolean(cfg.secretRotationReceipt) &&
+    Boolean(cfg.sandboxVerificationReceipt);
+
+  return {
+    graph: 'G_REAL_EXECUTION_GRAPH',
+    provider: 'truelayer',
+    environment: envMode(),
+    edges: {
+      provider_authentication: {
+        class: 'VERIFIED_READ_CANDIDATE',
+        state: providerState,
+        active: false,
+        reason: 'Local configuration is not external provider proof. Promote only after a successful non-payment provider readiness receipt.'
+      },
+      payment_creation: {
+        class: 'VERIFIED_WRITE_CANDIDATE',
+        state: 'BLOCKED_UNTIL_EXPLICIT_PAYMENT_INTENT',
+        active: false,
+        reason: 'Payment creation requires an explicit request and does not follow from provider readiness.'
+      },
+      value_flow: {
+        class: 'VERIFIED_VALUE_FLOW',
+        state: 'BLOCKED',
+        active: false,
+        reason: 'Requires explicit bank authorization, bank execution evidence and independent settlement/receipt evidence.'
+      }
+    },
+    release_gates: {
+      live_environment_selected: live,
+      live_enable_flag: cfg.liveEnabled,
+      historical_secret_rotation_receipt_present: Boolean(cfg.secretRotationReceipt),
+      sandbox_verification_receipt_present: Boolean(cfg.sandboxVerificationReceipt),
+      live_release_evidence_present: liveReleaseEvidencePresent,
+      beneficiary_allowlist_configured: cfg.allowedBeneficiaryIbans.length > 0,
+      transaction_approval_secret_configured: Boolean(cfg.approvalSecret)
+    },
+    verified_value_flow: false
+  };
+}
+
 router.get('/health', (req, res) => {
   res.json({
     ...configStatus(),
     bank_authorization_required: true,
     verified_value_flow: false
   });
+});
+
+router.get('/graph-status', (req, res) => {
+  res.json(executionGraphStatus());
 });
 
 
@@ -554,7 +610,8 @@ router._test = {
   buildTrueLayerSigningPayload,
   signRequest,
   getAccessToken,
-  performProviderReadiness
+  performProviderReadiness,
+  executionGraphStatus
 };
 
 module.exports = router;
