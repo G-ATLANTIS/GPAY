@@ -15,7 +15,8 @@ const {
   assertLiveApproval,
   buildTrueLayerSigningPayload,
   signRequest,
-  performProviderReadiness
+  performProviderReadiness,
+  executionGraphStatus
 } = router._test;
 
 function mustThrow(fn, pattern) {
@@ -410,3 +411,16 @@ assert.equal(liveStatus.historical_secret_rotation_receipt_present, true);
 assert.equal(liveStatus.sandbox_verification_receipt_present, true);
 
 console.log('Live evidence receipt gate tests: PASS');
+
+
+// Execution graph status never promotes payment/value edges from local configuration alone.
+process.env.TRUELAYER_ENV = 'sandbox';
+process.env.G_BANK_ENABLE_LIVE = 'false';
+process.env.G_BANK_ENABLE_PROVIDER_PROBE = 'false';
+const graphStatus = executionGraphStatus();
+assert.equal(graphStatus.edges.provider_authentication.active, false);
+assert.equal(graphStatus.edges.payment_creation.active, false);
+assert.equal(graphStatus.edges.value_flow.active, false);
+assert.equal(graphStatus.verified_value_flow, false);
+assert.equal(graphStatus.edges.value_flow.class, 'VERIFIED_VALUE_FLOW');
+console.log('Execution graph status tests: PASS');
