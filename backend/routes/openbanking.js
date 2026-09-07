@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
 const fs = require('node:fs');
+const pathModule = require('node:path');
 
 const router = express.Router();
 
@@ -41,6 +42,7 @@ function requiredConfig() {
     privateKey: privateKeyPem(),
     returnUri: process.env.TRUELAYER_RETURN_URI || '',
     webhookPath: process.env.TRUELAYER_WEBHOOK_PATH || '/api/open-banking/webhook',
+    webhookReceiptDir: process.env.G_BANK_WEBHOOK_RECEIPT_DIR || '.secrets/runtime/webhook-events',
     maxEur,
     liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
     providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
@@ -132,8 +134,6 @@ function evidenceStatus() {
     )
   };
 }
-
-const seenWebhookEvents = new Map();
 
 function expectedWebhookJku() {
   return envMode() === 'live'
@@ -290,30 +290,115 @@ async function fetchWebhookJwks(httpClient = axios, jku = expectedWebhookJku()) 
   return response.data;
 }
 
-function pruneSeenWebhookEvents(now = Date.now()) {
-  const maxAge = 73 * 60 * 60 * 1000;
-  for (const [eventId, observedAt] of seenWebhookEvents.entries()) {
-    if (now - observedAt > maxAge) seenWebhookEvents.delete(eventId);
-  }
-
-  // Hard memory ceiling: oldest entries are removed first.
-  while (seenWebhookEvents.size > 10000) {
-    const first = seenWebhookEvents.keys().next().value;
-    if (first === undefined) break;
-    seenWebhookEvents.delete(first);
-  }
+function webhookReceiptDirectory() {
+  const configured = requiredConfig().webhookReceiptDir;
+  const environment = envMode();
+  return pathModule.resolve(configured, environment);
 }
 
-function observeWebhookEvent(eventId) {
+function webhookReceiptPath(eventId) {
   if (!/^[0-9a-f-]{36}$/i.test(String(eventId || ''))) throw new Error('invalid_webhook_event_id');
-  pruneSeenWebhookEvents();
+  return pathModule.join(webhookReceiptDirectory(), `${String(eventId).toLowerCase()}.json`);
+}
 
-  if (seenWebhookEvents.has(eventId)) {
-    return { duplicate: true };
+function canonicalWebhookReceipt(receipt) {
+  return JSON.stringify({
+    version: receipt.version,
+    provider: receipt.provider,
+    environment: receipt.environment,
+    event_id: receipt.event_id,
+    event_type: receipt.event_type,
+    event_version: receipt.event_version,
+    payment_id: receipt.payment_id,
+    webhook_timestamp: receipt.webhook_timestamp,
+    raw_body_sha256: receipt.raw_body_sha256,
+    observed_at: receipt.observed_at
+  });
+}
+
+function validateStoredWebhookReceipt(receipt) {
+  if (!receipt || typeof receipt !== 'object') throw new Error('stored_webhook_receipt_invalid');
+  if (receipt.version !== 1) throw new Error('stored_webhook_receipt_version_invalid');
+  if (receipt.provider !== 'truelayer') throw new Error('stored_webhook_receipt_provider_invalid');
+  if (!/^[0-9a-f-]{36}$/i.test(String(receipt.event_id || ''))) throw new Error('stored_webhook_receipt_event_id_invalid');
+  if (!/^[0-9a-f]{64}$/i.test(String(receipt.raw_body_sha256 || ''))) throw new Error('stored_webhook_receipt_body_hash_invalid');
+  if (!/^[0-9a-f]{64}$/i.test(String(receipt.receipt_sha256 || ''))) throw new Error('stored_webhook_receipt_hash_invalid');
+
+  const calculated = crypto.createHash('sha256').update(canonicalWebhookReceipt(receipt)).digest('hex');
+  const supplied = Buffer.from(receipt.receipt_sha256.toLowerCase(), 'hex');
+  const expected = Buffer.from(calculated, 'hex');
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    throw new Error('stored_webhook_receipt_integrity_mismatch');
   }
 
-  seenWebhookEvents.set(eventId, Date.now());
-  return { duplicate: false };
+  return calculated;
+}
+
+function observeWebhookEvent({
+  eventId,
+  eventType,
+  eventVersion,
+  paymentId,
+  webhookTimestamp,
+  rawBodySha256
+}) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(eventId || ''))) throw new Error('invalid_webhook_event_id');
+  if (!/^[0-9a-f]{64}$/i.test(String(rawBodySha256 || ''))) throw new Error('invalid_webhook_body_hash');
+
+  const directory = webhookReceiptDirectory();
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+
+  const receiptPath = webhookReceiptPath(eventId);
+  const receipt = {
+    version: 1,
+    provider: 'truelayer',
+    environment: envMode(),
+    event_id: String(eventId).toLowerCase(),
+    event_type: String(eventType || ''),
+    event_version: eventVersion,
+    payment_id: paymentId || null,
+    webhook_timestamp: webhookTimestamp,
+    raw_body_sha256: String(rawBodySha256).toLowerCase(),
+    observed_at: new Date().toISOString()
+  };
+  receipt.receipt_sha256 = crypto.createHash('sha256').update(canonicalWebhookReceipt(receipt)).digest('hex');
+
+  try {
+    fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', {
+      flag: 'wx',
+      mode: 0o600
+    });
+    return {
+      duplicate: false,
+      receipt_path: receiptPath,
+      receipt_sha256: receipt.receipt_sha256
+    };
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+
+  let stored;
+  try {
+    stored = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  } catch {
+    throw new Error('stored_webhook_receipt_unreadable');
+  }
+
+  validateStoredWebhookReceipt(stored);
+
+  if (String(stored.event_id).toLowerCase() !== String(eventId).toLowerCase()) {
+    throw new Error('stored_webhook_receipt_event_id_conflict');
+  }
+
+  if (String(stored.raw_body_sha256).toLowerCase() !== String(rawBodySha256).toLowerCase()) {
+    throw new Error('webhook_event_id_body_conflict');
+  }
+
+  return {
+    duplicate: true,
+    receipt_path: receiptPath,
+    receipt_sha256: stored.receipt_sha256
+  };
 }
 
 async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, httpClient = axios }) {
@@ -339,8 +424,16 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
   if (typeof event.type !== 'string' || !event.type) throw new Error('missing_webhook_type');
   if (!('event_version' in event)) throw new Error('missing_webhook_event_version');
 
-  const replay = observeWebhookEvent(event.event_id);
   const paymentId = typeof event.payment_id === 'string' ? event.payment_id : null;
+  const rawBodySha256 = crypto.createHash('sha256').update(rawBody).digest('hex');
+  const replay = observeWebhookEvent({
+    eventId: event.event_id,
+    eventType: event.type,
+    eventVersion: event.event_version,
+    paymentId,
+    webhookTimestamp: verification.timestamp.timestamp,
+    rawBodySha256
+  });
 
   return {
     provider: 'truelayer',
@@ -353,7 +446,9 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
     payment_id: paymentId,
     signature_kid: verification.kid,
     webhook_timestamp: verification.timestamp.timestamp,
-    raw_body_sha256: crypto.createHash('sha256').update(rawBody).digest('hex'),
+    raw_body_sha256: rawBodySha256,
+    durable_event_receipt: true,
+    event_receipt_sha256: replay.receipt_sha256,
     observation_only: true,
     payment_write_performed: false,
     bank_authorization_performed: false,
@@ -744,7 +839,8 @@ function executionGraphStatus() {
       sandbox_verification_receipt_present: evidence.sandbox_verification.valid,
       live_release_evidence_present: liveReleaseEvidencePresent,
       beneficiary_allowlist_configured: cfg.allowedBeneficiaryIbans.length > 0,
-      transaction_approval_secret_configured: Boolean(cfg.approvalSecret)
+      transaction_approval_secret_configured: Boolean(cfg.approvalSecret),
+      webhook_receipt_store_configured: Boolean(cfg.webhookReceiptDir)
     },
     verified_value_flow: false
   };
@@ -1003,6 +1099,9 @@ router._test = {
   buildWebhookSigningPayload,
   verifyWebhookSignature,
   fetchWebhookJwks,
+  webhookReceiptDirectory,
+  webhookReceiptPath,
+  validateStoredWebhookReceipt,
   observeWebhookEvent,
   verifyAndClassifyWebhook,
   fetchPaymentStatus
