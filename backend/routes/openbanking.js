@@ -1446,6 +1446,9 @@ router.post('/create-payment', async (req, res) => {
       approvalHeader: req.get('X-G-Bank-Approval')
     });
 
+    const endpointSnapshot = endpoints();
+    const environmentSnapshot = endpointSnapshot.live ? 'live' : 'sandbox';
+
     const payload = {
       amount_in_minor: amountInMinor,
       currency: 'EUR',
@@ -1455,7 +1458,10 @@ router.post('/create-payment', async (req, res) => {
           type: 'user_selected',
           filter: {
             countries: ['NL'],
-            customer_segments: ['retail']
+            customer_segments: ['retail'],
+            ...(environmentSnapshot === 'sandbox'
+              ? { provider_ids: ['mock-payments-nl-redirect'] }
+              : {})
           },
           scheme_selection: {
             type: 'user_selected',
@@ -1498,8 +1504,6 @@ router.post('/create-payment', async (req, res) => {
     };
 
     const rawBody = JSON.stringify(payload);
-    const endpointSnapshot = endpoints();
-    const environmentSnapshot = endpointSnapshot.live ? 'live' : 'sandbox';
 
     // Local token/signature preparation happens before the durable SUBMITTING
     // receipt. Once the receipt exists, the provider POST is the next operation,
