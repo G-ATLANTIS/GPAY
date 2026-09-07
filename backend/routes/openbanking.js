@@ -40,6 +40,7 @@ function requiredConfig() {
     signingKid: process.env.TRUELAYER_SIGNING_KID || '',
     privateKey: privateKeyPem(),
     returnUri: process.env.TRUELAYER_RETURN_URI || '',
+    webhookPath: process.env.TRUELAYER_WEBHOOK_PATH || '/api/open-banking/webhook',
     maxEur,
     liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
     providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
@@ -132,6 +133,242 @@ function evidenceStatus() {
   };
 }
 
+const seenWebhookEvents = new Map();
+
+function expectedWebhookJku() {
+  return envMode() === 'live'
+    ? 'https://webhooks.truelayer.com/.well-known/jwks'
+    : 'https://webhooks.truelayer-sandbox.com/.well-known/jwks';
+}
+
+function parseDetachedTlSignature(signature) {
+  const parts = String(signature || '').split('.');
+  if (parts.length !== 3 || parts[1] !== '' || !parts[0] || !parts[2]) {
+    throw new Error('invalid_detached_jws');
+  }
+
+  let header;
+  try {
+    header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('invalid_jws_header');
+  }
+
+  if (header.alg !== 'ES512') throw new Error('unsupported_header_alg');
+  if (header.tl_version !== '2') throw new Error('unsupported_header_tl_version');
+  if (!header.kid || typeof header.kid !== 'string') throw new Error('missing_header_kid');
+  if (!header.jku || typeof header.jku !== 'string') throw new Error('missing_header_jku');
+  if (header.jku !== expectedWebhookJku()) throw new Error('untrusted_header_jku');
+
+  const signedHeaders = String(header.tl_headers || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if (!signedHeaders.some(name => name.toLowerCase() === 'x-tl-webhook-timestamp')) {
+    throw new Error('timestamp_header_not_signed');
+  }
+
+  return {
+    header,
+    encodedHeader: parts[0],
+    encodedSignature: parts[2],
+    signedHeaders
+  };
+}
+
+function normalizedHeaderLookup(headers, name) {
+  const wanted = String(name).toLowerCase();
+  for (const [key, value] of Object.entries(headers || {})) {
+    if (key.toLowerCase() === wanted) {
+      if (Array.isArray(value)) return value.join(',');
+      if (value === undefined || value === null) return '';
+      return String(value);
+    }
+  }
+  return '';
+}
+
+function validateWebhookTimestamp(headers) {
+  const raw = normalizedHeaderLookup(headers, 'X-TL-Webhook-Timestamp');
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) throw new Error('invalid_webhook_timestamp');
+
+  const ageMs = Date.now() - parsed;
+  if (ageMs < -5 * 60 * 1000) throw new Error('webhook_timestamp_in_future');
+
+  // TrueLayer retries Payments v3 webhooks for up to 72 hours.
+  // Allow that documented window plus one hour of clock/transport tolerance.
+  if (ageMs > 73 * 60 * 60 * 1000) throw new Error('webhook_timestamp_expired');
+
+  return { timestamp: new Date(parsed).toISOString(), age_ms: ageMs };
+}
+
+function buildWebhookSigningPayload({ method, path, signedHeaders, headers, body }) {
+  const orderedHeaders = {};
+  for (const name of signedHeaders) {
+    const value = normalizedHeaderLookup(headers, name);
+    if (!value) throw new Error(`missing_signed_header:${name}`);
+    orderedHeaders[name] = value;
+  }
+  return buildTrueLayerSigningPayload({
+    method,
+    path,
+    headers: orderedHeaders,
+    body
+  });
+}
+
+function verifyWebhookSignature({ signature, method = 'POST', path, headers, rawBody, jwks }) {
+  const parsed = parseDetachedTlSignature(signature);
+  if (!path || path !== requiredConfig().webhookPath) throw new Error('webhook_path_mismatch');
+  if (!Buffer.isBuffer(rawBody)) throw new Error('raw_webhook_body_required');
+
+  const timestamp = validateWebhookTimestamp(headers);
+  const body = rawBody.toString('utf8');
+
+  const keys = Array.isArray(jwks?.keys) ? jwks.keys : [];
+  const jwk = keys.find(key => key && key.kid === parsed.header.kid);
+  if (!jwk) throw new Error('webhook_jwk_not_found');
+
+  let publicKey;
+  try {
+    publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  } catch {
+    throw new Error('invalid_webhook_jwk');
+  }
+
+  if (
+    publicKey.asymmetricKeyType !== 'ec' ||
+    publicKey.asymmetricKeyDetails?.namedCurve !== 'secp521r1'
+  ) {
+    throw new Error('webhook_jwk_curve_invalid');
+  }
+
+  const payload = buildWebhookSigningPayload({
+    method: String(method).toUpperCase(),
+    path,
+    signedHeaders: parsed.signedHeaders,
+    headers,
+    body
+  });
+
+  const signingInput = `${parsed.encodedHeader}.${Buffer.from(payload).toString('base64url')}`;
+  const rawSignature = Buffer.from(parsed.encodedSignature, 'base64url');
+  if (rawSignature.length !== 132) throw new Error('webhook_signature_length_invalid');
+
+  const valid = crypto.verify(
+    'sha512',
+    Buffer.from(signingInput, 'utf8'),
+    { key: publicKey, dsaEncoding: 'ieee-p1363' },
+    rawSignature
+  );
+
+  if (!valid) throw new Error('invalid_webhook_signature');
+
+  return {
+    valid: true,
+    kid: parsed.header.kid,
+    jku: parsed.header.jku,
+    timestamp
+  };
+}
+
+async function fetchWebhookJwks(httpClient = axios, jku = expectedWebhookJku()) {
+  if (jku !== expectedWebhookJku()) throw new Error('untrusted_webhook_jwks_url');
+
+  const response = await httpClient.get(jku, {
+    timeout: 10000,
+    maxRedirects: 0,
+    validateStatus: () => true,
+    headers: { Accept: 'application/json' }
+  });
+
+  if (response.status !== 200 || !Array.isArray(response.data?.keys)) {
+    throw new Error('webhook_jwks_fetch_failed');
+  }
+  return response.data;
+}
+
+function pruneSeenWebhookEvents(now = Date.now()) {
+  const maxAge = 73 * 60 * 60 * 1000;
+  for (const [eventId, observedAt] of seenWebhookEvents.entries()) {
+    if (now - observedAt > maxAge) seenWebhookEvents.delete(eventId);
+  }
+
+  // Hard memory ceiling: oldest entries are removed first.
+  while (seenWebhookEvents.size > 10000) {
+    const first = seenWebhookEvents.keys().next().value;
+    if (first === undefined) break;
+    seenWebhookEvents.delete(first);
+  }
+}
+
+function observeWebhookEvent(eventId) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(eventId || ''))) throw new Error('invalid_webhook_event_id');
+  pruneSeenWebhookEvents();
+
+  if (seenWebhookEvents.has(eventId)) {
+    return { duplicate: true };
+  }
+
+  seenWebhookEvents.set(eventId, Date.now());
+  return { duplicate: false };
+}
+
+async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, httpClient = axios }) {
+  const parsedSignature = parseDetachedTlSignature(signature);
+  const jwks = await fetchWebhookJwks(httpClient, parsedSignature.header.jku);
+  const verification = verifyWebhookSignature({
+    signature,
+    method: 'POST',
+    path,
+    headers,
+    rawBody,
+    jwks
+  });
+
+  let event;
+  try {
+    event = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    throw new Error('invalid_webhook_json');
+  }
+
+  if (!event || typeof event !== 'object') throw new Error('invalid_webhook_event');
+  if (typeof event.type !== 'string' || !event.type) throw new Error('missing_webhook_type');
+  if (!('event_version' in event)) throw new Error('missing_webhook_event_version');
+
+  const replay = observeWebhookEvent(event.event_id);
+  const paymentId = typeof event.payment_id === 'string' ? event.payment_id : null;
+
+  return {
+    provider: 'truelayer',
+    environment: envMode(),
+    webhook_verified: true,
+    duplicate: replay.duplicate,
+    event_id: event.event_id,
+    event_type: event.type,
+    event_version: event.event_version,
+    payment_id: paymentId,
+    signature_kid: verification.kid,
+    webhook_timestamp: verification.timestamp.timestamp,
+    raw_body_sha256: crypto.createHash('sha256').update(rawBody).digest('hex'),
+    observation_only: true,
+    payment_write_performed: false,
+    bank_authorization_performed: false,
+    value_moved_by_handler: false,
+    creditor_settlement_proven: false,
+    verified_value_flow: false,
+    execution_graph: {
+      edge: 'VERIFIED_READ_CANDIDATE',
+      active: false,
+      state: replay.duplicate ? 'VERIFIED_WEBHOOK_DUPLICATE' : 'VERIFIED_WEBHOOK_OBSERVATION',
+      reason: 'Signature-verified provider event is observational evidence only and cannot by itself prove creditor settlement or activate value flow.'
+    }
+  };
+}
+
 function providerConfigStatus() {
   const cfg = requiredConfig();
   const missing = [];
@@ -200,6 +437,7 @@ function configStatus() {
   if (!cfg.signingKid) missing.push('TRUELAYER_SIGNING_KID');
   if (!cfg.privateKey) missing.push('TRUELAYER_PRIVATE_KEY_B64 or TRUELAYER_PRIVATE_KEY_PEM');
   if (!cfg.returnUri) missing.push('TRUELAYER_RETURN_URI');
+  if (!cfg.webhookPath.startsWith('/') || cfg.webhookPath.includes('?')) missing.push('TRUELAYER_WEBHOOK_PATH(valid path without query)');
   if (!Number.isFinite(cfg.maxEur) || cfg.maxEur <= 0) missing.push('G_BANK_MAX_PAYMENT_EUR');
   if (live && !cfg.liveEnabled) missing.push('G_BANK_ENABLE_LIVE=true');
   const evidence = evidenceStatus();
@@ -480,6 +718,12 @@ function executionGraphStatus() {
         active: false,
         reason: 'Local configuration is not external provider proof. Promote only after a successful non-payment provider readiness receipt.'
       },
+      provider_webhook: {
+        class: 'VERIFIED_READ_CANDIDATE',
+        state: 'AWAITING_SIGNATURE_VERIFIED_EVENT',
+        active: false,
+        reason: 'Webhook observations require exact TrueLayer JKU/JWKS verification and remain observational evidence only.'
+      },
       payment_creation: {
         class: 'VERIFIED_WRITE_CANDIDATE',
         state: 'BLOCKED_UNTIL_EXPLICIT_PAYMENT_INTENT',
@@ -533,6 +777,30 @@ router.post('/provider-readiness', async (req, res) => {
       details: err.publicDetails || err.response?.data || undefined,
       payment_created: false,
       value_moved: false,
+      verified_value_flow: false
+    });
+  }
+});
+
+router.post('/webhook', async (req, res) => {
+  try {
+    const path = `${req.baseUrl}${req.path}`;
+    const result = await verifyAndClassifyWebhook({
+      signature: req.get('Tl-Signature') || '',
+      path,
+      headers: req.headers,
+      rawBody: req.rawBody,
+      httpClient: axios
+    });
+
+    // Duplicates are acknowledged with 2xx to stop provider retries.
+    res.status(200).json(result);
+  } catch (err) {
+    res.status(401).json({
+      error: err.message || 'Webhook verification failed.',
+      webhook_verified: false,
+      observation_only: true,
+      value_moved_by_handler: false,
       verified_value_flow: false
     });
   }
@@ -720,7 +988,15 @@ router._test = {
   performProviderReadiness,
   executionGraphStatus,
   validateEvidenceReceipt,
-  evidenceStatus
+  evidenceStatus,
+  expectedWebhookJku,
+  parseDetachedTlSignature,
+  validateWebhookTimestamp,
+  buildWebhookSigningPayload,
+  verifyWebhookSignature,
+  fetchWebhookJwks,
+  observeWebhookEvent,
+  verifyAndClassifyWebhook
 };
 
 module.exports = router;
