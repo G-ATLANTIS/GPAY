@@ -15,7 +15,6 @@ function endpoints() {
     live,
     authBase: live ? 'https://auth.truelayer.com' : 'https://auth.truelayer-sandbox.com',
     apiBase: live ? 'https://api.truelayer.com' : 'https://api.truelayer-sandbox.com',
-    hppBase: live ? 'https://payment.truelayer.com/payments' : 'https://payment.truelayer-sandbox.com/payments'
   };
 }
 
@@ -76,10 +75,16 @@ function assertConfigured() {
 }
 
 function assertPaymentInput(body) {
-  const amountEur = Number(body?.amount_eur);
-  if (!Number.isFinite(amountEur) || amountEur <= 0 || Math.round(amountEur * 100) !== amountEur * 100) {
+  const amountText = String(body?.amount_eur ?? '').trim();
+  if (!/^\d+(?:\.\d{1,2})?$/.test(amountText)) {
     throw Object.assign(new Error('amount_eur must be a positive EUR amount with at most 2 decimals.'), { statusCode: 400 });
   }
+
+  const normalizedAmountInMinor = Math.round(Number(amountText) * 100);
+  if (!Number.isSafeInteger(normalizedAmountInMinor) || normalizedAmountInMinor <= 0) {
+    throw Object.assign(new Error('amount_eur is outside the supported range.'), { statusCode: 400 });
+  }
+  const amountEur = normalizedAmountInMinor / 100;
 
   const cfg = requiredConfig();
   if (amountEur > cfg.maxEur) {
@@ -107,7 +112,7 @@ function assertPaymentInput(body) {
     if (!address[key]) throw Object.assign(new Error(`user.address.${key} is required.`), { statusCode: 400 });
   }
 
-  return { amountEur, beneficiary: { ...beneficiary, iban }, user: { ...user, address } };
+  return { amountEur, amountInMinor: normalizedAmountInMinor, beneficiary: { ...beneficiary, iban }, user: { ...user, address } };
 }
 
 async function getAccessToken() {
@@ -141,17 +146,6 @@ function signRequest({ method, path, body = '', idempotencyKey }) {
   });
 }
 
-function hppUrl(paymentId, resourceToken) {
-  const cfg = assertConfigured();
-  const { hppBase } = endpoints();
-  const hash = new URLSearchParams({
-    payment_id: paymentId,
-    resource_token: resourceToken,
-    return_uri: cfg.returnUri
-  });
-  return `${hppBase}?lng=nl#${hash.toString()}`;
-}
-
 router.get('/health', (req, res) => {
   res.json({
     ...configStatus(),
@@ -163,8 +157,7 @@ router.get('/health', (req, res) => {
 router.post('/create-payment', async (req, res) => {
   try {
     assertConfigured();
-    const { amountEur, beneficiary, user } = assertPaymentInput(req.body);
-    const amountInMinor = Math.round(amountEur * 100);
+    const { amountEur, amountInMinor, beneficiary, user } = assertPaymentInput(req.body);
     const path = '/v3/payments';
     const idempotencyKey = req.get('Idempotency-Key') || crypto.randomUUID();
 
@@ -193,6 +186,11 @@ router.post('/create-payment', async (req, res) => {
           },
           reference: String(beneficiary.reference).slice(0, 18)
         }
+      },
+      hosted_page: {
+        return_uri: requiredConfig().returnUri,
+        country_code: 'NL',
+        language_code: 'nl'
       },
       user: {
         name: String(user.name),
@@ -236,7 +234,7 @@ router.post('/create-payment', async (req, res) => {
       payment_id: payment.id,
       status: payment.status,
       authorization_required: true,
-      authorization_url: payment.id && payment.resource_token ? hppUrl(payment.id, payment.resource_token) : null,
+      authorization_url: payment.hosted_page?.uri || null,
       idempotency_key: idempotencyKey,
       execution_graph: {
         edge: 'VERIFIED_VALUE_FLOW_CANDIDATE',
@@ -287,15 +285,21 @@ router.get('/payment/:paymentId', async (req, res) => {
       status,
       failed,
       bank_accepted_execution: executed,
-      verified_value_flow: executed,
+      creditor_settlement_proven: false,
+      verified_value_flow: false,
+      value_flow_state: executed
+        ? 'BANK_ACCEPTED_NOT_SETTLEMENT_PROVEN'
+        : failed
+          ? 'FAILED'
+          : 'PENDING_AUTHORIZATION_OR_EXECUTION',
       execution_graph: {
-        edge: 'VERIFIED_VALUE_FLOW',
-        active: executed,
+        edge: 'VERIFIED_VALUE_FLOW_CANDIDATE',
+        active: false,
         reason: executed
-          ? 'External-account payment reached TrueLayer executed terminal state; bank accepted the submitted payment.'
+          ? 'The bank accepted the external-account payment, but creditor settlement is not proven by TrueLayer executed status alone.'
           : failed
             ? 'Payment failed; value-flow edge remains inactive.'
-            : 'Awaiting bank authorization/execution confirmation.'
+            : 'Awaiting end-user bank authorization and execution confirmation.'
       },
       provider_response: payment
     });
