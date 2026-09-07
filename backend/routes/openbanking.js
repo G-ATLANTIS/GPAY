@@ -144,13 +144,13 @@ function evidenceStatus() {
   };
 }
 
-function expectedWebhookJku() {
-  return envMode() === 'live'
+function expectedWebhookJku(environment = envMode()) {
+  return String(environment) === 'live'
     ? 'https://webhooks.truelayer.com/.well-known/jwks'
     : 'https://webhooks.truelayer-sandbox.com/.well-known/jwks';
 }
 
-function parseDetachedTlSignature(signature) {
+function parseDetachedTlSignature(signature, expectedJku = expectedWebhookJku()) {
   const parts = String(signature || '').split('.');
   if (parts.length !== 3 || parts[1] !== '' || !parts[0] || !parts[2]) {
     throw new Error('invalid_detached_jws');
@@ -167,7 +167,7 @@ function parseDetachedTlSignature(signature) {
   if (header.tl_version !== '2') throw new Error('unsupported_header_tl_version');
   if (!header.kid || typeof header.kid !== 'string') throw new Error('missing_header_kid');
   if (!header.jku || typeof header.jku !== 'string') throw new Error('missing_header_jku');
-  if (header.jku !== expectedWebhookJku()) throw new Error('untrusted_header_jku');
+  if (header.jku !== expectedJku) throw new Error('untrusted_header_jku');
 
   const signedHeaders = String(header.tl_headers || '')
     .split(',')
@@ -228,9 +228,18 @@ function buildWebhookSigningPayload({ method, path, signedHeaders, headers, body
   });
 }
 
-function verifyWebhookSignature({ signature, method = 'POST', path, headers, rawBody, jwks }) {
-  const parsed = parseDetachedTlSignature(signature);
-  if (!path || path !== requiredConfig().webhookPath) throw new Error('webhook_path_mismatch');
+function verifyWebhookSignature({
+  signature,
+  method = 'POST',
+  path,
+  headers,
+  rawBody,
+  jwks,
+  expectedJku = expectedWebhookJku(),
+  expectedPath = requiredConfig().webhookPath
+}) {
+  const parsed = parseDetachedTlSignature(signature, expectedJku);
+  if (!path || path !== expectedPath) throw new Error('webhook_path_mismatch');
   if (!Buffer.isBuffer(rawBody)) throw new Error('raw_webhook_body_required');
 
   const timestamp = validateWebhookTimestamp(headers);
@@ -279,7 +288,7 @@ function verifyWebhookSignature({ signature, method = 'POST', path, headers, raw
     valid: true,
     kid: parsed.header.kid,
     jku: parsed.header.jku,
-    environment: parsed.header.jku.includes('truelayer-sandbox.com') ? 'sandbox' : 'live',
+    environment: expectedJku.includes('truelayer-sandbox.com') ? 'sandbox' : 'live',
     timestamp
   };
 }
@@ -304,8 +313,13 @@ function clearWebhookJwksCache() {
   webhookJwksCache.clear();
 }
 
-async function fetchWebhookJwks(httpClient = axios, jku = expectedWebhookJku(), kid = '') {
-  if (jku !== expectedWebhookJku()) throw new Error('untrusted_webhook_jwks_url');
+async function fetchWebhookJwks(
+  httpClient = axios,
+  jku = expectedWebhookJku(),
+  kid = '',
+  expectedJku = expectedWebhookJku()
+) {
+  if (jku !== expectedJku) throw new Error('untrusted_webhook_jwks_url');
   if (!kid) throw new Error('webhook_jwks_kid_required');
 
   const now = Date.now();
@@ -355,15 +369,24 @@ async function fetchWebhookJwks(httpClient = axios, jku = expectedWebhookJku(), 
   };
 }
 
-function webhookReceiptDirectory(environment = envMode()) {
+function webhookReceiptDirectory(
+  environment = envMode(),
+  configured = requiredConfig().webhookReceiptDir
+) {
   if (!['sandbox', 'live'].includes(String(environment))) throw new Error('invalid_webhook_receipt_environment');
-  const configured = requiredConfig().webhookReceiptDir;
   return pathModule.resolve(configured, String(environment));
 }
 
-function webhookReceiptPath(eventId, environment = envMode()) {
+function webhookReceiptPath(
+  eventId,
+  environment = envMode(),
+  configured = requiredConfig().webhookReceiptDir
+) {
   if (!/^[0-9a-f-]{36}$/i.test(String(eventId || ''))) throw new Error('invalid_webhook_event_id');
-  return pathModule.join(webhookReceiptDirectory(environment), `${String(eventId).toLowerCase()}.json`);
+  return pathModule.join(
+    webhookReceiptDirectory(environment, configured),
+    `${String(eventId).toLowerCase()}.json`
+  );
 }
 
 function canonicalWebhookReceipt(receipt) {
@@ -416,16 +439,17 @@ function observeWebhookEvent({
   rawBodySha256,
   environment,
   signatureKid,
-  signatureJku
+  signatureJku,
+  receiptDir
 }) {
   if (!/^[0-9a-f-]{36}$/i.test(String(eventId || ''))) throw new Error('invalid_webhook_event_id');
   if (!/^[0-9a-f]{64}$/i.test(String(rawBodySha256 || ''))) throw new Error('invalid_webhook_body_hash');
 
   if (!['sandbox', 'live'].includes(String(environment))) throw new Error('invalid_webhook_receipt_environment');
-  const directory = webhookReceiptDirectory(environment);
+  const directory = webhookReceiptDirectory(environment, receiptDir);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 
-  const receiptPath = webhookReceiptPath(eventId, environment);
+  const receiptPath = webhookReceiptPath(eventId, environment, receiptDir);
   const receipt = {
     version: 1,
     provider: 'truelayer',
@@ -497,11 +521,18 @@ function observeWebhookEvent({
 }
 
 async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, httpClient = axios }) {
-  const parsedSignature = parseDetachedTlSignature(signature);
+  const configSnapshot = requiredConfig();
+  const environmentSnapshot = envMode();
+  const expectedJkuSnapshot = expectedWebhookJku(environmentSnapshot);
+  const webhookPathSnapshot = configSnapshot.webhookPath;
+  const receiptDirSnapshot = configSnapshot.webhookReceiptDir;
+
+  const parsedSignature = parseDetachedTlSignature(signature, expectedJkuSnapshot);
   const jwksResult = await fetchWebhookJwks(
     httpClient,
     parsedSignature.header.jku,
-    parsedSignature.header.kid
+    parsedSignature.header.kid,
+    expectedJkuSnapshot
   );
   const verification = verifyWebhookSignature({
     signature,
@@ -509,7 +540,9 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
     path,
     headers,
     rawBody,
-    jwks: jwksResult.jwks
+    jwks: jwksResult.jwks,
+    expectedJku: expectedJkuSnapshot,
+    expectedPath: webhookPathSnapshot
   });
 
   let event;
@@ -537,7 +570,8 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
     rawBodySha256,
     environment: verification.environment,
     signatureKid: verification.kid,
-    signatureJku: verification.jku
+    signatureJku: verification.jku,
+    receiptDir: receiptDirSnapshot
   });
 
   return {
