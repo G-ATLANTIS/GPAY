@@ -9,7 +9,13 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buffer) => {
+    if (req.originalUrl && req.originalUrl.startsWith('/api/open-banking/webhook')) {
+      req.rawBody = Buffer.from(buffer);
+    }
+  }
+}));
 app.use('/api/mollie', mollieRoutes);
 app.use('/api/pulsepay', pulsepayRoutes);
 app.use('/api/open-banking', openBankingRoutes);
