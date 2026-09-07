@@ -301,7 +301,7 @@ router.get('/payment/:paymentId', async (req, res) => {
             ? 'Payment failed; value-flow edge remains inactive.'
             : 'Awaiting end-user bank authorization and execution confirmation.'
       },
-      provider_response: payment
+      executed_at: payment.executed_at || null
     });
   } catch (err) {
     const status = err.statusCode || err.response?.status || 500;
