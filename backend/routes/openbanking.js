@@ -843,24 +843,48 @@ function hashText(value) {
   return crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex');
 }
 
-function paymentIntentDirectory(environment = envMode()) {
+function paymentIntentDirectory(
+  environment = envMode(),
+  configured = requiredConfig().paymentIntentDir
+) {
   if (!['sandbox', 'live'].includes(String(environment))) throw new Error('invalid_payment_intent_environment');
-  return pathModule.resolve(requiredConfig().paymentIntentDir, String(environment));
+  return pathModule.resolve(configured, String(environment));
 }
 
-function paymentIntentReceiptPath(idempotencyKey, environment = envMode()) {
+function paymentIntentReceiptPath(
+  idempotencyKey,
+  environment = envMode(),
+  configured = requiredConfig().paymentIntentDir
+) {
   if (!/^[0-9a-f-]{36}$/i.test(String(idempotencyKey || ''))) throw new Error('invalid_payment_intent_idempotency_key');
-  return pathModule.join(paymentIntentDirectory(environment), `${String(idempotencyKey).toLowerCase()}.intent.json`);
+  return pathModule.join(
+    paymentIntentDirectory(environment, configured),
+    `${String(idempotencyKey).toLowerCase()}.intent.json`
+  );
 }
 
-function paymentCreatedReceiptPath(idempotencyKey, environment = envMode()) {
+function paymentCreatedReceiptPath(
+  idempotencyKey,
+  environment = envMode(),
+  configured = requiredConfig().paymentIntentDir
+) {
   if (!/^[0-9a-f-]{36}$/i.test(String(idempotencyKey || ''))) throw new Error('invalid_payment_intent_idempotency_key');
-  return pathModule.join(paymentIntentDirectory(environment), `${String(idempotencyKey).toLowerCase()}.created.json`);
+  return pathModule.join(
+    paymentIntentDirectory(environment, configured),
+    `${String(idempotencyKey).toLowerCase()}.created.json`
+  );
 }
 
-function paymentBindingPath(paymentId, environment = envMode()) {
+function paymentBindingPath(
+  paymentId,
+  environment = envMode(),
+  configured = requiredConfig().paymentIntentDir
+) {
   if (!/^[0-9a-f-]{36}$/i.test(String(paymentId || ''))) throw new Error('invalid_payment_binding_id');
-  return pathModule.join(paymentIntentDirectory(environment), `payment-${String(paymentId).toLowerCase()}.json`);
+  return pathModule.join(
+    paymentIntentDirectory(environment, configured),
+    `payment-${String(paymentId).toLowerCase()}.json`
+  );
 }
 
 function canonicalPaymentIntentReceipt(receipt) {
@@ -1045,8 +1069,12 @@ function recordPaymentCreated({ idempotencyKey, payment, rawBody, environment })
   };
 }
 
-function lookupPaymentBinding(paymentId, environment = envMode()) {
-  const filePath = paymentBindingPath(paymentId, environment);
+function lookupPaymentBinding(
+  paymentId,
+  environment = envMode(),
+  configured = requiredConfig().paymentIntentDir
+) {
+  const filePath = paymentBindingPath(paymentId, environment, configured);
   if (!fs.existsSync(filePath)) return { known: false };
   const binding = readAndValidatePaymentBinding(filePath);
   return {
@@ -1555,10 +1583,14 @@ function webhookEventToPaymentObservation(eventType) {
   return mapping[value] || 'other';
 }
 
-function listVerifiedWebhookReceiptsForPayment(paymentId, environment = envMode()) {
+function listVerifiedWebhookReceiptsForPayment(
+  paymentId,
+  environment = envMode(),
+  configured = requiredConfig().webhookReceiptDir
+) {
   if (!/^[0-9a-f-]{36}$/i.test(String(paymentId || ''))) throw new Error('invalid_payment_binding_id');
 
-  const directory = webhookReceiptDirectory(environment);
+  const directory = webhookReceiptDirectory(environment, configured);
   if (!fs.existsSync(directory)) return [];
 
   const receipts = [];
@@ -1676,8 +1708,16 @@ function evaluateExternalAccountPaymentState({
 }
 
 async function reconcilePaymentState(paymentId, httpClient = axios) {
+  const configSnapshot = requiredConfig();
   const environmentSnapshot = envMode();
-  const binding = lookupPaymentBinding(paymentId, environmentSnapshot);
+  const paymentIntentDirSnapshot = configSnapshot.paymentIntentDir;
+  const webhookReceiptDirSnapshot = configSnapshot.webhookReceiptDir;
+
+  const binding = lookupPaymentBinding(
+    paymentId,
+    environmentSnapshot,
+    paymentIntentDirSnapshot
+  );
   if (!binding.known) {
     const err = new Error('Payment ID is not bound to a local G-Bank payment intent.');
     err.statusCode = 404;
@@ -1691,7 +1731,8 @@ async function reconcilePaymentState(paymentId, httpClient = axios) {
 
   const webhookReceipts = listVerifiedWebhookReceiptsForPayment(
     paymentId,
-    environmentSnapshot
+    environmentSnapshot,
+    webhookReceiptDirSnapshot
   );
 
   const evaluation = evaluateExternalAccountPaymentState({
