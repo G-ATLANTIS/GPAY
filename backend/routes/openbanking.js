@@ -53,6 +53,7 @@ function requiredConfig() {
     liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
     providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
     providerProbeSecret: process.env.G_BANK_PROVIDER_PROBE_SECRET || '',
+    operatorSecret: process.env.G_BANK_OPERATOR_SECRET || '',
     approvalSecret: process.env.G_BANK_APPROVAL_SECRET || '',
     secretRotationReceiptFile: process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE || '',
     sandboxVerificationReceiptFile: process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE || '',
@@ -593,6 +594,45 @@ function assertProviderConfigured() {
   return requiredConfig();
 }
 
+function assertOperatorAuthorization(authorizationHeader) {
+  const cfg = requiredConfig();
+  if (cfg.operatorSecret.length < 32) {
+    const err = new Error('G-Bank operator authorization is not configured securely.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const supplied = Buffer.from(String(authorizationHeader || ''), 'utf8');
+  const expected = Buffer.from(cfg.operatorSecret, 'utf8');
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    const err = new Error('G-Bank operator authorization failed.');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  return true;
+}
+
+function operatorAuthorizationMiddleware(req, res, next) {
+  // TrueLayer must be able to reach the webhook without a G-Bank operator secret.
+  // Its authentication boundary is the verified Tl-Signature/JWKS path instead.
+  if (req.path === '/webhook') return next();
+
+  try {
+    assertOperatorAuthorization(req.get('X-G-Bank-Operator-Authorization') || '');
+    return next();
+  } catch (err) {
+    return res.status(err.statusCode || 403).json({
+      error: err.message || 'G-Bank operator authorization failed.',
+      payment_created: false,
+      value_moved: false,
+      verified_value_flow: false
+    });
+  }
+}
+
+router.use(operatorAuthorizationMiddleware);
+
 function assertProviderProbeEnabled(authorizationHeader) {
   const cfg = requiredConfig();
   if (!cfg.providerProbeEnabled) {
@@ -632,6 +672,7 @@ function configStatus() {
   if (!cfg.signingKid) missing.push('TRUELAYER_SIGNING_KID');
   if (!cfg.privateKey) missing.push('TRUELAYER_PRIVATE_KEY_B64 or TRUELAYER_PRIVATE_KEY_PEM');
   if (!cfg.returnUri) missing.push('TRUELAYER_RETURN_URI');
+  if (cfg.operatorSecret.length < 32) missing.push('G_BANK_OPERATOR_SECRET(min 32 chars)');
   if (!cfg.webhookPath.startsWith('/') || cfg.webhookPath.includes('?')) missing.push('TRUELAYER_WEBHOOK_PATH(valid path without query)');
   if (!Number.isFinite(cfg.maxEur) || cfg.maxEur <= 0) missing.push('G_BANK_MAX_PAYMENT_EUR');
   if (live && !cfg.liveEnabled) missing.push('G_BANK_ENABLE_LIVE=true');
@@ -649,6 +690,7 @@ function configStatus() {
     configured: missing.length === 0,
     missing,
     live_execution_enabled: live && cfg.liveEnabled,
+    operator_authorization_configured: cfg.operatorSecret.length >= 32,
     live_approval_required: live,
     live_approval_configured: live ? Boolean(cfg.approvalSecret) : false,
     historical_secret_rotation_receipt_present: evidence.secret_rotation.valid,
@@ -936,6 +978,7 @@ function executionGraphStatus() {
     release_gates: {
       live_environment_selected: live,
       live_enable_flag: cfg.liveEnabled,
+      operator_authorization_configured: cfg.operatorSecret.length >= 32,
       historical_secret_rotation_receipt_present: evidence.secret_rotation.valid,
       sandbox_verification_receipt_present: evidence.sandbox_verification.valid,
       live_release_evidence_present: liveReleaseEvidencePresent,
@@ -1183,6 +1226,8 @@ router._test = {
   envMode,
   providerConfigStatus,
   configStatus,
+  assertOperatorAuthorization,
+  operatorAuthorizationMiddleware,
   assertProviderProbeEnabled,
   isValidIban,
   approvalMessage,
