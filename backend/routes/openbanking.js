@@ -1233,44 +1233,61 @@ router.get('/graph-status', (req, res) => {
 });
 
 
-router.get('/return', (req, res) => {
-  const paymentId = String(req.query.payment_id || '');
-  const error = String(req.query.error || '');
-
-  if (!/^[0-9a-f-]{36}$/i.test(paymentId)) {
-    return res.status(400).json({
-      error: 'Invalid or missing payment_id.',
-      payment_success: null,
-      verified_value_flow: false
-    });
+function classifyHostedPageReturn(paymentId, error = '', environment = envMode()) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(paymentId || ''))) {
+    return {
+      statusCode: 400,
+      body: {
+        error: 'Invalid or missing payment_id.',
+        payment_success: null,
+        verified_value_flow: false
+      }
+    };
   }
 
-  const binding = lookupPaymentBinding(paymentId, envMode());
+  const binding = lookupPaymentBinding(paymentId, environment);
   if (!binding.known) {
-    return res.status(404).json({
-      provider: 'truelayer',
-      payment_id: paymentId,
-      known_local_payment_intent: false,
-      payment_success: null,
-      verified_value_flow: false,
-      next_action: 'Do not infer payment outcome from this return URL.'
-    });
+    return {
+      statusCode: 404,
+      body: {
+        provider: 'truelayer',
+        environment,
+        payment_id: String(paymentId).toLowerCase(),
+        known_local_payment_intent: false,
+        payment_success: null,
+        verified_value_flow: false,
+        next_action: 'Do not infer payment outcome from this return URL.'
+      }
+    };
   }
 
-  return res.status(200).json({
-    provider: 'truelayer',
-    environment: binding.environment,
-    payment_id: paymentId,
-    known_local_payment_intent: true,
-    authorization_flow_returned: true,
-    authorization_abandoned: error === 'tl_hpp_abandoned',
-    return_error: error === 'tl_hpp_abandoned' ? 'tl_hpp_abandoned' : null,
-    payment_success: null,
-    bank_accepted_execution: false,
-    creditor_settlement_proven: false,
-    verified_value_flow: false,
-    next_action: 'Wait for a signature-verified webhook or use the authenticated payment-status endpoint.'
-  });
+  const abandoned = String(error || '') === 'tl_hpp_abandoned';
+  return {
+    statusCode: 200,
+    body: {
+      provider: 'truelayer',
+      environment: binding.environment,
+      payment_id: String(paymentId).toLowerCase(),
+      known_local_payment_intent: true,
+      authorization_flow_returned: true,
+      authorization_abandoned: abandoned,
+      return_error: abandoned ? 'tl_hpp_abandoned' : null,
+      payment_success: null,
+      bank_accepted_execution: false,
+      creditor_settlement_proven: false,
+      verified_value_flow: false,
+      next_action: 'Wait for a signature-verified webhook or use the authenticated payment-status endpoint.'
+    }
+  };
+}
+
+router.get('/return', (req, res) => {
+  const result = classifyHostedPageReturn(
+    String(req.query.payment_id || ''),
+    String(req.query.error || ''),
+    envMode()
+  );
+  return res.status(result.statusCode).json(result.body);
 });
 
 router.post('/provider-readiness', async (req, res) => {
@@ -1528,6 +1545,7 @@ router._test = {
   preparePaymentIntentReceipt,
   recordPaymentCreated,
   lookupPaymentBinding,
+  classifyHostedPageReturn,
   assertPaymentInput,
   assertLiveApproval,
   buildTrueLayerSigningPayload,
