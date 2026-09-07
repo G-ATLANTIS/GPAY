@@ -270,6 +270,7 @@ function verifyWebhookSignature({ signature, method = 'POST', path, headers, raw
     valid: true,
     kid: parsed.header.kid,
     jku: parsed.header.jku,
+    environment: parsed.header.jku.includes('truelayer-sandbox.com') ? 'sandbox' : 'live',
     timestamp
   };
 }
@@ -290,15 +291,15 @@ async function fetchWebhookJwks(httpClient = axios, jku = expectedWebhookJku()) 
   return response.data;
 }
 
-function webhookReceiptDirectory() {
+function webhookReceiptDirectory(environment = envMode()) {
+  if (!['sandbox', 'live'].includes(String(environment))) throw new Error('invalid_webhook_receipt_environment');
   const configured = requiredConfig().webhookReceiptDir;
-  const environment = envMode();
-  return pathModule.resolve(configured, environment);
+  return pathModule.resolve(configured, String(environment));
 }
 
-function webhookReceiptPath(eventId) {
+function webhookReceiptPath(eventId, environment = envMode()) {
   if (!/^[0-9a-f-]{36}$/i.test(String(eventId || ''))) throw new Error('invalid_webhook_event_id');
-  return pathModule.join(webhookReceiptDirectory(), `${String(eventId).toLowerCase()}.json`);
+  return pathModule.join(webhookReceiptDirectory(environment), `${String(eventId).toLowerCase()}.json`);
 }
 
 function canonicalWebhookReceipt(receipt) {
@@ -340,19 +341,21 @@ function observeWebhookEvent({
   eventVersion,
   paymentId,
   webhookTimestamp,
-  rawBodySha256
+  rawBodySha256,
+  environment
 }) {
   if (!/^[0-9a-f-]{36}$/i.test(String(eventId || ''))) throw new Error('invalid_webhook_event_id');
   if (!/^[0-9a-f]{64}$/i.test(String(rawBodySha256 || ''))) throw new Error('invalid_webhook_body_hash');
 
-  const directory = webhookReceiptDirectory();
+  if (!['sandbox', 'live'].includes(String(environment))) throw new Error('invalid_webhook_receipt_environment');
+  const directory = webhookReceiptDirectory(environment);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 
-  const receiptPath = webhookReceiptPath(eventId);
+  const receiptPath = webhookReceiptPath(eventId, environment);
   const receipt = {
     version: 1,
     provider: 'truelayer',
-    environment: envMode(),
+    environment: String(environment),
     event_id: String(eventId).toLowerCase(),
     event_type: String(eventType || ''),
     event_version: eventVersion,
@@ -364,10 +367,26 @@ function observeWebhookEvent({
   receipt.receipt_sha256 = crypto.createHash('sha256').update(canonicalWebhookReceipt(receipt)).digest('hex');
 
   try {
-    fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2) + '\n', {
-      flag: 'wx',
-      mode: 0o600
-    });
+    const fd = fs.openSync(receiptPath, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify(receipt, null, 2) + '\n', 'utf8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    // Best-effort directory fsync on platforms that support it.
+    try {
+      const dirFd = fs.openSync(directory, 'r');
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+      // File fsync above is mandatory; directory fsync portability varies.
+    }
+
     return {
       duplicate: false,
       receipt_path: receiptPath,
@@ -432,12 +451,13 @@ async function verifyAndClassifyWebhook({ signature, path, headers, rawBody, htt
     eventVersion: event.event_version,
     paymentId,
     webhookTimestamp: verification.timestamp.timestamp,
-    rawBodySha256
+    rawBodySha256,
+    environment: verification.environment
   });
 
   return {
     provider: 'truelayer',
-    environment: envMode(),
+    environment: verification.environment,
     webhook_verified: true,
     duplicate: replay.duplicate,
     event_id: event.event_id,
