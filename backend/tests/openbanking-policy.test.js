@@ -30,6 +30,17 @@ assert.equal(isValidIban('NL91 ABNA 0417 1643 00'), true);
 assert.equal(isValidIban('NL91 ABNA 0417 1643 01'), false);
 assert.equal(isValidIban('not-an-iban'), false);
 
+
+// Provider readiness probe is explicit opt-in and does not imply payment authority.
+process.env.TRUELAYER_ENV = 'sandbox';
+process.env.G_BANK_ENABLE_PROVIDER_PROBE = 'false';
+mustThrow(() => assertProviderProbeEnabled(), /disabled/);
+assert.equal(providerConfigStatus().provider_probe_enabled, false);
+
+process.env.G_BANK_ENABLE_PROVIDER_PROBE = 'true';
+assert.doesNotThrow(() => assertProviderProbeEnabled());
+assert.equal(providerConfigStatus().provider_probe_enabled, true);
+
 const parsed = assertPaymentInput({
   amount_eur: '12.34',
   beneficiary: {
@@ -199,3 +210,42 @@ mustThrow(() => {
 }, /P-521/);
 
 console.log('TrueLayer request-signing tests: PASS');
+
+
+// Key bootstrap creates an ignored local P-521 keypair with restrictive private-key permissions.
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const keygenDir = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-keygen-'));
+const keygenRun = spawnSync(process.execPath, [
+  path.join(__dirname, '..', '..', 'scripts', 'generate-truelayer-keypair.js'),
+  '--out-dir',
+  keygenDir
+], { encoding: 'utf8' });
+
+assert.equal(keygenRun.status, 0, keygenRun.stderr || keygenRun.stdout);
+
+const generatedPrivatePath = path.join(keygenDir, 'ec512-private-key.pem');
+const generatedPublicPath = path.join(keygenDir, 'ec512-public-key.pem');
+assert.equal(fs.existsSync(generatedPrivatePath), true);
+assert.equal(fs.existsSync(generatedPublicPath), true);
+
+const generatedPrivateKey = crypto.createPrivateKey(fs.readFileSync(generatedPrivatePath, 'utf8'));
+assert.equal(generatedPrivateKey.asymmetricKeyType, 'ec');
+assert.equal(generatedPrivateKey.asymmetricKeyDetails?.namedCurve, 'secp521r1');
+
+if (process.platform !== 'win32') {
+  assert.equal(fs.statSync(generatedPrivatePath).mode & 0o777, 0o600);
+}
+
+const overwriteRun = spawnSync(process.execPath, [
+  path.join(__dirname, '..', '..', 'scripts', 'generate-truelayer-keypair.js'),
+  '--out-dir',
+  keygenDir
+], { encoding: 'utf8' });
+assert.equal(overwriteRun.status, 2);
+
+fs.rmSync(keygenDir, { recursive: true, force: true });
+console.log('TrueLayer key-bootstrap tests: PASS');
