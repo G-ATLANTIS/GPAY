@@ -55,6 +55,11 @@ The backend implements TrueLayer request-signing v2 with Node's built-in `crypto
 - `GET /api/open-banking/graph-status`
   - Returns a non-secret G_REAL_EXECUTION_GRAPH view of provider-auth, payment-write and value-flow edges.
   - Local configuration never activates a verified edge by itself.
+- `GET /api/open-banking/return`
+  - Public HPP return endpoint; no operator secret is required because a user browser is redirected here.
+  - Accepts only a locally known `payment_id`.
+  - Never performs a provider call and never treats the return as payment success.
+  - `error=tl_hpp_abandoned` is reported only as user abandonment, not as a settlement result.
 - `POST /api/open-banking/provider-readiness`
   - Requires `G_BANK_ENABLE_PROVIDER_PROBE=true`.
   - Requires a matching `X-G-Bank-Probe-Authorization` header backed by a separate `G_BANK_PROVIDER_PROBE_SECRET`.
@@ -177,6 +182,7 @@ Configure the TrueLayer Console webhook URI so its path exactly matches:
 ```
 TRUELAYER_WEBHOOK_PATH=/api/open-banking/webhook
 G_BANK_WEBHOOK_RECEIPT_DIR=.secrets/runtime/webhook-events
+G_BANK_PAYMENT_INTENT_DIR=.secrets/runtime/payment-intents
 ```
 
 The backend preserves the exact raw JSON bytes for this route before parsing. Incoming webhooks are accepted only after:
@@ -270,3 +276,59 @@ Protected routes include:
 The webhook is intentionally exempt from this operator header because TrueLayer cannot know a G-Bank private secret. Its trust boundary is instead the verified `Tl-Signature`, exact JKU allowlist, JWKS key, timestamp and raw-body signature binding.
 
 The operator secret does not authorize a live payment by itself. Live payment creation still separately requires the transaction-bound `X-G-Bank-Approval`, beneficiary allowlist, amount ceiling and all live release evidence.
+
+
+## Durable payment-intent receipts
+
+Before the first network submission of a payment, GPAY atomically creates an immutable intent receipt under:
+
+```
+G_BANK_PAYMENT_INTENT_DIR=<persistent protected location>
+```
+
+The receipt binds:
+
+- idempotency key;
+- EUR amount in minor units;
+- SHA-256 of the exact provider request body;
+- SHA-256 of beneficiary IBAN;
+- SHA-256 of the payment reference;
+- environment and creation timestamp.
+
+It deliberately does **not** persist the raw IBAN, payer email/details, payment reference, or the hosted-page resource token.
+
+After TrueLayer confirms payment-object creation, GPAY creates separate immutable creation and payment-ID binding receipts. This yields fail-closed retry semantics:
+
+```
+NEW IDEMPOTENCY KEY
+  -> INTENT RECEIPT
+  -> PROVIDER SUBMISSION
+  -> CREATION RECEIPT
+  -> PAYMENT-ID BINDING
+```
+
+If the intent receipt exists but no creation receipt exists, the prior submission is treated as ambiguous and automatic create retry is denied. Operator/provider review is required before any retry.
+
+If the same idempotency key is presented with different amount/body/beneficiary/reference hashes, the request is rejected as an idempotency conflict.
+
+If a creation receipt already exists, GPAY returns a conflict pointing to the existing payment ID and requires the status-read path instead of creating again.
+
+For live mode, `G_BANK_PAYMENT_INTENT_DIR` must be explicitly set. `npm run check:banking:env` performs an atomic write/fsync/delete probe, but infrastructure-level persistence across machine/container replacement still requires independent verification.
+
+
+### Hosted page return is not payment success
+
+TrueLayer appends the payment ID to the configured `return_uri` after the hosted-page flow. A cancelled flow can additionally include `error=tl_hpp_abandoned`.
+
+GPAY treats that redirect only as a browser-navigation signal:
+
+```
+HPP RETURN
+  -> VERIFY LOCAL PAYMENT-ID BINDING
+  -> AUTHORIZATION FLOW RETURNED
+  -> WAIT FOR VERIFIED WEBHOOK / AUTHENTICATED STATUS READ
+  -> NO SUCCESS CLAIM
+  -> NO VERIFIED_VALUE_FLOW
+```
+
+A random or unknown payment ID is rejected. Even a locally known payment ID never becomes successful from the return URL alone.
