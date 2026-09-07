@@ -26,7 +26,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install locked dependencies
@@ -42,7 +42,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git grep -nE 'MOLLIE_API_KEY=live_[A-Za-z0-9]+|TRUELAYER_CLIENT_SECRET=.+|G_BANK_APPROVAL_SECRET=.+' -- ':!package-lock.json'; then
+          if git grep -nE 'MOLLIE_API_KEY=live_[A-Za-z0-9]+|TRUELAYER_CLIENT_SECRET=.+|G_BANK_APPROVAL_SECRET=.+' -- ':!package-lock.json' ':!.github/workflows/banking-safety.yml'; then
             echo 'Potential live secret detected in tracked files.'
             exit 1
           fi
