@@ -14,7 +14,8 @@ const {
   assertPaymentInput,
   assertLiveApproval,
   buildTrueLayerSigningPayload,
-  signRequest
+  signRequest,
+  performProviderReadiness
 } = router._test;
 
 function mustThrow(fn, pattern) {
@@ -336,3 +337,54 @@ assert.equal(noConfirm.status, 2);
 
 fs.rmSync(approvalRoot, { recursive: true, force: true });
 console.log('G-Bank approval CLI tests: PASS');
+
+
+// Provider readiness HTTP contract: only token + /test-signature are allowed.
+(async () => {
+  const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp521r1' });
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.G_BANK_ENABLE_PROVIDER_PROBE = 'true';
+  process.env.TRUELAYER_CLIENT_ID = 'contract-client';
+  process.env.TRUELAYER_CLIENT_SECRET = 'contract-secret';
+  process.env.TRUELAYER_SIGNING_KID = 'contract-kid';
+  process.env.TRUELAYER_PRIVATE_KEY_PEM = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
+  process.env.TRUELAYER_PRIVATE_KEY_B64 = '';
+
+  const calls = [];
+  const fakeHttp = {
+    async post(url, body, options) {
+      calls.push({ url, body, options });
+      if (url === 'https://auth.truelayer-sandbox.com/connect/token') {
+        return { status: 200, data: { access_token: 'synthetic-access-token' } };
+      }
+      if (url === 'https://api.truelayer-sandbox.com/test-signature') {
+        assert.equal(options.headers.Authorization, 'Bearer synthetic-access-token');
+        assert.match(options.headers['Tl-Signature'], /^[A-Za-z0-9_-]+\.\.[A-Za-z0-9_-]+$/);
+        assert.match(options.headers['Idempotency-Key'], /^[0-9a-f-]{36}$/i);
+        assert.match(body, /^\{"nonce":"[0-9a-f-]{36}"\}$/i);
+        return { status: 204, data: null };
+      }
+      throw new Error(`Unexpected HTTP target in provider readiness: ${url}`);
+    }
+  };
+
+  const result = await performProviderReadiness(fakeHttp);
+  assert.equal(result.request_signature_accepted, true);
+  assert.equal(result.provider_http_status, 204);
+  assert.equal(result.payment_created, false);
+  assert.equal(result.bank_authorization_started, false);
+  assert.equal(result.value_moved, false);
+  assert.equal(result.verified_write, false);
+  assert.equal(result.verified_value_flow, false);
+
+  assert.deepEqual(calls.map(call => call.url), [
+    'https://auth.truelayer-sandbox.com/connect/token',
+    'https://api.truelayer-sandbox.com/test-signature'
+  ]);
+  assert.equal(calls.some(call => call.url.includes('/v3/payments')), false);
+
+  console.log('Provider readiness HTTP contract tests: PASS');
+})().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
