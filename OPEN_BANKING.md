@@ -464,7 +464,7 @@ For the readiness phase, temporarily enable:
 
 ```
 G_BANK_ENABLE_PROVIDER_PROBE=true
-G_BANK_PROVIDER_PROBE_SECRET=<runtime-secret>
+G_BANK_PROVIDER_PROBE_SECRET  -> inject from runtime secret storage
 ```
 
 The runner also requires `G_BANK_OPERATOR_SECRET`.
