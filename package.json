@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "check:banking": "node --check backend/routes/openbanking.js && node --check backend/index.js",
+    "test:banking": "node backend/tests/openbanking-policy.test.js"
   },
   "keywords": [],
   "author": "",
