@@ -36,6 +36,7 @@ function main() {
   const liveEnabled = process.env.G_BANK_ENABLE_LIVE === 'true';
   const probeEnabled = process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true';
   const webhookReceiptDir = process.env.G_BANK_WEBHOOK_RECEIPT_DIR || '';
+  const paymentIntentDir = process.env.G_BANK_PAYMENT_INTENT_DIR || '';
   const operatorSecret = process.env.G_BANK_OPERATOR_SECRET || '';
 
   resultLine('environment', 'OK', env);
@@ -125,6 +126,9 @@ function main() {
       if (!webhookReceiptDir) {
         errors.push('G_BANK_WEBHOOK_RECEIPT_DIR must be explicitly configured when live execution is enabled.');
       }
+      if (!paymentIntentDir) {
+        errors.push('G_BANK_PAYMENT_INTENT_DIR must be explicitly configured when live execution is enabled.');
+      }
     }
   } else {
     resultLine('live execution gate', 'SAFE', liveEnabled ? 'ignored in sandbox' : 'disabled');
@@ -153,6 +157,31 @@ function main() {
     }
   } else if (!live) {
     resultLine('webhook receipt store', 'SAFE', 'not configured; sandbox default may be used by runtime');
+  }
+
+  if (paymentIntentDir) {
+    try {
+      const environmentDir = path.resolve(paymentIntentDir, env);
+      fs.mkdirSync(environmentDir, { recursive: true, mode: 0o700 });
+      const probePath = path.join(environmentDir, `.readiness-${process.pid}-${Date.now()}`);
+      const fd = fs.openSync(probePath, 'wx', 0o600);
+      try {
+        fs.writeFileSync(fd, 'g-bank-payment-intent-store-readiness\n', 'utf8');
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.unlinkSync(probePath);
+      resultLine('payment intent store', 'OK', environmentDir);
+      if (live && !path.isAbsolute(paymentIntentDir)) {
+        warnings.push('Live payment intent directory is relative; independently confirm the underlying filesystem survives process/container restarts.');
+      }
+    } catch {
+      resultLine('payment intent store', 'FAIL');
+      errors.push('G_BANK_PAYMENT_INTENT_DIR is not atomically writable.');
+    }
+  } else if (!live) {
+    resultLine('payment intent store', 'SAFE', 'not configured; sandbox default may be used by runtime');
   }
 
   if (probeEnabled && (process.env.G_BANK_PROVIDER_PROBE_SECRET || '').length < 32) {
