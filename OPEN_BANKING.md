@@ -27,6 +27,7 @@ G_BANK_MAX_PAYMENT_EUR=100
 G_BANK_ENABLE_LIVE=false
 G_BANK_ENABLE_PROVIDER_PROBE=false
 G_BANK_PROVIDER_PROBE_SECRET=
+G_BANK_OPERATOR_SECRET=
 G_BANK_APPROVAL_SECRET=
 G_BANK_ALLOWED_BENEFICIARY_IBANS=
 G_BANK_SECRET_ROTATION_RECEIPT_FILE=.secrets/evidence/secret-rotation.json
@@ -245,3 +246,27 @@ Network hardening for JWKS retrieval:
 - fetched JWKS must contain the requested `kid`.
 
 This follows the same JKU+KID cache principle shown in TrueLayer's official webhook-server example while adding bounded TTL and response limits.
+
+
+## Operator API authorization
+
+All Open Banking HTTP routes except the TrueLayer webhook require:
+
+```
+X-G-Bank-Operator-Authorization: <G_BANK_OPERATOR_SECRET>
+```
+
+`G_BANK_OPERATOR_SECRET` must contain at least 32 characters and must remain outside Git.
+
+Protected routes include:
+
+- health/status;
+- execution-graph status;
+- provider readiness;
+- payment creation;
+- payment status reads;
+- future non-webhook routes mounted on the Open Banking router.
+
+The webhook is intentionally exempt from this operator header because TrueLayer cannot know a G-Bank private secret. Its trust boundary is instead the verified `Tl-Signature`, exact JKU allowlist, JWKS key, timestamp and raw-body signature binding.
+
+The operator secret does not authorize a live payment by itself. Live payment creation still separately requires the transaction-bound `X-G-Bank-Approval`, beneficiary allowlist, amount ceiling and all live release evidence.
