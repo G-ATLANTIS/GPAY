@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
+const fs = require('node:fs');
 
 const router = express.Router();
 
@@ -44,9 +45,90 @@ function requiredConfig() {
     providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
     providerProbeSecret: process.env.G_BANK_PROVIDER_PROBE_SECRET || '',
     approvalSecret: process.env.G_BANK_APPROVAL_SECRET || '',
-    secretRotationReceipt: process.env.G_BANK_SECRET_ROTATION_RECEIPT || '',
-    sandboxVerificationReceipt: process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT || '',
+    secretRotationReceiptFile: process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE || '',
+    sandboxVerificationReceiptFile: process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE || '',
     allowedBeneficiaryIbans
+  };
+}
+
+function canonicalEvidenceRecord(record) {
+  return JSON.stringify({
+    version: record.version,
+    type: record.type,
+    provider: record.provider,
+    observed_at: record.observed_at,
+    evidence_ref: record.evidence_ref,
+    artifact_sha256: record.artifact_sha256 ?? null
+  });
+}
+
+function validateEvidenceReceipt(filePath, expectedType, maxAgeMs) {
+  const result = {
+    configured: Boolean(filePath),
+    valid: false,
+    type: expectedType,
+    observed_at: null,
+    age_ms: null,
+    record_sha256: null,
+    error: null
+  };
+
+  if (!filePath) {
+    result.error = 'missing';
+    return result;
+  }
+
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const record = JSON.parse(raw);
+
+    if (record.version !== 1) throw new Error('unsupported_version');
+    if (record.type !== expectedType) throw new Error('type_mismatch');
+    if (typeof record.provider !== 'string' || !record.provider) throw new Error('provider_missing');
+    if (typeof record.evidence_ref !== 'string' || record.evidence_ref.length < 6) throw new Error('evidence_ref_invalid');
+    if (typeof record.record_sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(record.record_sha256)) throw new Error('record_sha256_invalid');
+
+    if (expectedType === 'SANDBOX_VERIFICATION' && !/^[0-9a-f]{64}$/i.test(String(record.artifact_sha256 || ''))) {
+      throw new Error('artifact_sha256_required');
+    }
+
+    const calculated = crypto.createHash('sha256').update(canonicalEvidenceRecord(record)).digest('hex');
+    const supplied = Buffer.from(record.record_sha256.toLowerCase(), 'hex');
+    const expected = Buffer.from(calculated, 'hex');
+    if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+      throw new Error('integrity_mismatch');
+    }
+
+    const observed = Date.parse(record.observed_at);
+    if (!Number.isFinite(observed)) throw new Error('observed_at_invalid');
+    const ageMs = Date.now() - observed;
+    if (ageMs < -5 * 60 * 1000) throw new Error('observed_at_in_future');
+    if (ageMs > maxAgeMs) throw new Error('expired');
+
+    result.valid = true;
+    result.observed_at = new Date(observed).toISOString();
+    result.age_ms = ageMs;
+    result.record_sha256 = calculated;
+    return result;
+  } catch (err) {
+    result.error = err.code === 'ENOENT' ? 'not_found' : String(err.message || err);
+    return result;
+  }
+}
+
+function evidenceStatus() {
+  const cfg = requiredConfig();
+  return {
+    secret_rotation: validateEvidenceReceipt(
+      cfg.secretRotationReceiptFile,
+      'SECRET_ROTATION',
+      10 * 365 * 24 * 60 * 60 * 1000
+    ),
+    sandbox_verification: validateEvidenceReceipt(
+      cfg.sandboxVerificationReceiptFile,
+      'SANDBOX_VERIFICATION',
+      30 * 24 * 60 * 60 * 1000
+    )
   };
 }
 
@@ -120,9 +202,10 @@ function configStatus() {
   if (!cfg.returnUri) missing.push('TRUELAYER_RETURN_URI');
   if (!Number.isFinite(cfg.maxEur) || cfg.maxEur <= 0) missing.push('G_BANK_MAX_PAYMENT_EUR');
   if (live && !cfg.liveEnabled) missing.push('G_BANK_ENABLE_LIVE=true');
+  const evidence = evidenceStatus();
   if (live && !cfg.approvalSecret) missing.push('G_BANK_APPROVAL_SECRET');
-  if (live && !cfg.secretRotationReceipt) missing.push('G_BANK_SECRET_ROTATION_RECEIPT');
-  if (live && !cfg.sandboxVerificationReceipt) missing.push('G_BANK_SANDBOX_VERIFICATION_RECEIPT');
+  if (live && !evidence.secret_rotation.valid) missing.push('G_BANK_SECRET_ROTATION_RECEIPT_FILE(valid)');
+  if (live && !evidence.sandbox_verification.valid) missing.push('G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE(valid,fresh)');
   if (live && cfg.allowedBeneficiaryIbans.length === 0) missing.push('G_BANK_ALLOWED_BENEFICIARY_IBANS');
 
   return {
@@ -134,8 +217,9 @@ function configStatus() {
     live_execution_enabled: live && cfg.liveEnabled,
     live_approval_required: live,
     live_approval_configured: live ? Boolean(cfg.approvalSecret) : false,
-    historical_secret_rotation_receipt_present: Boolean(cfg.secretRotationReceipt),
-    sandbox_verification_receipt_present: Boolean(cfg.sandboxVerificationReceipt),
+    historical_secret_rotation_receipt_present: evidence.secret_rotation.valid,
+    sandbox_verification_receipt_present: evidence.sandbox_verification.valid,
+    evidence,
     allowed_beneficiary_count: cfg.allowedBeneficiaryIbans.length,
     max_payment_eur: Number.isFinite(cfg.maxEur) ? cfg.maxEur : 0
   };
@@ -377,9 +461,10 @@ function executionGraphStatus() {
       ? 'PROBE_ENABLED_NOT_YET_VERIFIED'
       : 'CONFIGURED_NOT_EXTERNALLY_VERIFIED';
 
+  const evidence = evidenceStatus();
   const liveReleaseEvidencePresent =
-    Boolean(cfg.secretRotationReceipt) &&
-    Boolean(cfg.sandboxVerificationReceipt);
+    evidence.secret_rotation.valid &&
+    evidence.sandbox_verification.valid;
 
   return {
     graph: 'G_REAL_EXECUTION_GRAPH',
@@ -408,8 +493,8 @@ function executionGraphStatus() {
     release_gates: {
       live_environment_selected: live,
       live_enable_flag: cfg.liveEnabled,
-      historical_secret_rotation_receipt_present: Boolean(cfg.secretRotationReceipt),
-      sandbox_verification_receipt_present: Boolean(cfg.sandboxVerificationReceipt),
+      historical_secret_rotation_receipt_present: evidence.secret_rotation.valid,
+      sandbox_verification_receipt_present: evidence.sandbox_verification.valid,
       live_release_evidence_present: liveReleaseEvidencePresent,
       beneficiary_allowlist_configured: cfg.allowedBeneficiaryIbans.length > 0,
       transaction_approval_secret_configured: Boolean(cfg.approvalSecret)
@@ -630,7 +715,9 @@ router._test = {
   signRequest,
   getAccessToken,
   performProviderReadiness,
-  executionGraphStatus
+  executionGraphStatus,
+  validateEvidenceReceipt,
+  evidenceStatus
 };
 
 module.exports = router;
