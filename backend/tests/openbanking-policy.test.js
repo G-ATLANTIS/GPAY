@@ -14,6 +14,18 @@ const {
   assertProviderProbeEnabled,
   isValidIban,
   approvalMessage,
+  hashText,
+  paymentIntentDirectory,
+  paymentIntentReceiptPath,
+  paymentCreatedReceiptPath,
+  paymentBindingPath,
+  readAndValidatePaymentIntentReceipt,
+  readAndValidatePaymentCreatedReceipt,
+  readAndValidatePaymentBinding,
+  preparePaymentIntentReceipt,
+  recordPaymentCreated,
+  lookupPaymentBinding,
+  classifyHostedPageReturn,
   assertPaymentInput,
   assertLiveApproval,
   buildTrueLayerSigningPayload,
@@ -83,6 +95,21 @@ mustThrow(() => assertOperatorAuthorization(''), /authorization failed/);
     },
     {
       status() { throw new Error('webhook operator bypass should not return an error response'); }
+    },
+    () => { nextCalled = true; }
+  );
+  assert.equal(nextCalled, true);
+}
+
+{
+  let nextCalled = false;
+  operatorAuthorizationMiddleware(
+    {
+      path: '/return',
+      get: () => ''
+    },
+    {
+      status() { throw new Error('return operator bypass should not return an error response'); }
     },
     () => { nextCalled = true; }
   );
@@ -637,6 +664,135 @@ assert.equal(evidenceLiveStatus.configured, true);
 delete process.env.G_BANK_WEBHOOK_RECEIPT_DIR;
 fs.rmSync(evidenceRoot, { recursive: true, force: true });
 console.log('Banking evidence integrity tests: PASS');
+
+
+// Durable payment-intent receipts bind idempotency to one exact intent and avoid storing raw PII.
+{
+  const intentRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-payment-intents-'));
+  process.env.G_BANK_PAYMENT_INTENT_DIR = intentRoot;
+  process.env.TRUELAYER_ENV = 'sandbox';
+
+  const idempotencyKey = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const paymentId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const beneficiary = {
+    name: 'Sensitive Merchant Name',
+    iban: 'NL91ABNA0417164300',
+    reference: 'PRIVATE-REF-123'
+  };
+  const userEmail = 'sensitive@example.invalid';
+  const rawBody = JSON.stringify({
+    amount_in_minor: 1234,
+    currency: 'EUR',
+    beneficiary,
+    user: { email: userEmail }
+  });
+
+  const prepared = preparePaymentIntentReceipt({
+    idempotencyKey,
+    amountInMinor: 1234,
+    beneficiary,
+    rawBody,
+    environment: 'sandbox'
+  });
+  assert.equal(prepared.created, true);
+  assert.equal(fs.existsSync(paymentIntentReceiptPath(idempotencyKey, 'sandbox')), true);
+  assert.equal(readAndValidatePaymentIntentReceipt(prepared.receipt_path).receipt_sha256, prepared.receipt.receipt_sha256);
+
+  // Same key before a confirmed provider response is ambiguous and must not be retried automatically.
+  assert.throws(() => preparePaymentIntentReceipt({
+    idempotencyKey,
+    amountInMinor: 1234,
+    beneficiary,
+    rawBody,
+    environment: 'sandbox'
+  }), /prior submission.*no confirmed provider result/i);
+
+  // Same key with a different intent is a hard idempotency conflict.
+  assert.throws(() => preparePaymentIntentReceipt({
+    idempotencyKey,
+    amountInMinor: 1235,
+    beneficiary,
+    rawBody: JSON.stringify({ ...JSON.parse(rawBody), amount_in_minor: 1235 }),
+    environment: 'sandbox'
+  }), /already bound to a different payment intent/i);
+
+  const hostedUri = 'https://payment.truelayer-sandbox.com/payments#payment_id=x&resource_token=super-sensitive-token';
+  const created = recordPaymentCreated({
+    idempotencyKey,
+    payment: {
+      id: paymentId,
+      status: 'authorization_required',
+      hosted_page: { uri: hostedUri }
+    },
+    rawBody,
+    environment: 'sandbox'
+  });
+  assert.match(created.created_receipt_sha256, /^[0-9a-f]{64}$/);
+  assert.match(created.payment_binding_sha256, /^[0-9a-f]{64}$/);
+
+  const createdReceipt = readAndValidatePaymentCreatedReceipt(paymentCreatedReceiptPath(idempotencyKey, 'sandbox'));
+  const binding = readAndValidatePaymentBinding(paymentBindingPath(paymentId, 'sandbox'));
+  assert.equal(createdReceipt.payment_id, paymentId);
+  assert.equal(binding.payment_id, paymentId);
+  assert.equal(lookupPaymentBinding(paymentId, 'sandbox').known, true);
+
+  // After provider creation, repeating create with same key must point to status instead of resubmitting.
+  let repeatError;
+  try {
+    preparePaymentIntentReceipt({
+      idempotencyKey,
+      amountInMinor: 1234,
+      beneficiary,
+      rawBody,
+      environment: 'sandbox'
+    });
+  } catch (err) {
+    repeatError = err;
+  }
+  assert.ok(repeatError);
+  assert.equal(repeatError.statusCode, 409);
+  assert.equal(repeatError.publicDetails.payment_id, paymentId);
+  assert.equal(repeatError.publicDetails.retry_create_denied, true);
+
+  const returnKnown = classifyHostedPageReturn(paymentId, '', 'sandbox');
+  assert.equal(returnKnown.statusCode, 200);
+  assert.equal(returnKnown.body.known_local_payment_intent, true);
+  assert.equal(returnKnown.body.payment_success, null);
+  assert.equal(returnKnown.body.verified_value_flow, false);
+
+  const returnAbandoned = classifyHostedPageReturn(paymentId, 'tl_hpp_abandoned', 'sandbox');
+  assert.equal(returnAbandoned.statusCode, 200);
+  assert.equal(returnAbandoned.body.authorization_abandoned, true);
+  assert.equal(returnAbandoned.body.payment_success, null);
+
+  const returnUnknown = classifyHostedPageReturn('cccccccc-cccc-4ccc-8ccc-cccccccccccc', '', 'sandbox');
+  assert.equal(returnUnknown.statusCode, 404);
+  assert.equal(returnUnknown.body.known_local_payment_intent, false);
+  assert.equal(returnUnknown.body.verified_value_flow, false);
+
+  // Receipt files must not contain raw IBAN, email, reference or hosted resource token.
+  const receiptText = [
+    fs.readFileSync(paymentIntentReceiptPath(idempotencyKey, 'sandbox'), 'utf8'),
+    fs.readFileSync(paymentCreatedReceiptPath(idempotencyKey, 'sandbox'), 'utf8'),
+    fs.readFileSync(paymentBindingPath(paymentId, 'sandbox'), 'utf8')
+  ].join('\n');
+  assert.equal(receiptText.includes(beneficiary.iban), false);
+  assert.equal(receiptText.includes(beneficiary.reference), false);
+  assert.equal(receiptText.includes(userEmail), false);
+  assert.equal(receiptText.includes('super-sensitive-token'), false);
+
+  // Tampering with a binding must fail integrity validation.
+  const bindingPath = paymentBindingPath(paymentId, 'sandbox');
+  const tamperedBinding = JSON.parse(fs.readFileSync(bindingPath, 'utf8'));
+  tamperedBinding.request_body_sha256 = '0'.repeat(64);
+  fs.writeFileSync(bindingPath, JSON.stringify(tamperedBinding, null, 2) + '\n');
+  assert.throws(() => readAndValidatePaymentBinding(bindingPath), /payment_binding_integrity_mismatch/);
+
+  fs.rmSync(intentRoot, { recursive: true, force: true });
+  delete process.env.G_BANK_PAYMENT_INTENT_DIR;
+}
+
+console.log('Durable payment-intent and HPP return tests: PASS');
 
 
 // TrueLayer webhook verification: exact JKU allowlist, JWKS kid, raw body and replay handling.
