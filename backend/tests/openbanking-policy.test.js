@@ -18,7 +18,15 @@ const {
   performProviderReadiness,
   executionGraphStatus,
   validateEvidenceReceipt,
-  evidenceStatus
+  evidenceStatus,
+  expectedWebhookJku,
+  parseDetachedTlSignature,
+  validateWebhookTimestamp,
+  buildWebhookSigningPayload,
+  verifyWebhookSignature,
+  fetchWebhookJwks,
+  observeWebhookEvent,
+  verifyAndClassifyWebhook
 } = router._test;
 
 function mustThrow(fn, pattern) {
@@ -554,3 +562,124 @@ assert.equal(evidenceLiveStatus.configured, true);
 
 fs.rmSync(evidenceRoot, { recursive: true, force: true });
 console.log('Banking evidence integrity tests: PASS');
+
+
+// TrueLayer webhook verification: exact JKU allowlist, JWKS kid, raw body and replay handling.
+(async () => {
+  process.env.TRUELAYER_ENV = 'sandbox';
+  process.env.TRUELAYER_WEBHOOK_PATH = '/api/open-banking/webhook';
+
+  const webhookPair = crypto.generateKeyPairSync('ec', { namedCurve: 'secp521r1' });
+  const webhookKid = '44444444-4444-4444-8444-444444444444';
+  const webhookJwk = webhookPair.publicKey.export({ format: 'jwk' });
+  webhookJwk.kid = webhookKid;
+  webhookJwk.alg = 'ES512';
+  webhookJwk.use = 'sig';
+
+  const webhookPath = '/api/open-banking/webhook';
+  const webhookTimestamp = new Date().toISOString();
+  const webhookEvent = {
+    type: 'payment_executed',
+    event_version: 1,
+    event_id: '55555555-5555-4555-8555-555555555555',
+    payment_id: '66666666-6666-4666-8666-666666666666'
+  };
+  const rawWebhookBody = Buffer.from(JSON.stringify(webhookEvent), 'utf8');
+  const webhookHeaders = {
+    'X-TL-Webhook-Timestamp': webhookTimestamp,
+    'Content-Type': 'application/json'
+  };
+  const signedHeaderNames = ['X-TL-Webhook-Timestamp', 'Content-Type'];
+  const webhookJoseHeader = {
+    alg: 'ES512',
+    kid: webhookKid,
+    tl_version: '2',
+    tl_headers: signedHeaderNames.join(','),
+    jku: 'https://webhooks.truelayer-sandbox.com/.well-known/jwks'
+  };
+  const encodedWebhookHeader = Buffer.from(JSON.stringify(webhookJoseHeader)).toString('base64url');
+  const webhookPayload = buildWebhookSigningPayload({
+    method: 'POST',
+    path: webhookPath,
+    signedHeaders: signedHeaderNames,
+    headers: webhookHeaders,
+    body: rawWebhookBody.toString('utf8')
+  });
+  const webhookSigningInput = `${encodedWebhookHeader}.${Buffer.from(webhookPayload).toString('base64url')}`;
+  const webhookRawSignature = crypto.sign('sha512', Buffer.from(webhookSigningInput), {
+    key: webhookPair.privateKey,
+    dsaEncoding: 'ieee-p1363'
+  });
+  const webhookSignature = `${encodedWebhookHeader}..${webhookRawSignature.toString('base64url')}`;
+
+  assert.equal(expectedWebhookJku(), webhookJoseHeader.jku);
+  assert.equal(parseDetachedTlSignature(webhookSignature).header.kid, webhookKid);
+  assert.equal(validateWebhookTimestamp(webhookHeaders).timestamp, webhookTimestamp);
+
+  const verification = verifyWebhookSignature({
+    signature: webhookSignature,
+    method: 'POST',
+    path: webhookPath,
+    headers: webhookHeaders,
+    rawBody: rawWebhookBody,
+    jwks: { keys: [webhookJwk] }
+  });
+  assert.equal(verification.valid, true);
+
+  mustThrow(() => verifyWebhookSignature({
+    signature: webhookSignature,
+    method: 'POST',
+    path: webhookPath,
+    headers: webhookHeaders,
+    rawBody: Buffer.from(JSON.stringify({ ...webhookEvent, type: 'payment_settled' })),
+    jwks: { keys: [webhookJwk] }
+  }), /invalid_webhook_signature/);
+
+  const wrongJkuHeader = {
+    ...webhookJoseHeader,
+    jku: 'https://evil.example/.well-known/jwks'
+  };
+  const wrongEncodedHeader = Buffer.from(JSON.stringify(wrongJkuHeader)).toString('base64url');
+  const wrongJkuSignature = `${wrongEncodedHeader}..${webhookRawSignature.toString('base64url')}`;
+  mustThrow(() => parseDetachedTlSignature(wrongJkuSignature), /untrusted_header_jku/);
+
+  const fetchCalls = [];
+  const fakeWebhookHttp = {
+    async get(url, options) {
+      fetchCalls.push({ url, options });
+      assert.equal(url, 'https://webhooks.truelayer-sandbox.com/.well-known/jwks');
+      assert.equal(options.maxRedirects, 0);
+      return { status: 200, data: { keys: [webhookJwk] } };
+    }
+  };
+
+  const firstWebhook = await verifyAndClassifyWebhook({
+    signature: webhookSignature,
+    path: webhookPath,
+    headers: webhookHeaders,
+    rawBody: rawWebhookBody,
+    httpClient: fakeWebhookHttp
+  });
+  assert.equal(firstWebhook.webhook_verified, true);
+  assert.equal(firstWebhook.duplicate, false);
+  assert.equal(firstWebhook.payment_write_performed, false);
+  assert.equal(firstWebhook.value_moved_by_handler, false);
+  assert.equal(firstWebhook.verified_value_flow, false);
+
+  const duplicateWebhook = await verifyAndClassifyWebhook({
+    signature: webhookSignature,
+    path: webhookPath,
+    headers: webhookHeaders,
+    rawBody: rawWebhookBody,
+    httpClient: fakeWebhookHttp
+  });
+  assert.equal(duplicateWebhook.webhook_verified, true);
+  assert.equal(duplicateWebhook.duplicate, true);
+  assert.equal(duplicateWebhook.verified_value_flow, false);
+  assert.equal(fetchCalls.length, 2);
+
+  console.log('TrueLayer webhook verification tests: PASS');
+})().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
