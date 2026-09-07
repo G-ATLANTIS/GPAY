@@ -401,6 +401,9 @@ async function performProviderReadiness(httpClient = axios, authorizationHeader 
   assertProviderProbeEnabled(authorizationHeader);
   assertProviderConfigured();
 
+  // Snapshot the environment endpoints once so a single operation cannot
+  // observe mixed sandbox/live configuration across asynchronous boundaries.
+  const endpointSnapshot = endpoints();
   const path = '/test-signature';
   const nonce = crypto.randomUUID();
   const rawBody = JSON.stringify({ nonce });
@@ -412,7 +415,7 @@ async function performProviderReadiness(httpClient = axios, authorizationHeader 
     body: rawBody,
     idempotencyKey
   });
-  const { apiBase } = endpoints();
+  const apiBase = endpointSnapshot.apiBase;
 
   const response = await httpClient.post(`${apiBase}${path}`, rawBody, {
     timeout: 15000,
@@ -429,7 +432,7 @@ async function performProviderReadiness(httpClient = axios, authorizationHeader 
 
   return {
     provider: 'truelayer',
-    environment: envMode(),
+    environment: endpointSnapshot.live ? 'live' : 'sandbox',
     access_token_obtained: true,
     request_signature_accepted: signatureValid,
     provider_http_status: response.status,
