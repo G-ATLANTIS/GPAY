@@ -227,3 +227,21 @@ Operational invariants:
 - tampered stored receipt: fail closed;
 - receipt includes TrueLayer signing key provenance;
 - receipt persistence across machine/container replacement is **not verified** until the deployment storage itself is independently verified.
+
+
+### JWKS caching and key rotation
+
+Webhook verification uses only the exact TrueLayer well-known JWKS URL for the selected environment.
+
+The verifier caches JWKS for at most 10 minutes and only reuses a cached set when it already contains the signature `kid`. If a new `kid` appears, the verifier refreshes JWKS before verification. Stale cache is never used as a fallback after a failed refresh.
+
+Network hardening for JWKS retrieval:
+
+- redirects: disabled;
+- maximum response size: 64 KiB;
+- maximum accepted key count: 50;
+- optional response content type, when present, must be JSON;
+- keys must be EC/P-521 when those JWK fields are supplied;
+- fetched JWKS must contain the requested `kid`.
+
+This follows the same JKU+KID cache principle shown in TrueLayer's official webhook-server example while adding bounded TTL and response limits.
