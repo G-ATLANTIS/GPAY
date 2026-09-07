@@ -42,6 +42,7 @@ function requiredConfig() {
     maxEur,
     liveEnabled: process.env.G_BANK_ENABLE_LIVE === 'true',
     providerProbeEnabled: process.env.G_BANK_ENABLE_PROVIDER_PROBE === 'true',
+    providerProbeSecret: process.env.G_BANK_PROVIDER_PROBE_SECRET || '',
     approvalSecret: process.env.G_BANK_APPROVAL_SECRET || '',
     secretRotationReceipt: process.env.G_BANK_SECRET_ROTATION_RECEIPT || '',
     sandboxVerificationReceipt: process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT || '',
@@ -62,6 +63,7 @@ function providerConfigStatus() {
     environment: envMode(),
     configured: missing.length === 0,
     provider_probe_enabled: cfg.providerProbeEnabled,
+    provider_probe_authorization_configured: Boolean(cfg.providerProbeSecret),
     missing
   };
 }
@@ -77,7 +79,7 @@ function assertProviderConfigured() {
   return requiredConfig();
 }
 
-function assertProviderProbeEnabled() {
+function assertProviderProbeEnabled(authorizationHeader) {
   const cfg = requiredConfig();
   if (!cfg.providerProbeEnabled) {
     const err = new Error('Provider readiness probe is disabled. Set G_BANK_ENABLE_PROVIDER_PROBE=true to allow a non-payment TrueLayer authentication/signature check.');
@@ -89,6 +91,20 @@ function assertProviderProbeEnabled() {
       payment_created: false,
       value_moved: false
     };
+    throw err;
+  }
+
+  if (cfg.providerProbeSecret.length < 32) {
+    const err = new Error('Provider readiness probe authorization is not configured securely.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  const supplied = Buffer.from(String(authorizationHeader || ''), 'utf8');
+  const expected = Buffer.from(cfg.providerProbeSecret, 'utf8');
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    const err = new Error('Provider readiness probe authorization failed.');
+    err.statusCode = 403;
     throw err;
   }
 }
@@ -297,8 +313,8 @@ function signRequest({ method, path, body = '', idempotencyKey }) {
   return `${encodedHeader}..${signature.toString('base64url')}`;
 }
 
-async function performProviderReadiness(httpClient = axios) {
-  assertProviderProbeEnabled();
+async function performProviderReadiness(httpClient = axios, authorizationHeader = '') {
+  assertProviderProbeEnabled(authorizationHeader);
   assertProviderConfigured();
 
   const path = '/test-signature';
@@ -417,7 +433,10 @@ router.get('/graph-status', (req, res) => {
 
 router.post('/provider-readiness', async (req, res) => {
   try {
-    const result = await performProviderReadiness();
+    const result = await performProviderReadiness(
+      axios,
+      req.get('X-G-Bank-Probe-Authorization') || ''
+    );
     res.status(result.request_signature_accepted ? 200 : 502).json(result);
   } catch (err) {
     const status = err.statusCode || err.response?.status || 500;
