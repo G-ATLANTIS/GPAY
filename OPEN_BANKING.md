@@ -89,3 +89,27 @@ CONFIGURED_SANDBOX
 ```
 
 No step may be skipped or inferred.
+
+
+## Operator commands
+
+Local provider/configuration readiness check:
+
+```bash
+npm run check:banking:env
+```
+
+This command validates required TrueLayer variables, parses the signing key, requires P-521, checks the return URI and reports whether the live/probe gates are open. It prints no secret values and performs no network request.
+
+Generate a transaction-bound live approval only after separately verifying the beneficiary, amount and payment reference:
+
+```bash
+npm run approve:banking -- \
+  --confirm-approval \
+  --idempotency-key <uuid> \
+  --amount-eur <amount> \
+  --iban <allowlisted-iban> \
+  --reference <reference>
+```
+
+The generator is offline, requires an explicit confirmation flag, enforces the configured beneficiary allowlist and payment ceiling, and writes the HMAC token to `.secrets/approvals/` instead of printing it. The token is bound to the exact idempotency key, amount-in-minor, IBAN and reference. Generating a token does not contact a bank or create a payment.
