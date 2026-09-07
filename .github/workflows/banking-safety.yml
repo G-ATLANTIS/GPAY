@@ -1,0 +1,49 @@
+name: Banking safety checks
+
+on:
+  pull_request:
+    paths:
+      - 'backend/routes/openbanking.js'
+      - 'backend/tests/openbanking-policy.test.js'
+      - 'backend/index.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'OPEN_BANKING.md'
+      - '.env.example'
+  push:
+    branches:
+      - fix/open-banking-truelayer-v1
+
+permissions:
+  contents: read
+
+jobs:
+  banking:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies without mutating lockfile
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Syntax checks
+        run: npm run check:banking
+
+      - name: Offline banking policy tests
+        run: npm run test:banking
+
+      - name: Confirm no obvious live secrets in tracked files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE 'MOLLIE_API_KEY=live_[A-Za-z0-9]+|TRUELAYER_CLIENT_SECRET=.+|G_BANK_APPROVAL_SECRET=.+' -- ':!package-lock.json'; then
+            echo 'Potential live secret detected in tracked files.'
+            exit 1
+          fi
+          echo 'Tracked secret scan: PASS'
