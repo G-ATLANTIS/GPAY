@@ -194,7 +194,9 @@ async function executeMockPayment(authorizationUri, httpClient = axios) {
       timeout: 20000,
       headers: {
         Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        authority: 'pay-mock-connect.truelayer-sandbox.com',
+        scheme: 'https'
       }
     }
   );
@@ -204,19 +206,63 @@ async function executeMockPayment(authorizationUri, httpClient = axios) {
   return { mockPaymentId };
 }
 
-async function waitForMatchingWebhook(paymentId, attempts = 40) {
-  let token = await webhookRouter.getAccessToken();
-  for (let i = 1; i <= attempts; i += 1) {
-    let result = await webhookRouter.runOnce(token);
-    if (result.refreshToken) {
+function startWebhookConsumer() {
+  let stopped = false;
+  let token = null;
+  let lastError = null;
+  const forwarded = [];
+
+  const ready = (async () => {
+    token = await webhookRouter.getAccessToken();
+    let first = await webhookRouter.runOnce(token);
+    if (first.refreshToken) {
       token = await webhookRouter.getAccessToken();
-      result = await webhookRouter.runOnce(token);
+      first = await webhookRouter.runOnce(token);
     }
-    const matching = result.forwarded.find(
+    forwarded.push(...first.forwarded);
+  })();
+
+  const loop = (async () => {
+    await ready;
+    while (!stopped) {
+      try {
+        let result = await webhookRouter.runOnce(token);
+        if (result.refreshToken) {
+          token = await webhookRouter.getAccessToken();
+          result = await webhookRouter.runOnce(token);
+        }
+        forwarded.push(...result.forwarded);
+      } catch (err) {
+        lastError = err;
+      }
+      if (!stopped) await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  })();
+
+  return {
+    ready,
+    forwarded,
+    get lastError() { return lastError; },
+    async stop() {
+      stopped = true;
+      await Promise.race([
+        loop,
+        new Promise(resolve => setTimeout(resolve, 5500))
+      ]);
+    }
+  };
+}
+
+async function waitForMatchingWebhook(paymentId, consumer, attempts = 24) {
+  for (let i = 1; i <= attempts; i += 1) {
+    const matching = consumer.forwarded.find(
       item => String(item.paymentId || '').toLowerCase() === String(paymentId).toLowerCase()
     );
     if (matching) return matching;
-    if (i < attempts) await new Promise(resolve => setTimeout(resolve, 1000));
+    if (consumer.lastError) {
+      console.log(`Webhook consumer diagnostic: ${consumer.lastError.message || consumer.lastError}`);
+    }
+    if (i < attempts) await new Promise(resolve => setTimeout(resolve, 5000));
   }
   throw new Error('No matching TrueLayer sandbox webhook arrived through the provider webhook router.');
 }
@@ -231,39 +277,42 @@ async function run() {
     console.log('Amount: GBP 0.15 (TrueLayer official webhook-generator fixture)');
     console.log('Secrets/tokens: not logged');
 
-    const created = await createDirectSandboxPayment();
-    const paymentId = String(created.payment.id).toLowerCase();
-    console.log('Sandbox payment created:', paymentId);
+    // Match TrueLayer's documented two-process lifecycle: the webhook
+    // consumer must already be active before the sandbox payment is generated.
+    const consumer = startWebhookConsumer();
+    await consumer.ready;
+    console.log('TrueLayer webhook router: active before sandbox payment creation.');
 
-    const authorizationUri = await startDirectAuthorization(paymentId, created.token);
-    const artifact = smoke.writeJsonArtifact(
-      `payment-created-${paymentId}`,
-      publicPaymentArtifact(created.payment, authorizationUri)
-    );
-    console.log('Payment artifact:', artifact);
+    try {
+      const created = await createDirectSandboxPayment();
+      const paymentId = String(created.payment.id).toLowerCase();
+      console.log('Sandbox payment created:', paymentId);
 
-    // TrueLayer's official usage runs route-webhooks continuously before
-    // generate-webhook. Start the pull consumer first so the sandbox event
-    // cannot be missed by a late subscriber.
-    console.log('TrueLayer webhook router: polling before provider Execute.');
-    const webhookPromise = waitForMatchingWebhook(paymentId);
-    await new Promise(resolve => setTimeout(resolve, 1000));
+      const authorizationUri = await startDirectAuthorization(paymentId, created.token);
+      const artifact = smoke.writeJsonArtifact(
+        `payment-created-${paymentId}`,
+        publicPaymentArtifact(created.payment, authorizationUri)
+      );
+      console.log('Payment artifact:', artifact);
 
-    await executeMockPayment(authorizationUri);
-    console.log('TrueLayer mock provider action: Execute submitted.');
+      await executeMockPayment(authorizationUri);
+      console.log('TrueLayer mock provider action: Execute submitted.');
 
-    const webhook = await webhookPromise;
-    console.log(
-      `Matching webhook verified/forwarded: type=${webhook.type} payment_id=${webhook.paymentId}`
-    );
+      const webhook = await waitForMatchingWebhook(paymentId, consumer);
+      console.log(
+        `Matching webhook verified/forwarded: type=${webhook.type} payment_id=${webhook.paymentId}`
+      );
 
-    await smoke.status(paymentId);
-    await smoke.reconcile(paymentId);
+      await smoke.status(paymentId);
+      await smoke.reconcile(paymentId);
 
-    console.log('Provider-signed sandbox webhook E2E: VERIFIED');
-    console.log('Payment ID:', paymentId);
-    console.log('Verified value flow: FALSE');
-    return paymentId;
+      console.log('Provider-signed sandbox webhook E2E: VERIFIED');
+      console.log('Payment ID:', paymentId);
+      console.log('Verified value flow: FALSE');
+      return paymentId;
+    } finally {
+      await consumer.stop();
+    }
   } finally {
     if (localServer.started && localServer.child) {
       try { localServer.child.kill('SIGTERM'); } catch {}
@@ -298,6 +347,7 @@ module.exports = {
   createDirectSandboxPayment,
   startDirectAuthorization,
   executeMockPayment,
+  startWebhookConsumer,
   waitForMatchingWebhook,
   run
 };
