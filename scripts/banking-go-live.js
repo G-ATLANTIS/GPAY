@@ -3,6 +3,11 @@ require('dotenv').config();
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const openBanking = require('../backend/routes/openbanking')._test;
+const {
+  validateEvidenceReceipt,
+  validateStoredWebhookReceipt
+} = openBanking;
 
 const root = process.cwd();
 const reportDir = path.resolve(root, '.secrets', 'go-live');
@@ -168,15 +173,11 @@ function detectRealWebhook(paymentId) {
     if (!name.endsWith('.json')) continue;
     try {
       const body = readJson(path.join(dir, name));
+      validateStoredWebhookReceipt(body);
       if (
         String(body.payment_id || '').toLowerCase() === String(paymentId).toLowerCase() &&
         body.provider === 'truelayer' &&
-        body.environment === 'sandbox' &&
-        typeof body.signature_kid === 'string' &&
-        body.signature_kid.length > 0 &&
-        body.signature_jku === 'https://webhooks.truelayer-sandbox.com/.well-known/jwks' &&
-        /^[0-9a-f]{64}$/i.test(String(body.receipt_sha256 || '')) &&
-        /^[0-9a-f]{64}$/i.test(String(body.raw_body_sha256 || ''))
+        body.environment === 'sandbox'
       ) {
         return {
           verified: true,
@@ -193,12 +194,35 @@ function detectRealWebhook(paymentId) {
 
 function secretRotationState() {
   const file = process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE || '';
-  return fileExists(file)
-    ? { verified: true, reason: 'Configured secret-rotation evidence file exists.', artifact: file }
-    : { verified: false, reason: 'Historical provider secret rotation evidence is missing.' };
+  const result = validateEvidenceReceipt(
+    file,
+    'SECRET_ROTATION',
+    10 * 365 * 24 * 60 * 60 * 1000
+  );
+  return result.valid
+    ? {
+        verified: true,
+        reason: 'Secret-rotation evidence passed integrity/freshness validation.',
+        artifact: file
+      }
+    : {
+        verified: false,
+        reason: `Historical provider secret rotation evidence is missing/invalid: ${result.error || 'unknown'}`
+      };
 }
 
 function productionConfigState() {
+  const rotationEvidence = validateEvidenceReceipt(
+    process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE || '',
+    'SECRET_ROTATION',
+    10 * 365 * 24 * 60 * 60 * 1000
+  );
+  const sandboxEvidence = validateEvidenceReceipt(
+    process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE || '',
+    'SANDBOX_VERIFICATION',
+    30 * 24 * 60 * 60 * 1000
+  );
+
   const required = {
     live_selected: (process.env.TRUELAYER_ENV || '').toLowerCase() === 'live',
     live_enabled: process.env.G_BANK_ENABLE_LIVE === 'true',
@@ -210,8 +234,8 @@ function productionConfigState() {
     allowlist: String(process.env.G_BANK_ALLOWED_BENEFICIARY_IBANS || '').split(',').map(v => v.trim()).filter(Boolean).length > 0,
     webhook_store: Boolean(process.env.G_BANK_WEBHOOK_RECEIPT_DIR),
     intent_store: Boolean(process.env.G_BANK_PAYMENT_INTENT_DIR),
-    rotation_receipt: fileExists(process.env.G_BANK_SECRET_ROTATION_RECEIPT_FILE || ''),
-    sandbox_receipt: fileExists(process.env.G_BANK_SANDBOX_VERIFICATION_RECEIPT_FILE || '')
+    rotation_receipt: rotationEvidence.valid,
+    sandbox_receipt: sandboxEvidence.valid
   };
   return {
     verified: Object.values(required).every(Boolean),
