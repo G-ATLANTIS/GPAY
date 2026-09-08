@@ -79,6 +79,9 @@ function classify(stages) {
   if (byName.PRODUCTION_CONFIG?.state !== 'VERIFIED') {
     return 'READY_FOR_PRODUCTION_ONBOARDING';
   }
+  if (byName.ENV_READINESS?.state !== 'VERIFIED') {
+    return 'PRODUCTION_CONFIG_BLOCKED';
+  }
   return 'READY_FOR_LIVE_CANARY';
 }
 
@@ -273,6 +276,7 @@ async function main() {
   const syntax = runLocalCommand('npm', ['run', 'check:banking']);
   const policy = runLocalCommand('npm', ['run', 'test:banking']);
   const smokeTests = runLocalCommand('npm', ['run', 'test:banking:smoke']);
+  const envReadiness = runLocalCommand('npm', ['run', 'check:banking:env']);
   const localOk = syntax.ok && policy.ok && smokeTests.ok;
   stages.push(stage(
     'LOCAL_TESTS',
@@ -282,6 +286,19 @@ async function main() {
       check_banking_exit: syntax.status,
       policy_exit: policy.status,
       smoke_test_exit: smokeTests.status
+    }
+  ));
+
+  stages.push(stage(
+    'ENV_READINESS',
+    envReadiness.ok ? 'VERIFIED' : 'PENDING',
+    envReadiness.ok
+      ? 'Runtime Banking environment passed check:banking:env.'
+      : 'Runtime Banking environment is not fully configured yet.',
+    {
+      exit: envReadiness.status,
+      stdout_tail: envReadiness.stdout.split('\n').slice(-12).join('\n'),
+      stderr_tail: envReadiness.stderr.split('\n').slice(-12).join('\n')
     }
   ));
 
@@ -369,6 +386,7 @@ async function main() {
       SANDBOX_E2E_PARTIAL: 'Route the registered TrueLayer sandbox webhook URI to G-Bank and obtain a real signed webhook receipt.',
       SANDBOX_E2E_VERIFIED_SECURITY_BLOCKED: 'Resolve historical provider credential rotation/revocation and preserve evidence.',
       READY_FOR_PRODUCTION_ONBOARDING: 'Configure TrueLayer production credentials, HTTPS endpoints and live release gates.',
+      PRODUCTION_CONFIG_BLOCKED: 'Fix the failing runtime environment/readiness checks before any live canary.',
       READY_FOR_LIVE_CANARY: 'Perform a separately authorized tiny production canary and independently verify settlement before promoting live.'
     }[readiness]
   };
