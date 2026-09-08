@@ -20,7 +20,8 @@
     "test:banking:webhook-router": "node backend/tests/banking-webhook-router.test.js",
     "generate:banking:webhook": "node scripts/generate-banking-sandbox-webhook.js",
     "test:banking:webhook-generator": "node backend/tests/banking-webhook-generator.test.js",
-    "test:banking:official-webhook": "node scripts/test-official-truelayer-webhook.js"
+    "test:banking:official-webhook": "node scripts/test-official-truelayer-webhook.js",
+    "test:banking:official-webhook:unit": "node backend/tests/banking-official-webhook.test.js"
   },
   "keywords": [],
   "author": "",
