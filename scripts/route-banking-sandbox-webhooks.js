@@ -120,20 +120,73 @@ function sanitizedForwardHeaders(input) {
   return out;
 }
 
-async function pullWebhooks(token, fetchFn = fetch) {
-  const response = await fetchFn(ROUTER_URL, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(30000)
-  });
-  if (response.status === 401) return { unauthorized: true, webhooks: [] };
-  if (!response.ok) {
-    throw new Error(`TrueLayer webhook pull failed with HTTP ${response.status}.`);
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function safeNetworkCause(err) {
+  const code = err?.cause?.code || err?.code || '';
+  const name = err?.cause?.name || err?.name || '';
+  if (code) return String(code).slice(0, 80);
+  if (name) return String(name).slice(0, 80);
+  return 'UNKNOWN_NETWORK_ERROR';
+}
+
+function transientHttpStatus(status) {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+async function pullWebhooks(token, fetchFn = fetch, {
+  maxRetries = 3,
+  sleepFn = sleep
+} = {}) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const response = await fetchFn(ROUTER_URL, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(30000)
+      });
+
+      if (response.status === 401) return { unauthorized: true, webhooks: [], attempts: attempt + 1 };
+
+      if (!response.ok) {
+        if (transientHttpStatus(response.status) && attempt < maxRetries) {
+          await sleepFn(500 * (2 ** attempt));
+          continue;
+        }
+        throw new Error(`TrueLayer webhook pull failed with HTTP ${response.status} after ${attempt + 1} attempt(s).`);
+      }
+
+      const body = await response.json();
+      if (!body || !Array.isArray(body.webhooks)) {
+        throw new Error('TrueLayer webhook router returned an invalid payload.');
+      }
+      return { unauthorized: false, webhooks: body.webhooks, attempts: attempt + 1 };
+    } catch (err) {
+      lastError = err;
+      const isHttpError = /^TrueLayer webhook pull failed with HTTP/.test(String(err?.message || ''));
+      const isInvalidPayload = String(err?.message || '') === 'TrueLayer webhook router returned an invalid payload.';
+
+      if (isInvalidPayload || (isHttpError && !/HTTP (429|5\d\d)/.test(String(err.message)))) {
+        throw err;
+      }
+
+      if (attempt >= maxRetries) {
+        if (isHttpError) throw err;
+        const cause = safeNetworkCause(err);
+        throw new Error(
+          `TrueLayer webhook pull network failure after ${attempt + 1} attempt(s); cause=${cause}`
+        );
+      }
+
+      await sleepFn(500 * (2 ** attempt));
+    }
   }
-  const body = await response.json();
-  if (!body || !Array.isArray(body.webhooks)) {
-    throw new Error('TrueLayer webhook router returned an invalid payload.');
-  }
-  return { unauthorized: false, webhooks: body.webhooks };
+
+  const cause = safeNetworkCause(lastError);
+  throw new Error(`TrueLayer webhook pull network failure; cause=${cause}`);
 }
 
 async function forwardWebhook(webhook, fetchFn = fetch) {
@@ -243,6 +296,9 @@ module.exports = {
   destinationUrl,
   sanitizedForwardHeaders,
   getAccessToken,
+  sleep,
+  safeNetworkCause,
+  transientHttpStatus,
   pullWebhooks,
   forwardWebhook,
   runOnce,
