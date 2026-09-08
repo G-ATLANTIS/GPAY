@@ -909,9 +909,41 @@ console.log('Durable payment-intent and HPP return tests: PASS');
   assert.throws(() => validateWebhookJwks({
     keys: Array.from({ length: 51 }, (_, i) => ({ kid: String(i), kty: 'EC', crv: 'P-521' }))
   }), /webhook_jwks_key_count_invalid/);
+  const mixedJwks = validateWebhookJwks({
+    keys: [
+      { kid: 'unrelated-rsa', kty: 'RSA', n: 'AQAB', e: 'AQAB' },
+      webhookJwk
+    ]
+  });
+  assert.equal(mixedJwks.keys.length, 2);
+
+  const mixedVerification = verifyWebhookSignature({
+    signature: webhookSignature,
+    method: 'POST',
+    path: webhookPath,
+    headers: webhookHeaders,
+    rawBody: rawWebhookBody,
+    jwks: mixedJwks
+  });
+  assert.equal(mixedVerification.valid, true);
+
   assert.throws(() => validateWebhookJwks({
-    keys: [{ kid: 'bad-rsa', kty: 'RSA' }]
-  }), /webhook_jwks_key_type_invalid/);
+    keys: [
+      { kid: 'dup', kty: 'RSA' },
+      { kid: 'dup', kty: 'EC', crv: 'P-521' }
+    ]
+  }), /webhook_jwks_duplicate_kid/);
+
+  mustThrow(() => verifyWebhookSignature({
+    signature: webhookSignature,
+    method: 'POST',
+    path: webhookPath,
+    headers: webhookHeaders,
+    rawBody: rawWebhookBody,
+    jwks: {
+      keys: [{ kid: webhookKid, kty: 'RSA', n: 'AQAB', e: 'AQAB' }]
+    }
+  }), /webhook_jwk_key_type_invalid/);
 
   mustThrow(() => verifyWebhookSignature({
     signature: webhookSignature,
