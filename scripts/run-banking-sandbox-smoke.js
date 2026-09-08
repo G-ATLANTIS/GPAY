@@ -320,5 +320,7 @@ module.exports = {
   reconcile,
   localServerReachable,
   startLocalServerIfNeeded,
-  withLocalServer
+  withLocalServer,
+  writeJsonArtifact,
+  writeSecretText
 };
