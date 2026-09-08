@@ -16,7 +16,8 @@
     "test:banking:go-live": "node backend/tests/banking-go-live.test.js",
     "bootstrap:banking:sandbox": "node scripts/bootstrap-banking-sandbox.js",
     "test:banking:bootstrap": "node backend/tests/banking-bootstrap.test.js",
-    "route:banking:webhooks": "node scripts/route-banking-sandbox-webhooks.js"
+    "route:banking:webhooks": "node scripts/route-banking-sandbox-webhooks.js",
+    "test:banking:webhook-router": "node backend/tests/banking-webhook-router.test.js"
   },
   "keywords": [],
   "author": "",
