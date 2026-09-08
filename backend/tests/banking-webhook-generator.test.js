@@ -5,19 +5,19 @@ const envSnapshot = { ...process.env };
 try {
   process.env.TRUELAYER_ENV = 'sandbox';
   process.env.G_BANK_ENABLE_LIVE = 'false';
-  process.env.G_BANK_SANDBOX_SMOKE_BENEFICIARY_IBAN = 'NL91ABNA0417164300';
-
   const generator = require('../../scripts/generate-banking-sandbox-webhook');
 
   assert.doesNotThrow(() => generator.requireSandboxSafety());
 
   const payload = generator.buildPaymentPayload();
-  assert.equal(payload.amount_in_minor, 1);
-  assert.equal(payload.currency, 'EUR');
+  assert.equal(payload.amount_in_minor, 15);
+  assert.equal(payload.currency, 'GBP');
   assert.equal(payload.payment_method.provider_selection.type, 'preselected');
-  assert.equal(payload.payment_method.provider_selection.provider_id, 'mock-payments-nl-redirect');
-  assert.equal(payload.payment_method.provider_selection.scheme_id, 'sepa_credit_transfer');
-  assert.equal(payload.payment_method.beneficiary.account_identifier.iban, 'NL91ABNA0417164300');
+  assert.equal(payload.payment_method.provider_selection.provider_id, 'mock-payments-gb-redirect');
+  assert.equal(payload.payment_method.provider_selection.scheme_id, 'faster_payments_service');
+  assert.equal(payload.payment_method.beneficiary.account_identifier.type, 'sort_code_account_number');
+  assert.equal(payload.payment_method.beneficiary.account_identifier.sort_code, '000000');
+  assert.equal(payload.payment_method.beneficiary.account_identifier.account_number, '12345678');
 
   const mockId = '11111111-1111-4111-8111-111111111111';
   const authUri =
