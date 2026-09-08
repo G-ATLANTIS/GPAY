@@ -8,6 +8,7 @@ const {
   validateProviderReadinessArtifact,
   validateSandboxPaymentArtifacts,
   validateReconciliationArtifact,
+  selectSandboxEvidenceBundle,
   detectRealWebhook,
   secretRotationState,
   productionConfigState,
@@ -148,6 +149,30 @@ try {
     verified_value_flow: false
   }));
   assert.equal(validateReconciliationArtifact(smokeDir, paymentId).verified, true);
+
+  const newerIncompletePaymentId = '44444444-4444-4444-8444-444444444444';
+  const newerIncompleteArtifact = path.join(
+    smokeDir,
+    `payment-created-${newerIncompletePaymentId}-2026-09-08T00-00-03-000Z.json`
+  );
+  fs.writeFileSync(newerIncompleteArtifact, JSON.stringify({
+    provider: 'truelayer',
+    environment: 'sandbox',
+    payment_id: newerIncompletePaymentId,
+    status: 'authorization_required',
+    authorization_required: true,
+    authorization_mode: 'direct_mock',
+    authorization_flow_uri_sha256: 'e'.repeat(64),
+    verified_value_flow: false
+  }));
+
+  const coherentBundle = selectSandboxEvidenceBundle(smokeDir);
+  assert.equal(coherentBundle.selectedCompleteBundle, true);
+  assert.equal(coherentBundle.payment.paymentId, paymentId);
+  assert.equal(coherentBundle.reconciliation.verified, true);
+  assert.equal(coherentBundle.newerIncompleteAttempts, 1);
+  assert.match(coherentBundle.payment.reason, /ignored 1 newer incomplete verified payment attempt/);
+  fs.unlinkSync(newerIncompleteArtifact);
 
   process.env.G_BANK_WEBHOOK_RECEIPT_DIR = webhookBase;
   const webhook = {
