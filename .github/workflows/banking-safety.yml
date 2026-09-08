@@ -10,7 +10,9 @@ on:
       - 'scripts/record-banking-evidence.js'
       - 'scripts/run-banking-sandbox-smoke.js'
       - 'scripts/route-banking-sandbox-webhooks.js'
+      - 'scripts/generate-banking-sandbox-webhook.js'
       - 'backend/tests/banking-webhook-router.test.js'
+      - 'backend/tests/banking-webhook-generator.test.js'
       - 'backend/tests/banking-smoke.test.js'
       - 'scripts/check-banking-readiness.js'
       - 'backend/index.js'
@@ -51,6 +53,9 @@ jobs:
 
       - name: Native sandbox webhook router tests
         run: npm run test:banking:webhook-router
+
+      - name: Native provider webhook generator tests
+        run: npm run test:banking:webhook-generator
 
       - name: One-command go-live orchestrator tests
         run: npm run test:banking:go-live
