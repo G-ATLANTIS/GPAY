@@ -11,15 +11,14 @@ const {
   envMode,
   signRequest,
   getAccessToken,
-  preparePaymentIntentReceipt,
   recordPaymentCreated
 } = openBankingRoutes._test;
 
 const API_BASE = 'https://api.truelayer-sandbox.com';
 const AUTH_BASE = 'https://auth.truelayer-sandbox.com';
 const MOCK_BASE = 'https://pay-mock-connect.truelayer-sandbox.com';
-const PROVIDER_ID = 'mock-payments-nl-redirect';
-const SCHEME_ID = 'sepa_credit_transfer';
+const PROVIDER_ID = 'mock-payments-gb-redirect';
+const SCHEME_ID = 'faster_payments_service';
 
 function requireSandboxSafety() {
   webhookRouter.requireSandboxSafety();
@@ -36,22 +35,19 @@ function sha256(value) {
 }
 
 function beneficiaryInput() {
-  const iban = String(process.env.G_BANK_SANDBOX_SMOKE_BENEFICIARY_IBAN || '')
-    .replace(/\s+/g, '')
-    .toUpperCase();
-  if (!iban) throw new Error('G_BANK_SANDBOX_SMOKE_BENEFICIARY_IBAN is required.');
   return {
-    name: String(process.env.G_BANK_SANDBOX_SMOKE_BENEFICIARY_NAME || 'G-Bank Sandbox Beneficiary'),
-    iban,
-    reference: String(process.env.G_BANK_SANDBOX_SMOKE_REFERENCE || 'GBANK-WEBHOOK').slice(0, 18)
+    name: 'John doe',
+    sortCode: '000000',
+    accountNumber: '12345678',
+    reference: '(LegacyReturn)'
   };
 }
 
 function buildPaymentPayload() {
   const beneficiary = beneficiaryInput();
   return {
-    amount_in_minor: 1,
-    currency: 'EUR',
+    amount_in_minor: 15,
+    currency: 'GBP',
     payment_method: {
       type: 'bank_transfer',
       provider_selection: {
@@ -63,27 +59,16 @@ function buildPaymentPayload() {
         type: 'external_account',
         account_holder_name: beneficiary.name,
         account_identifier: {
-          type: 'iban',
-          iban: beneficiary.iban
+          type: 'sort_code_account_number',
+          sort_code: beneficiary.sortCode,
+          account_number: beneficiary.accountNumber
         },
         reference: beneficiary.reference
       }
     },
     user: {
-      name: 'G-Bank Sandbox User',
-      email: 'sandbox-user@example.invalid',
-      phone: '+31600000000',
-      date_of_birth: '1990-01-01',
-      address: {
-        address_line1: 'Sandboxstraat 1',
-        city: 'Amsterdam',
-        zip: '1000AA',
-        country_code: 'NL'
-      }
-    },
-    metadata: {
-      g_bank: 'true',
-      purpose: 'provider_signed_webhook_e2e'
+      name: 'john doe',
+      email: 'a@a.com'
     }
   };
 }
@@ -145,7 +130,6 @@ async function signedPost(path, body, token, httpClient = axios) {
 async function createDirectSandboxPayment(httpClient = axios) {
   requireSandboxSafety();
   const payload = buildPaymentPayload();
-  const beneficiary = beneficiaryInput();
   const rawBody = JSON.stringify(payload);
   const idempotencyKey = crypto.randomUUID();
   const token = await getAccessToken(httpClient, { authBase: AUTH_BASE });
@@ -154,14 +138,6 @@ async function createDirectSandboxPayment(httpClient = axios) {
     path: '/v3/payments',
     body: rawBody,
     idempotencyKey
-  });
-
-  const intent = preparePaymentIntentReceipt({
-    idempotencyKey,
-    amountInMinor: 1,
-    beneficiary,
-    rawBody,
-    environment: 'sandbox'
   });
 
   const response = await httpClient.post(`${API_BASE}/v3/payments`, rawBody, {
@@ -189,7 +165,7 @@ async function createDirectSandboxPayment(httpClient = axios) {
   return {
     token,
     payment,
-    intentReceiptSha256: intent.receipt.receipt_sha256
+    requestBodySha256: sha256(rawBody)
   };
 }
 
@@ -198,7 +174,7 @@ async function startDirectAuthorization(paymentId, token, httpClient = axios) {
   const body = {
     provider_selection: {},
     redirect: {
-      return_uri: 'http://localhost:4000/api/open-banking/return'
+      return_uri: 'http://localhost:3000/callback'
     }
   };
   const { response } = await signedPost(path, body, token, httpClient);
@@ -252,7 +228,7 @@ async function run() {
     console.log('G-Bank provider-signed sandbox webhook E2E');
     console.log('Live banking: DISABLED');
     console.log('Provider:', PROVIDER_ID);
-    console.log('Amount: EUR 0.01');
+    console.log('Amount: GBP 0.15 (TrueLayer official webhook-generator fixture)');
     console.log('Secrets/tokens: not logged');
 
     const created = await createDirectSandboxPayment();
