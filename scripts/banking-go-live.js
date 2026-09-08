@@ -37,10 +37,10 @@ function fileExists(value) {
   return Boolean(value) && fs.existsSync(value);
 }
 
-function runLocalCommand(command, args) {
+function runLocalCommand(command, args, env = process.env) {
   const result = spawnSync(command, args, {
     cwd: root,
-    env: process.env,
+    env,
     encoding: 'utf8'
   });
   return {
@@ -49,6 +49,22 @@ function runLocalCommand(command, args) {
     stdout: result.stdout || '',
     stderr: result.stderr || ''
   };
+}
+
+function isolatedBankingTestEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (
+      key.startsWith('TRUELAYER_') ||
+      key.startsWith('G_BANK_') ||
+      key === 'MOLLIE_API_KEY' ||
+      key === 'PULSEPAY_API_KEY'
+    ) {
+      delete env[key];
+    }
+  }
+  env.NODE_ENV = 'test';
+  return env;
 }
 
 function stage(name, state, detail, evidence = null) {
@@ -277,25 +293,55 @@ async function startTemporaryLocalServerIfNeeded() {
     return { started: false, child: null, detail: 'Existing local GPAY server detected.' };
   }
 
-  const child = spawn(process.execPath, ['backend/index.js'], {
+  const serverEnv = {
+    ...process.env,
+    PORT: parsed.port || process.env.PORT || '4000'
+  };
+  const child = spawn(process.execPath, ['backend/banking-server.js'], {
     cwd: root,
-    env: process.env,
-    stdio: ['ignore', 'ignore', 'ignore']
+    env: serverEnv,
+    stdio: ['ignore', 'pipe', 'pipe']
   });
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', chunk => {
+    stdout = (stdout + chunk.toString('utf8')).slice(-4096);
+  });
+  child.stderr.on('data', chunk => {
+    stderr = (stderr + chunk.toString('utf8')).slice(-4096);
+  });
+
+  const diagnostic = () => {
+    const candidate = (stderr || stdout)
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .slice(-1)[0];
+    return candidate ? ` Last server message: ${candidate}` : '';
+  };
 
   const deadline = Date.now() + 6000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
-      return { started: false, child: null, detail: `Local GPAY server exited early with code ${child.exitCode}.` };
+      return {
+        started: false,
+        child: null,
+        detail: `Isolated G-Bank server exited early with code ${child.exitCode}.${diagnostic()}`
+      };
     }
     if (await isLocalGpayReachable(baseUrl)) {
-      return { started: true, child, detail: 'Temporary local GPAY server started.' };
+      return { started: true, child, detail: 'Temporary isolated G-Bank server started.' };
     }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
 
   try { child.kill('SIGTERM'); } catch {}
-  return { started: false, child: null, detail: 'Temporary local GPAY server did not become reachable.' };
+  return {
+    started: false,
+    child: null,
+    detail: `Temporary isolated G-Bank server did not become reachable.${diagnostic()}`
+  };
 }
 
 async function maybeRunProbe() {
@@ -333,9 +379,10 @@ async function maybeRunProbe() {
 async function main() {
   const stages = [];
 
-  const syntax = runLocalCommand('npm', ['run', 'check:banking']);
-  const policy = runLocalCommand('npm', ['run', 'test:banking']);
-  const smokeTests = runLocalCommand('npm', ['run', 'test:banking:smoke']);
+  const testEnv = isolatedBankingTestEnv();
+  const syntax = runLocalCommand('npm', ['run', 'check:banking'], testEnv);
+  const policy = runLocalCommand('npm', ['run', 'test:banking'], testEnv);
+  const smokeTests = runLocalCommand('npm', ['run', 'test:banking:smoke'], testEnv);
   const envReadiness = runLocalCommand('npm', ['run', 'check:banking:env']);
   const localOk = syntax.ok && policy.ok && smokeTests.ok;
   stages.push(stage(
@@ -345,7 +392,11 @@ async function main() {
     {
       check_banking_exit: syntax.status,
       policy_exit: policy.status,
-      smoke_test_exit: smokeTests.status
+      smoke_test_exit: smokeTests.status,
+      policy_stdout_tail: policy.stdout.split('\n').slice(-8).join('\n'),
+      policy_stderr_tail: policy.stderr.split('\n').slice(-8).join('\n'),
+      smoke_stdout_tail: smokeTests.stdout.split('\n').slice(-8).join('\n'),
+      smoke_stderr_tail: smokeTests.stderr.split('\n').slice(-8).join('\n')
     }
   ));
 
