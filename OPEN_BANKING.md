@@ -559,3 +559,62 @@ READY_FOR_LIVE_CANARY
   -> independent creditor settlement/receipt evidence
   -> only then consider LIVE_BANKING = TRUE
 ```
+
+
+## Sandbox bootstrap
+
+From the GPAY repository root:
+
+```bash
+git pull --ff-only
+npm ci --ignore-scripts --no-audit --no-fund
+npm run bootstrap:banking:sandbox -- --enable-probe
+```
+
+The bootstrap:
+
+- creates/reuses a local P-521 / secp521r1 TrueLayer signing keypair;
+- writes the private key only into Git-ignored local storage and the local `.env`;
+- generates strong local `G_BANK_OPERATOR_SECRET` and `G_BANK_PROVIDER_PROBE_SECRET` values when absent;
+- forces `TRUELAYER_ENV=sandbox`;
+- forces `G_BANK_ENABLE_LIVE=false`;
+- optionally enables only the authenticated sandbox provider probe;
+- prepares local receipt/intent directories;
+- does not fabricate TrueLayer credentials.
+
+After bootstrap, upload only:
+
+```
+.secrets/truelayer/ec512-public-key.pem
+```
+
+to the sandbox application's TrueLayer Console signing-key settings.
+
+Then populate only the remaining TrueLayer-provided values in the local `.env`:
+
+```
+TRUELAYER_CLIENT_ID
+TRUELAYER_CLIENT_SECRET
+TRUELAYER_SIGNING_KID
+```
+
+Do not paste these values into Git, issues, PRs, chat, or shell command history.
+
+Once those three values are configured, run:
+
+```bash
+npm run banking:go-live -- --run-sandbox-probe
+```
+
+For a localhost smoke target, the go-live orchestrator now starts a temporary local GPAY backend automatically when no local server is already reachable, runs the sandbox provider probe, and terminates the temporary server afterwards.
+
+A successful provider readiness step still proves only sandbox authentication/request signing:
+
+```
+access_token_obtained = true
+request_signature_accepted = true
+provider_http_status = 204
+payment_created = false
+value_moved = false
+verified_value_flow = false
+```
