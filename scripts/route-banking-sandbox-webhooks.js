@@ -41,7 +41,12 @@ async function localDestinationReachable(fetchFn = fetch) {
 
 async function startLocalBankingServerIfNeeded() {
   if (await localDestinationReachable()) {
-    return { started: false, child: null, detail: 'existing local G-Bank server detected' };
+    return {
+      started: false,
+      child: null,
+      detail: 'existing local G-Bank server detected',
+      getOutput: () => ''
+    };
   }
 
   const parsed = new URL(destinationUrl());
@@ -69,7 +74,12 @@ async function startLocalBankingServerIfNeeded() {
       throw new Error(`Local G-Bank server exited early with code ${child.exitCode}${last ? `: ${last}` : ''}`);
     }
     if (await localDestinationReachable()) {
-      return { started: true, child, detail: 'temporary local G-Bank server started' };
+      return {
+        started: true,
+        child,
+        detail: 'temporary local G-Bank server started',
+        getOutput: () => output
+      };
     }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
