@@ -96,6 +96,24 @@ function officialRouterObservation(output, paymentId) {
   return { seen: false, success: false, failure: false, line: null };
 }
 
+function latestOfficialRouterFailure(output) {
+  const clean = stripAnsi(output);
+  const lines = clean.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!/Payment id:/i.test(line) || !/FAILURE/i.test(line)) continue;
+    const match = line.match(/Payment id:\s*([0-9a-f-]{36})/i);
+    return {
+      seen: true,
+      paymentId: match ? match[1].toLowerCase() : null,
+      line
+    };
+  }
+
+  return { seen: false, paymentId: null, line: null };
+}
+
 async function run() {
   requireSandboxSafety();
 
@@ -173,6 +191,18 @@ async function run() {
     const observation = await waitFor(
       routerCapture,
       output => {
+        const blockingFailure = latestOfficialRouterFailure(output);
+        if (blockingFailure.seen) {
+          return {
+            seen: true,
+            success: false,
+            failure: true,
+            blockingFailure: true,
+            paymentId: blockingFailure.paymentId,
+            line: blockingFailure.line
+          };
+        }
+
         const result = officialRouterObservation(output, paymentId);
         return result.seen ? result : null;
       },
@@ -190,6 +220,11 @@ async function run() {
       if (rejectLines.length > 0) {
         console.error('GPAY webhook verifier diagnostics:');
         for (const line of rejectLines) console.error(line);
+      }
+
+      if (observation.blockingFailure) {
+        const suffix = observation.paymentId ? ` (payment_id=${observation.paymentId})` : '';
+        throw new Error(`Official TrueLayer queue is blocked by a webhook rejected by GPAY${suffix}: ${observation.line}`);
       }
 
       throw new Error(`Official TrueLayer router received the webhook but local GPAY rejected it: ${observation.line}`);
@@ -229,6 +264,7 @@ module.exports = {
   stripAnsi,
   parseCreatedPaymentId,
   officialRouterObservation,
+  latestOfficialRouterFailure,
   waitFor,
   run
 };
