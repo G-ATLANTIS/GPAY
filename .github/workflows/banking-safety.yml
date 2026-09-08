@@ -9,6 +9,8 @@ on:
       - 'scripts/generate-g-bank-approval.js'
       - 'scripts/record-banking-evidence.js'
       - 'scripts/run-banking-sandbox-smoke.js'
+      - 'scripts/route-banking-sandbox-webhooks.js'
+      - 'backend/tests/banking-webhook-router.test.js'
       - 'backend/tests/banking-smoke.test.js'
       - 'scripts/check-banking-readiness.js'
       - 'backend/index.js'
@@ -46,6 +48,9 @@ jobs:
 
       - name: Sandbox banking smoke runner tests
         run: npm run test:banking:smoke
+
+      - name: Native sandbox webhook router tests
+        run: npm run test:banking:webhook-router
 
       - name: One-command go-live orchestrator tests
         run: npm run test:banking:go-live
