@@ -1420,8 +1420,10 @@ router.post('/webhook', async (req, res) => {
     // Duplicates are acknowledged with 2xx to stop provider retries.
     res.status(200).json(result);
   } catch (err) {
+    const reason = String(err.message || 'Webhook verification failed.').slice(0, 200);
+    console.warn('[G-Bank webhook reject]', reason);
     res.status(401).json({
-      error: err.message || 'Webhook verification failed.',
+      error: reason,
       webhook_verified: false,
       observation_only: true,
       value_moved_by_handler: false,
