@@ -534,5 +534,6 @@ module.exports = {
   detectRealWebhook,
   secretRotationState,
   productionConfigState,
+  isolatedBankingTestEnv,
   classify
 };
