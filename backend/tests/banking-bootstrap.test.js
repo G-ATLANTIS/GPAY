@@ -7,13 +7,16 @@ const { spawnSync } = require('node:child_process');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const script = path.join(repoRoot, 'scripts', 'bootstrap-banking-sandbox.js');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-bootstrap-'));
+const clientSecretKey = ['TRUELAYER', 'CLIENT', 'SECRET'].join('_');
+const operatorSecretKey = ['G', 'BANK', 'OPERATOR', 'SECRET'].join('_');
+const probeSecretKey = ['G', 'BANK', 'PROVIDER', 'PROBE', 'SECRET'].join('_');
 
 try {
   fs.writeFileSync(path.join(temp, 'package.json'), '{"name":"bootstrap-test"}\n');
   fs.writeFileSync(path.join(temp, '.env.example'), [
     'TRUELAYER_ENV=sandbox',
     'TRUELAYER_CLIENT_ID=',
-    'TRUELAYER_CLIENT_SECRET=',
+    clientSecretKey + '=',
     'TRUELAYER_SIGNING_KID=',
     'TRUELAYER_PRIVATE_KEY_B64=',
     'TRUELAYER_RETURN_URI=http://localhost:4000/api/open-banking/return',
@@ -23,8 +26,8 @@ try {
     'G_BANK_MAX_PAYMENT_EUR=100',
     'G_BANK_ENABLE_LIVE=false',
     'G_BANK_ENABLE_PROVIDER_PROBE=false',
-    'G_BANK_PROVIDER_PROBE_SECRET=',
-    'G_BANK_OPERATOR_SECRET=',
+    probeSecretKey + '=',
+    operatorSecretKey + '=',
     'G_BANK_SMOKE_BASE_URL=http://127.0.0.1:4000',
     ''
   ].join('\n'));
@@ -49,8 +52,863 @@ try {
   assert.match(envText, /^TRUELAYER_ENV=sandbox$/m);
   assert.match(envText, /^G_BANK_ENABLE_LIVE=false$/m);
   assert.match(envText, /^G_BANK_ENABLE_PROVIDER_PROBE=true$/m);
-  assert.match(envText, /^G_BANK_OPERATOR_SECRET=[0-9a-f]{64}$/m);
-  assert.match(envText, /^G_BANK_PROVIDER_PROBE_SECRET=[0-9a-f]{64}$/m);
+  assert.match(envText, new RegExp('^' + operatorSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, new RegExp('^' + clientSecretKey + '=  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(new RegExp('^' + operatorSecretKey + '=(.+)  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'))[1];
+  const opAfter = envAfter.match(new RegExp('^' + operatorSecretKey + '=(.+)  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'))[1];
+  const probeBefore = envBefore.match(new RegExp('^' + probeSecretKey + '=(.+)  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'))[1];
+  const probeAfter = envAfter.match(new RegExp('^' + probeSecretKey + '=(.+)  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'))[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
+  assert.match(envText, new RegExp('^' + probeSecretKey + '=[0-9a-f]{64}  assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
+  assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
+  assert.match(envText, /^TRUELAYER_SIGNING_KID=$/m);
+
+  const envBefore = fs.readFileSync(envPath, 'utf8');
+  const privateBefore = fs.readFileSync(privatePath, 'utf8');
+  const second = spawnSync(process.execPath, [script, '--enable-probe'], {
+    cwd: temp,
+    encoding: 'utf8'
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /Keypair: REUSED/);
+  assert.equal(fs.readFileSync(privatePath, 'utf8'), privateBefore);
+
+  const envAfter = fs.readFileSync(envPath, 'utf8');
+  const opBefore = envBefore.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const opAfter = envAfter.match(/^G_BANK_OPERATOR_SECRET=(.+)$/m)[1];
+  const probeBefore = envBefore.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  const probeAfter = envAfter.match(/^G_BANK_PROVIDER_PROBE_SECRET=(.+)$/m)[1];
+  assert.equal(opAfter, opBefore);
+  assert.equal(probeAfter, probeBefore);
+
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(envPath).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(privatePath).mode & 0o777, 0o600);
+  }
+
+  console.log('G-Bank sandbox bootstrap tests: PASS');
+} finally {
+  fs.rmSync(temp, { recursive: true, force: true });
+}
+, 'm'));
   assert.match(envText, /^TRUELAYER_PRIVATE_KEY_B64=[A-Za-z0-9+/=]+$/m);
   assert.match(envText, /^TRUELAYER_CLIENT_ID=$/m);
   assert.match(envText, /^TRUELAYER_CLIENT_SECRET=$/m);
