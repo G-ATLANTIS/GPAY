@@ -181,6 +181,17 @@ async function run() {
     );
 
     if (observation.failure) {
+      const serverOutput = String(localServer.getOutput?.() || '');
+      const rejectLines = serverOutput
+        .split(/\r?\n/)
+        .filter(line => line.includes('[G-Bank webhook reject]'))
+        .slice(-5);
+
+      if (rejectLines.length > 0) {
+        console.error('GPAY webhook verifier diagnostics:');
+        for (const line of rejectLines) console.error(line);
+      }
+
       throw new Error(`Official TrueLayer router received the webhook but local GPAY rejected it: ${observation.line}`);
     }
     if (!observation.success) {
