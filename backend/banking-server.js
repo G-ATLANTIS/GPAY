@@ -13,6 +13,23 @@ const openBankingJson = express.json({
   }
 });
 
+app.use('/api/open-banking/webhook', (req, res, next) => {
+  const startedAt = Date.now();
+  const signaturePresent = Boolean(req.get('Tl-Signature'));
+  const timestampPresent = Boolean(req.get('X-TL-Webhook-Timestamp'));
+  res.on('finish', () => {
+    console.log(
+      '[G-Bank webhook]',
+      `method=${req.method}`,
+      `status=${res.statusCode}`,
+      `signature=${signaturePresent ? 'present' : 'missing'}`,
+      `timestamp=${timestampPresent ? 'present' : 'missing'}`,
+      `ms=${Date.now() - startedAt}`
+    );
+  });
+  next();
+});
+
 app.use('/api/open-banking', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Pragma', 'no-cache');
