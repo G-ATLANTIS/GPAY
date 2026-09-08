@@ -3,9 +3,83 @@ require('dotenv').config();
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 
 const baseUrl = String(process.env.G_BANK_SMOKE_BASE_URL || 'http://127.0.0.1:4000').replace(/\/$/, '');
 const smokeRoot = path.resolve(process.cwd(), '.secrets', 'smoke');
+
+
+async function localServerReachable() {
+  try {
+    const response = await fetch(`${baseUrl}/`, {
+      signal: AbortSignal.timeout(1000)
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startLocalServerIfNeeded() {
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error('G_BANK_SMOKE_BASE_URL is invalid.');
+  }
+
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname)) {
+    return { child: null, started: false };
+  }
+
+  if (await localServerReachable()) {
+    return { child: null, started: false };
+  }
+
+  const child = spawn(process.execPath, ['backend/banking-server.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: parsed.port || process.env.PORT || '4000'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  let output = '';
+  child.stdout.on('data', chunk => {
+    output = (output + chunk.toString('utf8')).slice(-4096);
+  });
+  child.stderr.on('data', chunk => {
+    output = (output + chunk.toString('utf8')).slice(-4096);
+  });
+
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      const last = output.split('\n').map(v => v.trim()).filter(Boolean).slice(-1)[0] || '';
+      throw new Error(`Local G-Bank server exited early with code ${child.exitCode}${last ? `: ${last}` : ''}`);
+    }
+    if (await localServerReachable()) {
+      return { child, started: true };
+    }
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  try { child.kill('SIGTERM'); } catch {}
+  const last = output.split('\n').map(v => v.trim()).filter(Boolean).slice(-1)[0] || '';
+  throw new Error(`Local G-Bank server did not become reachable${last ? `: ${last}` : ''}`);
+}
+
+async function withLocalServer(fn) {
+  const server = await startLocalServerIfNeeded();
+  try {
+    return await fn();
+  } finally {
+    if (server.started && server.child) {
+      try { server.child.kill('SIGTERM'); } catch {}
+    }
+  }
+}
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -220,10 +294,12 @@ async function main() {
   }
 
   try {
-    if (command === 'probe') await probe();
-    if (command === 'create') await createPayment();
-    if (command === 'status') await status(arg('--payment-id'));
-    if (command === 'reconcile') await reconcile(arg('--payment-id'));
+    await withLocalServer(async () => {
+      if (command === 'probe') await probe();
+      if (command === 'create') await createPayment();
+      if (command === 'status') await status(arg('--payment-id'));
+      if (command === 'reconcile') await reconcile(arg('--payment-id'));
+    });
   } catch (err) {
     console.error('Sandbox Banking smoke: BLOCKED');
     console.error(err.message || err);
@@ -241,5 +317,8 @@ module.exports = {
   probe,
   createPayment,
   status,
-  reconcile
+  reconcile,
+  localServerReachable,
+  startLocalServerIfNeeded,
+  withLocalServer
 };
