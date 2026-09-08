@@ -249,6 +249,12 @@ function verifyWebhookSignature({
   const jwk = keys.find(key => key && key.kid === parsed.header.kid);
   if (!jwk) throw new Error('webhook_jwk_not_found');
 
+  // A JWKS can legitimately contain keys for multiple algorithms/usages.
+  // TrueLayer's webhook contract binds the signature to one key via kid, so
+  // enforce EC/P-521 on that selected key rather than rejecting unrelated keys.
+  if (jwk.kty !== 'EC') throw new Error('webhook_jwk_key_type_invalid');
+  if (jwk.crv !== 'P-521') throw new Error('webhook_jwk_curve_invalid');
+
   let publicKey;
   try {
     publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
@@ -299,11 +305,12 @@ function validateWebhookJwks(jwks) {
     throw new Error('webhook_jwks_key_count_invalid');
   }
 
+  const seenKids = new Set();
   for (const key of jwks.keys) {
     if (!key || typeof key !== 'object') throw new Error('webhook_jwks_key_invalid');
     if (typeof key.kid !== 'string' || !key.kid) throw new Error('webhook_jwks_kid_invalid');
-    if (key.kty && key.kty !== 'EC') throw new Error('webhook_jwks_key_type_invalid');
-    if (key.crv && key.crv !== 'P-521') throw new Error('webhook_jwks_curve_invalid');
+    if (seenKids.has(key.kid)) throw new Error('webhook_jwks_duplicate_kid');
+    seenKids.add(key.kid);
   }
 
   return jwks;
