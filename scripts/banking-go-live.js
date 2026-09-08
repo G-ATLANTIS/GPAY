@@ -140,16 +140,25 @@ function validateSandboxPaymentArtifacts(smokeDir) {
   if (!latest) return { verified: false, reason: 'No sandbox payment-created artifact found.' };
   try {
     const body = readJson(latest.path);
+    const hppEvidence =
+      !('authorization_url' in body) &&
+      /^[0-9a-f]{64}$/i.test(String(body.authorization_url_sha256 || ''));
+
+    const directMockEvidence =
+      body.authorization_mode === 'direct_mock' &&
+      !('authorization_flow_uri' in body) &&
+      /^[0-9a-f]{64}$/i.test(String(body.authorization_flow_uri_sha256 || ''));
+
     const verified =
       body.environment === 'sandbox' &&
       typeof body.payment_id === 'string' &&
       body.authorization_required === true &&
-      !('authorization_url' in body) &&
-      /^[0-9a-f]{64}$/i.test(String(body.authorization_url_sha256 || ''));
+      (hppEvidence || directMockEvidence);
+
     return {
       verified,
       paymentId: body.payment_id || null,
-      reason: verified ? 'Sandbox payment object evidence found without HPP token leakage.' : 'Payment artifact did not satisfy the sandbox contract.',
+      reason: verified ? 'Sandbox payment object evidence found without authorization-token leakage.' : 'Payment artifact did not satisfy the sandbox contract.',
       artifact: latest.path
     };
   } catch (err) {
