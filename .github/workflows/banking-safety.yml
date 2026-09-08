@@ -1,0 +1,84 @@
+name: Banking safety checks
+
+on:
+  pull_request:
+    paths:
+      - 'backend/routes/openbanking.js'
+      - 'backend/tests/openbanking-policy.test.js'
+      - 'scripts/generate-truelayer-keypair.js'
+      - 'scripts/generate-g-bank-approval.js'
+      - 'scripts/record-banking-evidence.js'
+      - 'scripts/run-banking-sandbox-smoke.js'
+      - 'scripts/route-banking-sandbox-webhooks.js'
+      - 'scripts/generate-banking-sandbox-webhook.js'
+      - 'scripts/test-official-truelayer-webhook.js'
+      - 'scripts/test-official-truelayer-stack.js'
+      - 'backend/tests/banking-webhook-router.test.js'
+      - 'backend/tests/banking-webhook-generator.test.js'
+      - 'backend/tests/banking-official-webhook.test.js'
+      - 'backend/tests/banking-official-stack.test.js'
+      - 'backend/tests/banking-smoke.test.js'
+      - 'scripts/check-banking-readiness.js'
+      - 'backend/index.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'OPEN_BANKING.md'
+      - '.env.example'
+  push:
+    branches:
+      - fix/open-banking-truelayer-v1
+
+permissions:
+  contents: read
+
+jobs:
+  banking:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Syntax checks
+        run: npm run check:banking
+
+      - name: Offline banking policy tests
+        run: npm run test:banking
+
+      - name: Sandbox banking smoke runner tests
+        run: npm run test:banking:smoke
+
+      - name: Native sandbox webhook router tests
+        run: npm run test:banking:webhook-router
+
+      - name: Native provider webhook generator tests
+        run: npm run test:banking:webhook-generator
+
+      - name: Official TrueLayer webhook diagnostic tests
+        run: npm run test:banking:official-webhook:unit
+
+      - name: Official TrueLayer stack diagnostic tests
+        run: npm run test:banking:official-stack:unit
+
+      - name: One-command go-live orchestrator tests
+        run: npm run test:banking:go-live
+
+      - name: Sandbox bootstrap tests
+        run: npm run test:banking:bootstrap
+
+      - name: Confirm no obvious live secrets in tracked files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE 'MOLLIE_API_KEY=live_[A-Za-z0-9]+|TRUELAYER_CLIENT_SECRET=.+|G_BANK_APPROVAL_SECRET=.+|G_BANK_OPERATOR_SECRET=.+|G_BANK_PROVIDER_PROBE_SECRET=.+' -- ':!package-lock.json' ':!.github/workflows/banking-safety.yml'; then
+            echo 'Potential live secret detected in tracked files.'
+            exit 1
+          fi
+          echo 'Tracked secret scan: PASS'

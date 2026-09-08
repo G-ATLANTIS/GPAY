@@ -3,3 +3,4 @@
 !.env.example
 backend/.env
 backend/logs/*.log
+.secrets/
