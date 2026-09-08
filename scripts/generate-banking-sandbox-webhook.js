@@ -204,7 +204,7 @@ async function executeMockPayment(authorizationUri, httpClient = axios) {
   return { mockPaymentId };
 }
 
-async function waitForMatchingWebhook(paymentId, attempts = 20) {
+async function waitForMatchingWebhook(paymentId, attempts = 40) {
   let token = await webhookRouter.getAccessToken();
   for (let i = 1; i <= attempts; i += 1) {
     let result = await webhookRouter.runOnce(token);
@@ -216,7 +216,7 @@ async function waitForMatchingWebhook(paymentId, attempts = 20) {
       item => String(item.paymentId || '').toLowerCase() === String(paymentId).toLowerCase()
     );
     if (matching) return matching;
-    if (i < attempts) await new Promise(resolve => setTimeout(resolve, 1500));
+    if (i < attempts) await new Promise(resolve => setTimeout(resolve, 1000));
   }
   throw new Error('No matching TrueLayer sandbox webhook arrived through the provider webhook router.');
 }
@@ -242,10 +242,17 @@ async function run() {
     );
     console.log('Payment artifact:', artifact);
 
+    // TrueLayer's official usage runs route-webhooks continuously before
+    // generate-webhook. Start the pull consumer first so the sandbox event
+    // cannot be missed by a late subscriber.
+    console.log('TrueLayer webhook router: polling before provider Execute.');
+    const webhookPromise = waitForMatchingWebhook(paymentId);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
     await executeMockPayment(authorizationUri);
     console.log('TrueLayer mock provider action: Execute submitted.');
 
-    const webhook = await waitForMatchingWebhook(paymentId);
+    const webhook = await webhookPromise;
     console.log(
       `Matching webhook verified/forwarded: type=${webhook.type} payment_id=${webhook.paymentId}`
     );
