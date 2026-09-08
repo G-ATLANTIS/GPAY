@@ -32,6 +32,13 @@ try {
   assert.equal(failure.success, false);
   assert.equal(failure.failure, true);
 
+  const queuedFailureId = '06b4e1b5-f9d7-4b6f-a6b6-e9ba97b9665c';
+  const blocking = mod.latestOfficialRouterFailure(
+    `Type: payment_failed, Event id: old, Payment id: ${queuedFailureId}, => http://127.0.0.1:4000/api/open-banking/webhook, FAILURE, status: 401 Unauthorized\n`
+  );
+  assert.equal(blocking.seen, true);
+  assert.equal(blocking.paymentId, queuedFailureId);
+
   const ansi = '\u001b[32mSUCCESS\u001b[0m';
   assert.equal(mod.stripAnsi(ansi), 'SUCCESS');
 
