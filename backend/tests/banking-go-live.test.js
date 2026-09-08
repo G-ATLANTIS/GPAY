@@ -118,6 +118,26 @@ try {
   assert.equal(payment.verified, true);
   assert.equal(payment.paymentId, paymentId);
 
+  const directPaymentId = '33333333-3333-4333-8333-333333333333';
+  const directPaymentArtifact = path.join(
+    smokeDir,
+    `payment-created-${directPaymentId}-2026-09-08T00-00-01-500Z.json`
+  );
+  fs.writeFileSync(directPaymentArtifact, JSON.stringify({
+    provider: 'truelayer',
+    environment: 'sandbox',
+    payment_id: directPaymentId,
+    status: 'authorization_required',
+    authorization_required: true,
+    authorization_mode: 'direct_mock',
+    authorization_flow_uri_sha256: 'd'.repeat(64),
+    verified_value_flow: false
+  }));
+  const directPayment = validateSandboxPaymentArtifacts(smokeDir);
+  assert.equal(directPayment.verified, true);
+  assert.equal(directPayment.paymentId, directPaymentId);
+  fs.unlinkSync(directPaymentArtifact);
+
   const reconcileArtifact = path.join(smokeDir, `payment-reconcile-${paymentId}-2026-09-08T00-00-02-000Z.json`);
   fs.writeFileSync(reconcileArtifact, JSON.stringify({
     provider: 'truelayer',
