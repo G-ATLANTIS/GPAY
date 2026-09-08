@@ -50,6 +50,9 @@ jobs:
       - name: One-command go-live orchestrator tests
         run: npm run test:banking:go-live
 
+      - name: Sandbox bootstrap tests
+        run: npm run test:banking:bootstrap
+
       - name: Confirm no obvious live secrets in tracked files
         shell: bash
         run: |
