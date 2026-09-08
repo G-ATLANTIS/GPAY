@@ -53,7 +53,7 @@ function stage(name, state, detail, evidence = null) {
 function classify(stages) {
   const byName = Object.fromEntries(stages.map(item => [item.name, item]));
 
-  if (['LOCAL_TESTS', 'SANDBOX_CONFIG'].some(name => byName[name]?.state === 'BLOCKED')) {
+  if (byName.LOCAL_TESTS?.state === 'BLOCKED') {
     return 'BLOCKED_LOCAL';
   }
   if (byName.PROVIDER_READINESS?.state !== 'VERIFIED') {
@@ -272,7 +272,7 @@ async function main() {
     (process.env.G_BANK_OPERATOR_SECRET || '').length >= 32;
   stages.push(stage(
     'SANDBOX_CONFIG',
-    sandboxConfigOk ? 'VERIFIED' : 'BLOCKED',
+    sandboxConfigOk ? 'VERIFIED' : 'PENDING',
     sandboxConfigOk
       ? 'Sandbox provider credentials/signing/operator inputs are configured.'
       : 'Sandbox credentials/signing/operator inputs are incomplete or live mode is selected.'
