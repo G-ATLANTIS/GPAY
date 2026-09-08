@@ -12,9 +12,11 @@ on:
       - 'scripts/route-banking-sandbox-webhooks.js'
       - 'scripts/generate-banking-sandbox-webhook.js'
       - 'scripts/test-official-truelayer-webhook.js'
+      - 'scripts/test-official-truelayer-stack.js'
       - 'backend/tests/banking-webhook-router.test.js'
       - 'backend/tests/banking-webhook-generator.test.js'
       - 'backend/tests/banking-official-webhook.test.js'
+      - 'backend/tests/banking-official-stack.test.js'
       - 'backend/tests/banking-smoke.test.js'
       - 'scripts/check-banking-readiness.js'
       - 'backend/index.js'
@@ -61,6 +63,9 @@ jobs:
 
       - name: Official TrueLayer webhook diagnostic tests
         run: npm run test:banking:official-webhook:unit
+
+      - name: Official TrueLayer stack diagnostic tests
+        run: npm run test:banking:official-stack:unit
 
       - name: One-command go-live orchestrator tests
         run: npm run test:banking:go-live
