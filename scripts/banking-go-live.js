@@ -16,9 +16,9 @@ function nowSafe() {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
-function latestMatching(dir, prefix) {
-  if (!fs.existsSync(dir)) return null;
-  const files = fs.readdirSync(dir)
+function allMatching(dir, prefix) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
     .filter(name => name.startsWith(prefix) && name.endsWith('.json'))
     .map(name => ({
       name,
@@ -26,7 +26,10 @@ function latestMatching(dir, prefix) {
       mtimeMs: fs.statSync(path.join(dir, name)).mtimeMs
     }))
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return files[0] || null;
+}
+
+function latestMatching(dir, prefix) {
+  return allMatching(dir, prefix)[0] || null;
 }
 
 function readJson(file) {
@@ -135,11 +138,10 @@ function validateProviderReadinessArtifact(smokeDir) {
   }
 }
 
-function validateSandboxPaymentArtifacts(smokeDir) {
-  const latest = latestMatching(smokeDir, 'payment-created-');
-  if (!latest) return { verified: false, reason: 'No sandbox payment-created artifact found.' };
+function validateSandboxPaymentArtifactFile(candidate) {
+  if (!candidate) return { verified: false, reason: 'No sandbox payment-created artifact found.' };
   try {
-    const body = readJson(latest.path);
+    const body = readJson(candidate.path);
     const hppEvidence =
       !('authorization_url' in body) &&
       /^[0-9a-f]{64}$/i.test(String(body.authorization_url_sha256 || ''));
@@ -159,11 +161,16 @@ function validateSandboxPaymentArtifacts(smokeDir) {
       verified,
       paymentId: body.payment_id || null,
       reason: verified ? 'Sandbox payment object evidence found without authorization-token leakage.' : 'Payment artifact did not satisfy the sandbox contract.',
-      artifact: latest.path
+      artifact: candidate.path,
+      mtimeMs: candidate.mtimeMs
     };
   } catch (err) {
-    return { verified: false, reason: `Unreadable payment-created artifact: ${err.message}` };
+    return { verified: false, reason: `Unreadable payment-created artifact: ${err.message}`, artifact: candidate.path, mtimeMs: candidate.mtimeMs };
   }
+}
+
+function validateSandboxPaymentArtifacts(smokeDir) {
+  return validateSandboxPaymentArtifactFile(latestMatching(smokeDir, 'payment-created-'));
 }
 
 function validateReconciliationArtifact(smokeDir, paymentId) {
@@ -188,6 +195,54 @@ function validateReconciliationArtifact(smokeDir, paymentId) {
   } catch (err) {
     return { verified: false, reason: `Unreadable reconciliation artifact: ${err.message}` };
   }
+}
+
+
+function selectSandboxEvidenceBundle(smokeDir) {
+  const candidates = allMatching(smokeDir, 'payment-created-');
+  if (candidates.length === 0) {
+    const payment = { verified: false, reason: 'No sandbox payment-created artifact found.' };
+    return {
+      payment,
+      reconciliation: validateReconciliationArtifact(smokeDir, null),
+      newerIncompleteAttempts: 0,
+      selectedCompleteBundle: false
+    };
+  }
+
+  let newestVerifiedPayment = null;
+  let incompleteVerifiedAttempts = 0;
+
+  for (const candidate of candidates) {
+    const payment = validateSandboxPaymentArtifactFile(candidate);
+    if (!payment.verified) continue;
+    if (!newestVerifiedPayment) newestVerifiedPayment = payment;
+
+    const reconciliation = validateReconciliationArtifact(smokeDir, payment.paymentId);
+    if (reconciliation.verified) {
+      return {
+        payment: {
+          ...payment,
+          reason: incompleteVerifiedAttempts > 0
+            ? `Selected latest coherent sandbox payment/reconciliation bundle; ignored ${incompleteVerifiedAttempts} newer incomplete verified payment attempt(s).`
+            : payment.reason
+        },
+        reconciliation,
+        newerIncompleteAttempts: incompleteVerifiedAttempts,
+        selectedCompleteBundle: true
+      };
+    }
+
+    incompleteVerifiedAttempts += 1;
+  }
+
+  const payment = newestVerifiedPayment || validateSandboxPaymentArtifactFile(candidates[0]);
+  return {
+    payment,
+    reconciliation: validateReconciliationArtifact(smokeDir, payment.paymentId),
+    newerIncompleteAttempts: Math.max(0, incompleteVerifiedAttempts - 1),
+    selectedCompleteBundle: false
+  };
 }
 
 function detectRealWebhook(paymentId) {
@@ -449,15 +504,22 @@ async function main() {
     provider.artifact || null
   ));
 
-  const payment = validateSandboxPaymentArtifacts(smokeDir);
+  const sandboxEvidence = selectSandboxEvidenceBundle(smokeDir);
+  const payment = sandboxEvidence.payment;
+  const reconciliation = sandboxEvidence.reconciliation;
+
   stages.push(stage(
     'SANDBOX_PAYMENT',
     payment.verified ? 'VERIFIED' : 'PENDING',
     payment.reason,
-    payment.artifact || null
+    {
+      artifact: payment.artifact || null,
+      payment_id: payment.paymentId || null,
+      selected_complete_bundle: sandboxEvidence.selectedCompleteBundle,
+      newer_incomplete_attempts: sandboxEvidence.newerIncompleteAttempts
+    }
   ));
 
-  const reconciliation = validateReconciliationArtifact(smokeDir, payment.paymentId);
   stages.push(stage(
     'SANDBOX_RECONCILIATION',
     reconciliation.verified ? 'VERIFIED' : 'PENDING',
@@ -538,8 +600,10 @@ if (require.main === module) {
 module.exports = {
   latestMatching,
   validateProviderReadinessArtifact,
+  validateSandboxPaymentArtifactFile,
   validateSandboxPaymentArtifacts,
   validateReconciliationArtifact,
+  selectSandboxEvidenceBundle,
   detectRealWebhook,
   secretRotationState,
   productionConfigState,
