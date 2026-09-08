@@ -11,6 +11,7 @@ const {
   detectRealWebhook,
   secretRotationState,
   productionConfigState,
+  isolatedBankingTestEnv,
   classify
 } = require('../../scripts/banking-go-live');
 
@@ -69,6 +70,26 @@ function stage(name, state) {
 }
 
 try {
+
+  // Real runtime secrets must never influence the local deterministic test subprocesses.
+  process.env.TRUELAYER_CLIENT_ID = 'real-runtime-client';
+  process.env.TRUELAYER_CLIENT_SECRET = 'real-runtime-secret';
+  process.env.TRUELAYER_SIGNING_KID = 'real-runtime-kid';
+  process.env.TRUELAYER_PRIVATE_KEY_B64 = 'real-runtime-private-key';
+  process.env.G_BANK_OPERATOR_SECRET = 'real-runtime-operator-secret';
+  process.env.G_BANK_PROVIDER_PROBE_SECRET = 'real-runtime-probe-secret';
+  process.env.G_BANK_ENABLE_PROVIDER_PROBE = 'true';
+  const isolated = isolatedBankingTestEnv();
+  assert.equal('TRUELAYER_CLIENT_ID' in isolated, false);
+  assert.equal('TRUELAYER_CLIENT_SECRET' in isolated, false);
+  assert.equal('TRUELAYER_SIGNING_KID' in isolated, false);
+  assert.equal('TRUELAYER_PRIVATE_KEY_B64' in isolated, false);
+  assert.equal('G_BANK_OPERATOR_SECRET' in isolated, false);
+  assert.equal('G_BANK_PROVIDER_PROBE_SECRET' in isolated, false);
+  assert.equal('G_BANK_ENABLE_PROVIDER_PROBE' in isolated, false);
+  assert.equal(isolated.NODE_ENV, 'test');
+  console.log('runtime secrets are stripped from local test subprocesses');
+
   const providerArtifact = path.join(smokeDir, 'provider-readiness-2026-09-08T00-00-00-000Z.json');
   fs.writeFileSync(providerArtifact, JSON.stringify({
     provider: 'truelayer',
