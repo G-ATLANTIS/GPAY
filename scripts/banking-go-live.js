@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const openBanking = require('../backend/routes/openbanking')._test;
 const {
   validateEvidenceReceipt,
@@ -249,6 +249,55 @@ function productionConfigState() {
   };
 }
 
+async function isLocalGpayReachable(baseUrl) {
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/`, {
+      signal: AbortSignal.timeout(1200)
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startTemporaryLocalServerIfNeeded() {
+  const baseUrl = String(process.env.G_BANK_SMOKE_BASE_URL || 'http://127.0.0.1:4000').replace(/\/$/, '');
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return { started: false, child: null, detail: 'Invalid G_BANK_SMOKE_BASE_URL.' };
+  }
+
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname)) {
+    return { started: false, child: null, detail: 'Remote smoke base URL; automatic local server start skipped.' };
+  }
+
+  if (await isLocalGpayReachable(baseUrl)) {
+    return { started: false, child: null, detail: 'Existing local GPAY server detected.' };
+  }
+
+  const child = spawn(process.execPath, ['backend/index.js'], {
+    cwd: root,
+    env: process.env,
+    stdio: ['ignore', 'ignore', 'ignore']
+  });
+
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      return { started: false, child: null, detail: `Local GPAY server exited early with code ${child.exitCode}.` };
+    }
+    if (await isLocalGpayReachable(baseUrl)) {
+      return { started: true, child, detail: 'Temporary local GPAY server started.' };
+    }
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  try { child.kill('SIGTERM'); } catch {}
+  return { started: false, child: null, detail: 'Temporary local GPAY server did not become reachable.' };
+}
+
 async function maybeRunProbe() {
   if (!process.argv.includes('--run-sandbox-probe')) {
     return { attempted: false, ok: false, detail: 'Not requested.' };
@@ -260,11 +309,22 @@ async function maybeRunProbe() {
     return { attempted: true, ok: false, detail: 'Probe refused because live banking is enabled.' };
   }
 
-  const result = runLocalCommand(process.execPath, ['scripts/run-banking-sandbox-smoke.js', 'probe']);
+  const localServer = await startTemporaryLocalServerIfNeeded();
+  let result;
+  try {
+    result = runLocalCommand(process.execPath, ['scripts/run-banking-sandbox-smoke.js', 'probe']);
+  } finally {
+    if (localServer.started && localServer.child) {
+      try { localServer.child.kill('SIGTERM'); } catch {}
+    }
+  }
+
   return {
     attempted: true,
     ok: result.ok,
-    detail: result.ok ? 'Sandbox provider probe completed.' : 'Sandbox provider probe failed.',
+    detail: result.ok
+      ? `Sandbox provider probe completed. ${localServer.detail}`
+      : `Sandbox provider probe failed. ${localServer.detail}`,
     stdout: result.stdout,
     stderr: result.stderr
   };
