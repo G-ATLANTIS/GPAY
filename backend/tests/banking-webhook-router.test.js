@@ -116,6 +116,65 @@ function response(status, body) {
     assert.equal(unauthorized.pulled, 0);
     assert.equal(unauthorized.forwarded.length, 0);
 
+    let transientCalls = 0;
+    const retryDelays = [];
+    const transient = await router.pullWebhooks(
+      'sandbox-access-token',
+      async (url) => {
+        assert.equal(url, router.ROUTER_URL);
+        transientCalls += 1;
+        if (transientCalls < 3) {
+          const err = new TypeError('fetch failed');
+          err.cause = { code: 'UND_ERR_CONNECT_TIMEOUT' };
+          throw err;
+        }
+        return response(200, { webhooks: [] });
+      },
+      {
+        maxRetries: 3,
+        sleepFn: async ms => { retryDelays.push(ms); }
+      }
+    );
+    assert.equal(transient.unauthorized, false);
+    assert.equal(transient.webhooks.length, 0);
+    assert.equal(transient.attempts, 3);
+    assert.deepEqual(retryDelays, [500, 1000]);
+
+    let fiveHundredCalls = 0;
+    const recovered500 = await router.pullWebhooks(
+      'sandbox-access-token',
+      async () => {
+        fiveHundredCalls += 1;
+        return fiveHundredCalls === 1
+          ? response(503, {})
+          : response(200, { webhooks: [] });
+      },
+      {
+        maxRetries: 3,
+        sleepFn: async () => {}
+      }
+    );
+    assert.equal(recovered500.attempts, 2);
+
+    let terminalCalls = 0;
+    await assert.rejects(
+      () => router.pullWebhooks(
+        'sandbox-access-token',
+        async () => {
+          terminalCalls += 1;
+          const err = new TypeError('fetch failed');
+          err.cause = { code: 'EAI_AGAIN' };
+          throw err;
+        },
+        {
+          maxRetries: 2,
+          sleepFn: async () => {}
+        }
+      ),
+      /network failure after 3 attempt\(s\); cause=EAI_AGAIN/
+    );
+    assert.equal(terminalCalls, 3);
+
     console.log('G-Bank native webhook router tests: PASS');
   } finally {
     for (const key of Object.keys(process.env)) {
