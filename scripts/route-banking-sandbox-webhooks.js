@@ -1,5 +1,7 @@
 require('dotenv').config();
 
+const { spawn } = require('node:child_process');
+
 const ROUTER_URL = 'https://webhook-router.truelayer-sandbox.com/pull';
 const DEFAULT_DESTINATION = 'http://127.0.0.1:4000/api/open-banking/webhook';
 const POLL_MS = 5000;
@@ -23,6 +25,57 @@ function destinationUrl() {
     throw new Error('Sandbox webhook router destination path must be /api/open-banking/webhook.');
   }
   return parsed.toString().replace(/\/$/, '');
+}
+
+
+async function localDestinationReachable(fetchFn = fetch) {
+  try {
+    const parsed = new URL(destinationUrl());
+    const root = `${parsed.protocol}//${parsed.host}/`;
+    const response = await fetchFn(root, { signal: AbortSignal.timeout(1000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startLocalBankingServerIfNeeded() {
+  if (await localDestinationReachable()) {
+    return { started: false, child: null, detail: 'existing local G-Bank server detected' };
+  }
+
+  const parsed = new URL(destinationUrl());
+  const child = spawn(process.execPath, ['backend/banking-server.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: parsed.port || process.env.PORT || '4000'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  let output = '';
+  child.stdout.on('data', chunk => {
+    output = (output + chunk.toString('utf8')).slice(-4096);
+  });
+  child.stderr.on('data', chunk => {
+    output = (output + chunk.toString('utf8')).slice(-4096);
+  });
+
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      const last = output.split('\n').map(v => v.trim()).filter(Boolean).slice(-1)[0] || '';
+      throw new Error(`Local G-Bank server exited early with code ${child.exitCode}${last ? `: ${last}` : ''}`);
+    }
+    if (await localDestinationReachable()) {
+      return { started: true, child, detail: 'temporary local G-Bank server started' };
+    }
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  try { child.kill('SIGTERM'); } catch {}
+  throw new Error('Local G-Bank server did not become reachable.');
 }
 
 function credentials() {
@@ -116,12 +169,12 @@ async function forwardWebhook(webhook, fetchFn = fetch) {
 
 async function runOnce(token, fetchFn = fetch) {
   const pulled = await pullWebhooks(token, fetchFn);
-  if (pulled.unauthorized) return { refreshToken: true, forwarded: [] };
+  if (pulled.unauthorized) return { refreshToken: true, pulled: 0, forwarded: [] };
   const forwarded = [];
   for (const webhook of pulled.webhooks) {
     forwarded.push(await forwardWebhook(webhook, fetchFn));
   }
-  return { refreshToken: false, forwarded };
+  return { refreshToken: false, pulled: pulled.webhooks.length, forwarded };
 }
 
 async function main() {
@@ -132,16 +185,41 @@ async function main() {
   console.log('Live banking: DISABLED');
   console.log('Credentials: loaded from .env (not command-line arguments)');
 
+  const localServer = await startLocalBankingServerIfNeeded();
+  console.log('Local G-Bank:', localServer.detail);
+
   let token = await getAccessToken();
   console.log('TrueLayer sandbox token: OK');
-  console.log('Polling for queued webhooks every 5 seconds...');
 
+  if (process.argv.includes('--once')) {
+    try {
+      const result = await runOnce(token);
+      if (result.refreshToken) {
+        token = await getAccessToken();
+        const retry = await runOnce(token);
+        console.log(`Queued webhooks pulled: ${retry.pulled}`);
+        console.log(`Webhooks verified/forwarded: ${retry.forwarded.length}`);
+      } else {
+        console.log(`Queued webhooks pulled: ${result.pulled}`);
+        console.log(`Webhooks verified/forwarded: ${result.forwarded.length}`);
+      }
+    } finally {
+      if (localServer.started && localServer.child) {
+        try { localServer.child.kill('SIGTERM'); } catch {}
+      }
+    }
+    return;
+  }
+
+  console.log('Polling for queued webhooks every 5 seconds...');
   while (true) {
     try {
       const result = await runOnce(token);
       if (result.refreshToken) {
         token = await getAccessToken();
         console.log('TrueLayer sandbox token refreshed.');
+      } else if (result.pulled > 0) {
+        console.log(`Queue cycle: pulled=${result.pulled} forwarded=${result.forwarded.length}`);
       }
     } catch (err) {
       console.error('Webhook router cycle:', err.message || err);
@@ -167,5 +245,7 @@ module.exports = {
   getAccessToken,
   pullWebhooks,
   forwardWebhook,
-  runOnce
+  runOnce,
+  localDestinationReachable,
+  startLocalBankingServerIfNeeded
 };
