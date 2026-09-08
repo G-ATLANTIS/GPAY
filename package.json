@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "check:banking": "node --check backend/routes/openbanking.js && node --check backend/index.js && node --check scripts/generate-truelayer-keypair.js && node --check scripts/check-banking-readiness.js && node --check scripts/generate-g-bank-approval.js && node --check scripts/record-banking-evidence.js && node --check scripts/run-banking-sandbox-smoke.js && node --check scripts/banking-go-live.js",
+    "check:banking": "node --check backend/routes/openbanking.js && node --check backend/index.js && node --check scripts/generate-truelayer-keypair.js && node --check scripts/check-banking-readiness.js && node --check scripts/generate-g-bank-approval.js && node --check scripts/record-banking-evidence.js && node --check scripts/run-banking-sandbox-smoke.js && node --check scripts/banking-go-live.js && node --check scripts/bootstrap-banking-sandbox.js",
     "test:banking": "node backend/tests/openbanking-policy.test.js",
     "keygen:banking": "node scripts/generate-truelayer-keypair.js",
     "check:banking:env": "node scripts/check-banking-readiness.js",
@@ -13,7 +13,9 @@
     "smoke:banking": "node scripts/run-banking-sandbox-smoke.js",
     "test:banking:smoke": "node backend/tests/banking-smoke.test.js",
     "banking:go-live": "node scripts/banking-go-live.js",
-    "test:banking:go-live": "node backend/tests/banking-go-live.test.js"
+    "test:banking:go-live": "node backend/tests/banking-go-live.test.js",
+    "bootstrap:banking:sandbox": "node scripts/bootstrap-banking-sandbox.js",
+    "test:banking:bootstrap": "node backend/tests/banking-bootstrap.test.js"
   },
   "keywords": [],
   "author": "",
