@@ -490,3 +490,72 @@ A localhost `TRUELAYER_RETURN_URI` is suitable for a browser-based local sandbox
 Therefore a full webhook end-to-end sandbox test requires the registered webhook URI to route to the running G-Bank webhook endpoint. A purely local server without such routing can still test provider readiness, create/HPP, authenticated GET status and reconciliation, but cannot claim a live webhook receipt.
 
 Do not manufacture webhook evidence to fill this gap. The webhook edge remains unverified until an actual TrueLayer-signed webhook reaches the configured endpoint.
+
+
+## One-command go-live report
+
+Run:
+
+```bash
+npm run banking:go-live
+```
+
+This performs the local Banking syntax/policy/smoke tests, runs the runtime environment readiness check, inspects existing sandbox evidence, validates durable webhook/rotation evidence, evaluates production configuration, and writes one consolidated report under:
+
+```
+.secrets/go-live/go-live-report-<timestamp>.json
+```
+
+The command never creates a live payment and always reports:
+
+```
+LIVE_BANKING: FALSE
+VERIFIED_VALUE_FLOW: FALSE
+```
+
+until a separately authorized production canary and independent settlement evidence exist.
+
+When sandbox credentials are configured and the local G-Bank server is running, the same command can also perform only the non-payment provider probe:
+
+```bash
+npm run banking:go-live -- --run-sandbox-probe
+```
+
+That optional flag is still sandbox-only. It refuses to run the provider probe when `TRUELAYER_ENV` is not `sandbox` or when `G_BANK_ENABLE_LIVE=true`.
+
+Possible readiness states:
+
+```
+BLOCKED_LOCAL
+READY_FOR_SANDBOX_PROBE
+SANDBOX_PROVIDER_VERIFIED
+SANDBOX_E2E_PARTIAL
+SANDBOX_E2E_VERIFIED_SECURITY_BLOCKED
+READY_FOR_PRODUCTION_ONBOARDING
+PRODUCTION_CONFIG_BLOCKED
+READY_FOR_LIVE_CANARY
+```
+
+Interpretation:
+
+- `BLOCKED_LOCAL`: local Banking tests failed.
+- `READY_FOR_SANDBOX_PROBE`: complete sandbox credentials/public key/KID, then run the optional safe probe.
+- `SANDBOX_PROVIDER_VERIFIED`: TrueLayer signing/auth is proven, but the sandbox payment/HPP/reconcile path is incomplete.
+- `SANDBOX_E2E_PARTIAL`: sandbox payment/reconciliation exists, but no matching real TrueLayer-signed webhook receipt is present.
+- `SANDBOX_E2E_VERIFIED_SECURITY_BLOCKED`: sandbox E2E evidence exists, but historical provider-secret rotation/revocation evidence is still missing/invalid.
+- `READY_FOR_PRODUCTION_ONBOARDING`: sandbox/security gates are satisfied; production credentials/configuration remain.
+- `PRODUCTION_CONFIG_BLOCKED`: production fields may exist, but `check:banking:env` still fails.
+- `READY_FOR_LIVE_CANARY`: all pre-canary gates pass. This is **not** live status and does not authorize a production payment.
+
+Evidence is not promoted merely because a file exists. The orchestrator uses the same integrity/freshness validation for secret-rotation and sandbox-verification receipts and validates durable webhook receipt integrity before counting those gates as verified.
+
+The final promotion remains intentionally separate:
+
+```
+READY_FOR_LIVE_CANARY
+  -> explicit production payment authorization
+  -> tiny canary
+  -> provider/bank confirmation
+  -> independent creditor settlement/receipt evidence
+  -> only then consider LIVE_BANKING = TRUE
+```
