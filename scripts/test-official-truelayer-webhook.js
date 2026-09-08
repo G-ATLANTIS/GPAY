@@ -41,52 +41,37 @@ function parseForwardedPaymentId(text) {
   return match ? match[1].toLowerCase() : null;
 }
 
-function waitForOutput(child, predicate, timeoutMs, label) {
-  return new Promise((resolve, reject) => {
-    let buffer = '';
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(`Timed out waiting for ${label}.`));
-    }, timeoutMs);
+function captureChildOutput(child) {
+  let buffer = '';
+  let exitCode = null;
 
-    function onData(chunk) {
-      const text = chunk.toString('utf8');
-      process.stdout.write(text);
-      buffer = (buffer + text).slice(-65536);
-      const result = predicate(buffer);
-      if (result) {
-        cleanup();
-        resolve(result);
-      }
+  function append(stream, chunk) {
+    const text = chunk.toString('utf8');
+    stream.write(text);
+    buffer = (buffer + text).slice(-131072);
+  }
+
+  child.stdout?.on('data', chunk => append(process.stdout, chunk));
+  child.stderr?.on('data', chunk => append(process.stderr, chunk));
+  child.on('exit', code => { exitCode = code; });
+
+  return {
+    get buffer() { return buffer; },
+    get exitCode() { return exitCode; }
+  };
+}
+
+async function waitForCaptured(capture, predicate, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = predicate(capture.buffer);
+    if (result) return result;
+    if (capture.exitCode !== null) {
+      throw new Error(`${label} process exited early with code ${capture.exitCode}.`);
     }
-
-    function onErr(chunk) {
-      const text = chunk.toString('utf8');
-      process.stderr.write(text);
-      buffer = (buffer + text).slice(-65536);
-      const result = predicate(buffer);
-      if (result) {
-        cleanup();
-        resolve(result);
-      }
-    }
-
-    function onExit(code) {
-      cleanup();
-      reject(new Error(`${label} process exited early with code ${code}.`));
-    }
-
-    function cleanup() {
-      clearTimeout(timer);
-      child.stdout?.off('data', onData);
-      child.stderr?.off('data', onErr);
-      child.off('exit', onExit);
-    }
-
-    child.stdout?.on('data', onData);
-    child.stderr?.on('data', onErr);
-    child.on('exit', onExit);
-  });
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for ${label}.`);
 }
 
 async function run() {
@@ -115,9 +100,11 @@ async function run() {
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
+  const routerCapture = captureChildOutput(router);
+
   try {
-    await waitForOutput(
-      router,
+    await waitForCaptured(
+      routerCapture,
       output => output.includes('Polling for queued webhooks every 5 seconds...'),
       20000,
       'webhook router readiness'
@@ -165,8 +152,8 @@ async function run() {
     }
 
     console.log('Step 3: official generator completed; waiting for matching routed webhook.');
-    const forwardedId = await waitForOutput(
-      router,
+    const forwardedId = await waitForCaptured(
+      routerCapture,
       output => {
         const matches = [...String(output).matchAll(/Webhook VERIFIED\/FORWARDED[^\n]*payment_id=([0-9a-f-]{36})/ig)];
         for (const match of matches) {
@@ -204,6 +191,8 @@ module.exports = {
   DEFAULT_CLI,
   requireSandboxSafety,
   cliPath,
+  captureChildOutput,
+  waitForCaptured,
   parseOfficialPaymentId,
   parseForwardedPaymentId,
   run
