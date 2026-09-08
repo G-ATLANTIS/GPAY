@@ -103,6 +103,7 @@ function response(status, body) {
     });
 
     assert.equal(result.refreshToken, false);
+    assert.equal(result.pulled, 1);
     assert.equal(result.forwarded.length, 1);
     assert.equal(result.forwarded[0].type, 'payment_executed');
     assert.equal(result.forwarded[0].paymentId, '22222222-2222-4222-8222-222222222222');
@@ -112,6 +113,7 @@ function response(status, body) {
       return response(401, {});
     });
     assert.equal(unauthorized.refreshToken, true);
+    assert.equal(unauthorized.pulled, 0);
     assert.equal(unauthorized.forwarded.length, 0);
 
     console.log('G-Bank native webhook router tests: PASS');
