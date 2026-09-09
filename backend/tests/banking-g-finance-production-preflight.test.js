@@ -82,6 +82,15 @@ try {
   process.env.G_BANK_PROVIDER_PROBE_SECRET = 'x'.repeat(32);
   assert.equal(proof.requireProductionPreflightSafety(), 'x'.repeat(32));
 
+  process.env.TRUELAYER_CLIENT_ID = 'sandbox-example';
+  assert.throws(
+    () => proof.requireProductionPreflightSafety(),
+    /sandbox-prefixed TrueLayer client_id/
+  );
+
+  process.env.TRUELAYER_CLIENT_ID = 'live-example';
+  assert.equal(proof.requireProductionPreflightSafety(), 'x'.repeat(32));
+
   process.env.TRUELAYER_ENV = 'sandbox';
   assert.throws(
     () => proof.requireProductionPreflightSafety(),
