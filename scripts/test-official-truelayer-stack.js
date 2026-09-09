@@ -76,37 +76,68 @@ function parseCreatedPaymentId(output) {
   return match ? match[1].toLowerCase() : null;
 }
 
-function officialRouterObservation(output, paymentId) {
+function parseGeneratedPaymentIds(output) {
+  const clean = stripAnsi(output);
+  const ids = [];
+  const patterns = [
+    /Created payment with id\s+([0-9a-f-]{36})/ig,
+    /Mock payment_id:\s*([0-9a-f-]{36})/ig
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(clean)) !== null) {
+      const id = match[1].toLowerCase();
+      if (!ids.includes(id)) ids.push(id);
+    }
+  }
+
+  return ids;
+}
+
+function officialRouterObservation(output, paymentIds) {
   const clean = stripAnsi(output);
   const lines = clean.split(/\r?\n/);
-  const wanted = String(paymentId || '').toLowerCase();
+  const wantedIds = (Array.isArray(paymentIds) ? paymentIds : [paymentIds])
+    .map(value => String(value || '').toLowerCase())
+    .filter(Boolean);
 
   for (const line of lines) {
-    if (!line.toLowerCase().includes(wanted)) continue;
     if (!/Payment id:/i.test(line)) continue;
+    const lower = line.toLowerCase();
+    const matchedPaymentId = wantedIds.find(id => lower.includes(id));
+    if (!matchedPaymentId) continue;
 
     return {
       seen: true,
       success: /SUCCESS/i.test(line),
       failure: /FAILURE/i.test(line),
+      paymentId: matchedPaymentId,
       line: line.trim()
     };
   }
 
-  return { seen: false, success: false, failure: false, line: null };
+  return { seen: false, success: false, failure: false, paymentId: null, line: null };
 }
 
-function latestOfficialRouterFailure(output) {
+function latestOfficialRouterFailure(output, paymentIds = null) {
   const clean = stripAnsi(output);
   const lines = clean.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const wantedIds = paymentIds === null
+    ? null
+    : (Array.isArray(paymentIds) ? paymentIds : [paymentIds])
+        .map(value => String(value || '').toLowerCase())
+        .filter(Boolean);
 
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
     if (!/Payment id:/i.test(line) || !/FAILURE/i.test(line)) continue;
     const match = line.match(/Payment id:\s*([0-9a-f-]{36})/i);
+    const paymentId = match ? match[1].toLowerCase() : null;
+    if (wantedIds && (!paymentId || !wantedIds.includes(paymentId))) continue;
     return {
       seen: true,
-      paymentId: match ? match[1].toLowerCase() : null,
+      paymentId,
       line
     };
   }
@@ -182,16 +213,22 @@ async function run() {
       throw new Error(`Official TrueLayer generator exited with code ${generatorExit}.`);
     }
 
-    const paymentId = parseCreatedPaymentId(generatorCapture.clean);
-    if (!paymentId) {
-      throw new Error('Could not parse payment ID from official TrueLayer generator output.');
+    const paymentIds = parseGeneratedPaymentIds(generatorCapture.clean);
+    if (paymentIds.length === 0) {
+      throw new Error('Could not parse payment IDs from official TrueLayer generator output.');
     }
 
     console.log('Step 3: generator completed; waiting for official router observation.');
+    console.log('Candidate payment IDs:', paymentIds.join(', '));
     const observation = await waitFor(
       routerCapture,
       output => {
-        const blockingFailure = latestOfficialRouterFailure(output);
+        const result = officialRouterObservation(output, paymentIds);
+        if (result.seen) return result;
+
+        // Ignore unrelated stale failures already present in the provider queue.
+        // Only a failure for one of this generator run's IDs can block this proof.
+        const blockingFailure = latestOfficialRouterFailure(output, paymentIds);
         if (blockingFailure.seen) {
           return {
             seen: true,
@@ -203,8 +240,7 @@ async function run() {
           };
         }
 
-        const result = officialRouterObservation(output, paymentId);
-        return result.seen ? result : null;
+        return null;
       },
       90000,
       'matching official TrueLayer routed webhook'
@@ -233,14 +269,15 @@ async function run() {
       throw new Error('Official TrueLayer router observed the payment without a success result.');
     }
 
+    const observedPaymentId = observation.paymentId || paymentIds[0];
     console.log('Official TrueLayer stack diagnostic: VERIFIED');
-    console.log('Payment ID:', paymentId);
+    console.log('Payment ID:', observedPaymentId);
     console.log('Provider generator: VERIFIED');
     console.log('Provider webhook router: VERIFIED');
     console.log('GPAY local webhook delivery: VERIFIED');
     console.log('GPAY signed webhook acceptance: VERIFIED');
     console.log('Go-live promotion: NOT PERFORMED');
-    return paymentId;
+    return observedPaymentId;
   } finally {
     try { router.kill('SIGTERM'); } catch {}
     if (localServer.started && localServer.child) {
@@ -263,6 +300,7 @@ module.exports = {
   requireSandboxSafety,
   stripAnsi,
   parseCreatedPaymentId,
+  parseGeneratedPaymentIds,
   officialRouterObservation,
   latestOfficialRouterFailure,
   waitFor,
