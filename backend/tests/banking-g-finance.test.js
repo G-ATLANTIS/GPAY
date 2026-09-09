@@ -11,19 +11,39 @@ const env = { ...process.env };
 try {
   const paymentId = '12345678-1234-4234-8234-123456789abc';
   const record = evidence.buildEvidenceRecord(
-    paymentId,
+    {
+      paymentId,
+      providerReadbackVerified: true,
+      providerStatus: 'executed',
+      webhookObserved: false
+    },
     '2026-09-09T16:30:00.000Z'
   );
 
   assert.equal(record.rail, 'G_BANK');
   assert.equal(record.evidence_type, 'WRITE_READBACK');
   assert.equal(record.environment, 'SANDBOX');
+  assert.equal(record.schema_version, 'g-finance-write-readback/1.1');
   assert.equal(record.readback_match, true);
+  assert.equal(record.provider_readback_verified, true);
+  assert.equal(record.provider_status, 'executed');
+  assert.equal(record.provider_webhook_router_verified, false);
+  assert.equal(record.local_webhook_delivery_verified, false);
+  assert.equal(record.signed_webhook_acceptance_verified, false);
   assert.equal(record.value_moved, false);
   assert.equal(record.creditor_settlement_proven, false);
   assert.equal(record.verified_value_flow, false);
   assert.match(record.record_sha256, /^[0-9a-f]{64}$/);
   assert.equal(evidence.validateEvidenceRecord(record), true);
+
+  assert.throws(
+    () => evidence.buildEvidenceRecord(paymentId, '2026-09-09T16:30:00.000Z'),
+    /Provider payment readback must be VERIFIED/
+  );
+  assert.throws(
+    () => evidence.validateEvidenceRecord({ ...record, provider_readback_verified: false }),
+    /incomplete sandbox write\/readback proof/
+  );
 
   assert.throws(
     () => evidence.validateEvidenceRecord({ ...record, verified_value_flow: true }),
