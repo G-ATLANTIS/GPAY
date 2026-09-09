@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "check:banking": "node --check backend/routes/openbanking.js && node --check backend/index.js && node --check backend/banking-server.js && node --check scripts/generate-truelayer-keypair.js && node --check scripts/check-banking-readiness.js && node --check scripts/generate-g-bank-approval.js && node --check scripts/record-banking-evidence.js && node --check scripts/run-banking-sandbox-smoke.js && node --check scripts/banking-go-live.js && node --check scripts/bootstrap-banking-sandbox.js && node --check scripts/route-banking-sandbox-webhooks.js && node --check scripts/generate-banking-sandbox-webhook.js && node --check scripts/test-official-truelayer-webhook.js && node --check scripts/test-official-truelayer-stack.js && node --check scripts/run-g-finance-sandbox-write-proof.js && node --check backend/tests/banking-g-finance.test.js && node --check scripts/run-g-finance-provider-auth-proof.js && node --check backend/tests/banking-g-finance-auth.test.js",
+    "check:banking": "node --check backend/routes/openbanking.js && node --check backend/index.js && node --check backend/banking-server.js && node --check scripts/generate-truelayer-keypair.js && node --check scripts/check-banking-readiness.js && node --check scripts/generate-g-bank-approval.js && node --check scripts/record-banking-evidence.js && node --check scripts/run-banking-sandbox-smoke.js && node --check scripts/banking-go-live.js && node --check scripts/bootstrap-banking-sandbox.js && node --check scripts/route-banking-sandbox-webhooks.js && node --check scripts/generate-banking-sandbox-webhook.js && node --check scripts/test-official-truelayer-webhook.js && node --check scripts/test-official-truelayer-stack.js && node --check scripts/run-g-finance-sandbox-write-proof.js && node --check backend/tests/banking-g-finance.test.js && node --check scripts/run-g-finance-provider-auth-proof.js && node --check backend/tests/banking-g-finance-auth.test.js && node --check scripts/run-g-finance-production-preflight.js && node --check backend/tests/banking-g-finance-production-preflight.test.js",
     "test:banking": "node backend/tests/openbanking-policy.test.js",
     "keygen:banking": "node scripts/generate-truelayer-keypair.js",
     "check:banking:env": "node scripts/check-banking-readiness.js",
@@ -27,7 +27,9 @@
     "proof:banking:g-finance-write": "node scripts/run-g-finance-sandbox-write-proof.js",
     "test:banking:g-finance": "node backend/tests/banking-g-finance.test.js",
     "proof:banking:g-finance-auth": "node scripts/run-g-finance-provider-auth-proof.js",
-    "test:banking:g-finance-auth": "node backend/tests/banking-g-finance-auth.test.js"
+    "test:banking:g-finance-auth": "node backend/tests/banking-g-finance-auth.test.js",
+    "proof:banking:g-finance-production-preflight": "node scripts/run-g-finance-production-preflight.js",
+    "test:banking:g-finance-production-preflight": "node backend/tests/banking-g-finance-production-preflight.test.js"
   },
   "keywords": [],
   "author": "",
