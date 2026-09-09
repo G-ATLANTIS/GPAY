@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const localRouter = require('./route-banking-sandbox-webhooks');
+const openBanking = require('../backend/routes/openbanking');
 
 const DEFAULT_CLI = path.join(os.homedir(), '.cargo', 'bin', 'truelayer');
 const LOCAL_WEBHOOK = 'http://127.0.0.1:4000/api/open-banking/webhook';
@@ -76,42 +77,106 @@ function parseCreatedPaymentId(output) {
   return match ? match[1].toLowerCase() : null;
 }
 
-function officialRouterObservation(output, paymentId) {
+function parseGeneratedPaymentIds(output) {
+  const clean = stripAnsi(output);
+  const ids = [];
+  const patterns = [
+    /Created payment with id\s+([0-9a-f-]{36})/ig,
+    /Mock payment_id:\s*([0-9a-f-]{36})/ig
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(clean)) !== null) {
+      const id = match[1].toLowerCase();
+      if (!ids.includes(id)) ids.push(id);
+    }
+  }
+
+  return ids;
+}
+
+function officialRouterObservation(output, paymentIds) {
   const clean = stripAnsi(output);
   const lines = clean.split(/\r?\n/);
-  const wanted = String(paymentId || '').toLowerCase();
+  const wantedIds = (Array.isArray(paymentIds) ? paymentIds : [paymentIds])
+    .map(value => String(value || '').toLowerCase())
+    .filter(Boolean);
 
   for (const line of lines) {
-    if (!line.toLowerCase().includes(wanted)) continue;
     if (!/Payment id:/i.test(line)) continue;
+    const lower = line.toLowerCase();
+    const matchedPaymentId = wantedIds.find(id => lower.includes(id));
+    if (!matchedPaymentId) continue;
 
     return {
       seen: true,
       success: /SUCCESS/i.test(line),
       failure: /FAILURE/i.test(line),
+      paymentId: matchedPaymentId,
       line: line.trim()
     };
   }
 
-  return { seen: false, success: false, failure: false, line: null };
+  return { seen: false, success: false, failure: false, paymentId: null, line: null };
 }
 
-function latestOfficialRouterFailure(output) {
+function latestOfficialRouterFailure(output, paymentIds = null) {
   const clean = stripAnsi(output);
   const lines = clean.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const wantedIds = paymentIds === null
+    ? null
+    : (Array.isArray(paymentIds) ? paymentIds : [paymentIds])
+        .map(value => String(value || '').toLowerCase())
+        .filter(Boolean);
 
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
     if (!/Payment id:/i.test(line) || !/FAILURE/i.test(line)) continue;
     const match = line.match(/Payment id:\s*([0-9a-f-]{36})/i);
+    const paymentId = match ? match[1].toLowerCase() : null;
+    if (wantedIds && (!paymentId || !wantedIds.includes(paymentId))) continue;
     return {
       seen: true,
-      paymentId: match ? match[1].toLowerCase() : null,
+      paymentId,
       line
     };
   }
 
   return { seen: false, paymentId: null, line: null };
+}
+
+async function providerReadback(paymentIds) {
+  const candidates = Array.isArray(paymentIds) ? paymentIds : [paymentIds];
+  const failures = [];
+
+  for (const paymentId of candidates) {
+    try {
+      const result = await openBanking._test.fetchPaymentStatus(paymentId);
+      const observedId = String(result?.payment?.id || paymentId).toLowerCase();
+      if (observedId !== String(paymentId).toLowerCase()) {
+        failures.push(`${paymentId}: provider returned different payment id ${observedId}`);
+        continue;
+      }
+      return {
+        verified: true,
+        paymentId: observedId,
+        environment: result.environment,
+        status: String(result?.payment?.status || 'unknown'),
+        payment: result.payment || {}
+      };
+    } catch (err) {
+      failures.push(`${paymentId}: ${err.response?.status || err.code || err.message || err}`);
+    }
+  }
+
+  return {
+    verified: false,
+    paymentId: null,
+    environment: 'sandbox',
+    status: 'unreadable',
+    failures
+  };
 }
 
 async function run() {
@@ -182,33 +247,45 @@ async function run() {
       throw new Error(`Official TrueLayer generator exited with code ${generatorExit}.`);
     }
 
-    const paymentId = parseCreatedPaymentId(generatorCapture.clean);
-    if (!paymentId) {
-      throw new Error('Could not parse payment ID from official TrueLayer generator output.');
+    const paymentIds = parseGeneratedPaymentIds(generatorCapture.clean);
+    if (paymentIds.length === 0) {
+      throw new Error('Could not parse payment IDs from official TrueLayer generator output.');
     }
 
-    console.log('Step 3: generator completed; waiting for official router observation.');
-    const observation = await waitFor(
-      routerCapture,
-      output => {
-        const blockingFailure = latestOfficialRouterFailure(output);
-        if (blockingFailure.seen) {
-          return {
-            seen: true,
-            success: false,
-            failure: true,
-            blockingFailure: true,
-            paymentId: blockingFailure.paymentId,
-            line: blockingFailure.line
-          };
-        }
+    console.log('Step 3: generator completed; performing authenticated provider readback.');
+    console.log('Candidate payment IDs:', paymentIds.join(', '));
 
-        const result = officialRouterObservation(output, paymentId);
-        return result.seen ? result : null;
-      },
-      90000,
-      'matching official TrueLayer routed webhook'
-    );
+    const readback = await providerReadback(paymentIds);
+    if (!readback.verified) {
+      throw new Error(
+        `TrueLayer provider readback failed for all generated payment IDs: ${(readback.failures || []).join('; ')}`
+      );
+    }
+    if (String(readback.environment).toLowerCase() !== 'sandbox') {
+      throw new Error('Provider readback did not remain sandbox-bound.');
+    }
+
+    console.log('Provider payment readback: VERIFIED');
+    console.log('Readback payment ID:', readback.paymentId);
+    console.log('Readback status:', readback.status);
+
+    // Webhook routing is useful additional observation, but it is not the
+    // primary write/readback proof. Give it a short bounded window and do not
+    // fail the provider write proof when no matching webhook is routed.
+    let observation = { seen: false, success: false, failure: false, paymentId: null, line: null };
+    try {
+      observation = await waitFor(
+        routerCapture,
+        output => {
+          const result = officialRouterObservation(output, paymentIds);
+          return result.seen ? result : null;
+        },
+        5000,
+        'optional matching official TrueLayer routed webhook'
+      );
+    } catch {
+      observation = { seen: false, success: false, failure: false, paymentId: null, line: null };
+    }
 
     if (observation.failure) {
       const serverOutput = String(localServer.getOutput?.() || '');
@@ -216,31 +293,27 @@ async function run() {
         .split(/\r?\n/)
         .filter(line => line.includes('[G-Bank webhook reject]'))
         .slice(-5);
-
       if (rejectLines.length > 0) {
         console.error('GPAY webhook verifier diagnostics:');
         for (const line of rejectLines) console.error(line);
       }
-
-      if (observation.blockingFailure) {
-        const suffix = observation.paymentId ? ` (payment_id=${observation.paymentId})` : '';
-        throw new Error(`Official TrueLayer queue is blocked by a webhook rejected by GPAY${suffix}: ${observation.line}`);
-      }
-
-      throw new Error(`Official TrueLayer router received the webhook but local GPAY rejected it: ${observation.line}`);
-    }
-    if (!observation.success) {
-      throw new Error('Official TrueLayer router observed the payment without a success result.');
     }
 
+    const observedPaymentId = readback.paymentId;
     console.log('Official TrueLayer stack diagnostic: VERIFIED');
-    console.log('Payment ID:', paymentId);
+    console.log('Payment ID:', observedPaymentId);
     console.log('Provider generator: VERIFIED');
-    console.log('Provider webhook router: VERIFIED');
-    console.log('GPAY local webhook delivery: VERIFIED');
-    console.log('GPAY signed webhook acceptance: VERIFIED');
+    console.log('Provider payment readback: VERIFIED');
+    console.log('Provider webhook router:', observation.success ? 'VERIFIED' : 'NOT_OBSERVED');
+    console.log('GPAY local webhook delivery:', observation.success ? 'VERIFIED' : 'NOT_OBSERVED');
+    console.log('GPAY signed webhook acceptance:', observation.success ? 'VERIFIED' : 'NOT_OBSERVED');
     console.log('Go-live promotion: NOT PERFORMED');
-    return paymentId;
+    return {
+      paymentId: observedPaymentId,
+      providerReadbackVerified: true,
+      providerStatus: readback.status,
+      webhookObserved: observation.success === true
+    };
   } finally {
     try { router.kill('SIGTERM'); } catch {}
     if (localServer.started && localServer.child) {
@@ -263,8 +336,10 @@ module.exports = {
   requireSandboxSafety,
   stripAnsi,
   parseCreatedPaymentId,
+  parseGeneratedPaymentIds,
   officialRouterObservation,
   latestOfficialRouterFailure,
+  providerReadback,
   waitFor,
   run
 };

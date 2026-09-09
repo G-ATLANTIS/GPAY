@@ -1324,6 +1324,51 @@ function executionGraphStatus() {
   };
 }
 
+
+function gFinanceStatusContract() {
+  const cfg = requiredConfig();
+  const status = configStatus();
+  const graph = executionGraphStatus();
+  const live = envMode() === 'live';
+
+  return {
+    schema_version: 'g-finance-runtime/1.0',
+    rail: 'G_BANK',
+    provider: 'truelayer',
+    environment: live ? 'PRODUCTION' : 'SANDBOX',
+    available: true,
+
+    // Local configuration and a local status read are not provider authentication.
+    // Authentication/write/value-flow are promoted only by separate evidence.
+    authenticated: false,
+    provider_configuration_present: status.provider_authentication.configured === true,
+    provider_readiness_evidence_valid:
+      status.evidence?.sandbox_verification?.valid === true,
+
+    live_banking: live && cfg.liveEnabled,
+    external_actions_enabled:
+      live && cfg.liveEnabled && status.configured === true,
+
+    write_verified: false,
+    value_transfer_verified: false,
+    verified_value_flow: false,
+    observed_at: new Date().toISOString(),
+
+    identity: {
+      provider: 'truelayer',
+      mode: envMode(),
+      execution_graph: graph.graph
+    },
+
+    safety: {
+      local_status_only: true,
+      provider_authentication_not_inferred: true,
+      write_verification_not_inferred: true,
+      value_transfer_not_inferred: true
+    }
+  };
+}
+
 router.get('/health', (req, res) => {
   res.json({
     ...configStatus(),
@@ -1334,6 +1379,10 @@ router.get('/health', (req, res) => {
 
 router.get('/graph-status', (req, res) => {
   res.json(executionGraphStatus());
+});
+
+router.get('/g-finance-status', (req, res) => {
+  res.json(gFinanceStatusContract());
 });
 
 
@@ -1897,6 +1946,7 @@ router._test = {
   getAccessToken,
   performProviderReadiness,
   executionGraphStatus,
+  gFinanceStatusContract,
   validateEvidenceReceipt,
   evidenceStatus,
   expectedWebhookJku,
