@@ -20,6 +20,10 @@ function requireProductionPreflightSafety() {
   if (process.env.G_BANK_ENABLE_LIVE === 'true') {
     throw new Error('G-FINANCE production preflight refuses G_BANK_ENABLE_LIVE=true.');
   }
+  const clientId = String(process.env.TRUELAYER_CLIENT_ID || '');
+  if (clientId.startsWith('sandbox-')) {
+    throw new Error('G-FINANCE production preflight refuses a sandbox-prefixed TrueLayer client_id on live endpoints.');
+  }
   if (process.env.G_BANK_ENABLE_PROVIDER_PROBE !== 'true') {
     throw new Error('G_BANK_ENABLE_PROVIDER_PROBE=true is required for production preflight.');
   }
@@ -221,8 +225,25 @@ async function run() {
 
 if (require.main === module) {
   run().catch(err => {
+    const providerError = err.response?.data?.error || '';
+    const providerDescription = err.response?.data?.error_description || '';
+
     console.error('G-FINANCE production preflight: BLOCKED');
-    console.error(err.response?.data?.error || err.response?.data?.error_description || err.message || err);
+
+    if (providerError === 'invalid_scope') {
+      console.error('BLOCKER_CLASS = LIVE_PAYMENTS_SCOPE_NOT_ENABLED_OR_WRONG_LIVE_APP');
+      console.error('REQUESTED_SCOPE = payments');
+      console.error('PROVIDER_ERROR = invalid_scope');
+      if (providerDescription) {
+        console.error('PROVIDER_DESCRIPTION =', providerDescription);
+      }
+      console.error(
+        'NEXT_ACTION = Verify the TrueLayer Console LIVE app has Payments enabled and that the loaded live client_id/client_secret belong to that same live app.'
+      );
+    } else {
+      console.error(providerError || providerDescription || err.message || err);
+    }
+
     console.error('Payment endpoint called: FALSE');
     console.error('Payment created: FALSE');
     console.error('Value moved: FALSE');
