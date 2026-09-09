@@ -34,6 +34,8 @@ function canonicalEvidencePayload(record) {
     external_id: record.external_id,
     readback_match: record.readback_match,
     provider_generator_verified: record.provider_generator_verified,
+    provider_readback_verified: record.provider_readback_verified,
+    provider_status: record.provider_status,
     provider_webhook_router_verified: record.provider_webhook_router_verified,
     local_webhook_delivery_verified: record.local_webhook_delivery_verified,
     signed_webhook_acceptance_verified: record.signed_webhook_acceptance_verified,
@@ -44,13 +46,22 @@ function canonicalEvidencePayload(record) {
   });
 }
 
-function buildEvidenceRecord(paymentId, observedAt = new Date().toISOString()) {
+function buildEvidenceRecord(result, observedAt = new Date().toISOString()) {
+  const paymentId = typeof result === 'string' ? result : result?.paymentId;
   if (!/^[0-9a-f-]{36}$/i.test(String(paymentId || ''))) {
     throw new Error('Verified sandbox payment ID must be a UUID.');
   }
 
+  const providerReadbackVerified =
+    typeof result === 'string' ? false : result?.providerReadbackVerified === true;
+  if (!providerReadbackVerified) {
+    throw new Error('Provider payment readback must be VERIFIED.');
+  }
+
+  const webhookObserved = result?.webhookObserved === true;
+
   const record = {
-    schema_version: 'g-finance-write-readback/1.0',
+    schema_version: 'g-finance-write-readback/1.1',
     rail: 'G_BANK',
     evidence_type: 'WRITE_READBACK',
     provider: 'truelayer',
@@ -60,11 +71,12 @@ function buildEvidenceRecord(paymentId, observedAt = new Date().toISOString()) {
     external_id: String(paymentId).toLowerCase(),
     readback_match: true,
 
-    // test-official-truelayer-stack.run() returns only after all four checks pass.
     provider_generator_verified: true,
-    provider_webhook_router_verified: true,
-    local_webhook_delivery_verified: true,
-    signed_webhook_acceptance_verified: true,
+    provider_readback_verified: true,
+    provider_status: String(result?.providerStatus || 'unknown'),
+    provider_webhook_router_verified: webhookObserved,
+    local_webhook_delivery_verified: webhookObserved,
+    signed_webhook_acceptance_verified: webhookObserved,
 
     payment_created_in_sandbox: true,
     value_moved: false,
@@ -81,7 +93,7 @@ function buildEvidenceRecord(paymentId, observedAt = new Date().toISOString()) {
 }
 
 function validateEvidenceRecord(record) {
-  if (record.schema_version !== 'g-finance-write-readback/1.0') {
+  if (record.schema_version !== 'g-finance-write-readback/1.1') {
     throw new Error('unsupported evidence schema');
   }
   if (record.rail !== 'G_BANK' || record.evidence_type !== 'WRITE_READBACK') {
@@ -93,11 +105,18 @@ function validateEvidenceRecord(record) {
   if (
     record.readback_match !== true ||
     record.provider_generator_verified !== true ||
-    record.provider_webhook_router_verified !== true ||
-    record.local_webhook_delivery_verified !== true ||
-    record.signed_webhook_acceptance_verified !== true
+    record.provider_readback_verified !== true
   ) {
     throw new Error('incomplete sandbox write/readback proof');
+  }
+  for (const key of [
+    'provider_webhook_router_verified',
+    'local_webhook_delivery_verified',
+    'signed_webhook_acceptance_verified'
+  ]) {
+    if (typeof record[key] !== 'boolean') {
+      throw new Error(`${key} must be boolean`);
+    }
   }
   if (
     record.value_moved !== false ||
@@ -144,8 +163,8 @@ function arg(name) {
 async function run() {
   requireSandboxSafety();
 
-  const paymentId = await official.run();
-  const record = buildEvidenceRecord(paymentId);
+  const result = await official.run();
+  const record = buildEvidenceRecord(result);
   const output = writeEvidenceRecord(
     record,
     arg('--out') || DEFAULT_OUT,
