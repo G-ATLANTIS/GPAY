@@ -33,10 +33,12 @@ function verifyStatement(statement, { now = Date.now(), max_age_ms = 24 * 60 * 6
     seen.add(submissionId);
     const status = String(entry.status || '').toUpperCase();
     if (status !== 'SETTLED') throw new Error('settlement_statement_non_settled_entry');
+    const entryCurrency = assertCurrency(entry.currency || currency);
+    if (entryCurrency !== currency) throw new Error('settlement_statement_entry_currency_mismatch');
     return Object.freeze({
       submission_id: submissionId,
       amount_minor: positiveMinor(`settlement_statement_amount_minor_${index}`, entry.amount_minor),
-      currency: assertCurrency(entry.currency || currency),
+      currency: entryCurrency,
       settlement_reference: entry.settlement_reference ? String(entry.settlement_reference).slice(0, 256) : null,
     });
   });
