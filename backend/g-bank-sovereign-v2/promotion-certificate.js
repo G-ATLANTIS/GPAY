@@ -23,6 +23,10 @@ function verifyReadiness(readiness) {
   if (readiness.state !== 'DIRECT_LIVE_READY' || required.some(k => readiness[k] !== true)) {
     throw new Error('direct_live_readiness_not_satisfied');
   }
+  if (!readiness.checks || typeof readiness.checks !== 'object' || !Object.keys(readiness.checks).length) {
+    throw new Error('readiness_checks_required');
+  }
+  if (Object.values(readiness.checks).some(value => value !== true)) throw new Error('readiness_checks_not_satisfied');
   return readiness;
 }
 
