@@ -1,0 +1,31 @@
+name: Generate pg lockfile
+
+on:
+  push:
+    branches:
+      - feature/investor-grade-payment-hardening-v1
+    paths:
+      - package.json
+      - .github/workflows/generate-pg-lock.yml
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate package lock
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg-package-lock
+          path: package-lock.json
+          if-no-files-found: error
