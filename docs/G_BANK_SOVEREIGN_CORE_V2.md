@@ -31,6 +31,10 @@ TREASURY / PREFUNDING / SETTLEMENT HEADROOM
         |
 OPERATIONAL RESILIENCE / EMERGENCY FREEZE
         |
+EXTERNAL/HSM SIGNING PROOF
+        |
+TECHNICAL PROMOTION CERTIFICATE
+        |
 ATOMIC IDEMPOTENCY CLAIM
         |
 OUTBOUND VALUE HOLD
@@ -53,7 +57,6 @@ HASH-CHAIN RECEIPTS + LEDGER
 - sovereign account registry with IBAN checksum validation, write locking and read-only listings
 - append-only balanced value ledger with SHA-256 chain verification, fsync and trial-balance snapshots
 - canonical payment-instruction hashing
-- structured address support for the November 2026 EPC address transition
 - ISO 20022 2019 `pain.001.001.09` and `pacs.008.001.08` generation
 - SCT and SCT Inst message modes
 - sanctions, AML and Verification-of-Payee evidence gates
@@ -66,6 +69,8 @@ HASH-CHAIN RECEIPTS + LEDGER
 - evidence-bound treasury position and prefunding headroom
 - bank-wide invariant auditor
 - operational resilience assessment and emergency freeze
+- external/HSM-style signature verification with trusted public-key binding
+- short-lived technical promotion certificate binding all readiness evidence
 - direct settlement adapter contract
 - outbound ledger hold before external submission
 - no automatic resubmission after ambiguous provider state
@@ -80,7 +85,7 @@ HASH-CHAIN RECEIPTS + LEDGER
 
 Safeguarding requires protected customer liabilities and configured buffer to be covered. Liquidity requires immediately available liquidity to cover pending outbound flows, stressed outflow and minimum buffer.
 
-Treasury position is independently assessed against a hash-verified external settlement-liquidity snapshot. The snapshot binds currency, available amount, settlement system, settlement account identity and observation time. A random hash or locally asserted balance cannot satisfy the treasury evidence check.
+Treasury position is assessed against a hash-verified external settlement-liquidity snapshot. The snapshot binds currency, available amount, settlement system, settlement account identity and observation time. A random hash or locally asserted balance cannot satisfy the treasury evidence check.
 
 ```text
 required_settlement_liquidity
@@ -95,6 +100,53 @@ settlement_headroom
 ```
 
 Negative headroom returns `BLOCK`. `DIRECT_LIVE_READY` also requires a current PASS treasury assessment whose full hash is recomputed and matches the configured binding.
+
+## External/HSM signing boundary
+
+`external-signing.js` deliberately contains no private-key storage or signing implementation. G-BANK creates a canonical signing request bound to the prepared payment, exact ISO 20022 message hash and settlement-authorization evidence.
+
+An external signer/HSM response is accepted only when:
+
+- the signing-request hash matches;
+- the message hash matches;
+- the public-key SPKI hash is in the trusted-key set;
+- the signature is cryptographically valid;
+- the signing evidence is fresh;
+- a signer receipt hash is present.
+
+Supported verification algorithms are Ed25519, ECDSA-SHA256 and RSA-SHA256. The resulting signature proof and signed-settlement envelope are verification artifacts only; they do not submit a payment.
+
+## Technical promotion certificate
+
+`promotion-certificate.js` creates a short-lived, hash-bound technical promotion certificate only after the software readiness snapshot is `DIRECT_LIVE_READY`.
+
+The certificate binds:
+
+```text
+readiness snapshot
+state checkpoint root
+risk-policy hash
+authority-set hash
+trusted signing-key binding
+legal-authorization evidence binding
+scheme-participation evidence binding
+settlement-access evidence binding
+production-identity evidence binding
+transport-preflight receipt
+prudential audit
+operational resilience assessment
+treasury assessment
+```
+
+Its validity is deliberately short (30-300 seconds) and runtime reverification remains required. The certificate always contains:
+
+```text
+grants_external_rights = false
+permits_value_movement_by_itself = false
+requires_runtime_reverification = true
+```
+
+It therefore proves only that G-BANK's configured technical gates matched at a point in time. It cannot create a licence, scheme membership, TARGET/TIPS access or payment authority.
 
 ## Settlement statement reconciliation
 
@@ -171,6 +223,8 @@ G_BANK_OWN_LIQUIDITY_ASSESSMENT = IMPLEMENTED
 G_BANK_OWN_TREASURY_POSITION = IMPLEMENTED
 G_BANK_OWN_INVARIANT_AUDITOR = IMPLEMENTED
 G_BANK_OWN_OPERATIONAL_FREEZE = IMPLEMENTED
+G_BANK_OWN_EXTERNAL_SIGNING_VERIFICATION = IMPLEMENTED
+G_BANK_OWN_TECHNICAL_PROMOTION_CERTIFICATE = IMPLEMENTED
 G_BANK_OWN_SETTLEMENT_STATEMENT_RECONCILIATION = IMPLEMENTED
 G_BANK_OWN_END_OF_DAY_CLOSE = IMPLEMENTED
 G_BANK_OWN_RECONCILIATION = IMPLEMENTED
@@ -183,6 +237,6 @@ G_BANK_VALUE_MOVEMENT = DENY_UNTIL_VERIFIED_AUTHORIZED_TRANSPORT
 
 ## Promotion rule
 
-Do not label direct settlement `LIVE` until legal/regulatory authorization, scheme/settlement admission, production identity/certificate material, production network path, authenticated transport preflight, scheme validation, current governance/prudential/treasury/resilience PASS evidence, a bounded authorized submission, provider/CSM readback and settlement reconciliation receipts all exist as real external evidence.
+Do not label direct settlement `LIVE` until legal/regulatory authorization, scheme/settlement admission, production identity/certificate material, production network path, authenticated transport preflight, scheme validation, current governance/prudential/treasury/resilience PASS evidence, trusted external-signing proof, a bounded authorized submission, provider/CSM readback and settlement reconciliation receipts all exist as real external evidence.
 
 No simulated, mocked or locally inferred result can satisfy these conditions.
