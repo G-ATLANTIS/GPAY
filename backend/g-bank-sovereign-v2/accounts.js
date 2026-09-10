@@ -21,6 +21,12 @@ function isValidIban(value) {
   return remainder === 1;
 }
 
+function requireEvidenceHash(value) {
+  const hash = String(value || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('account_status_evidence_sha256_invalid');
+  return hash;
+}
+
 class AccountRegistry {
   constructor(filePath) {
     this.filePath = path.resolve(filePath);
@@ -48,6 +54,22 @@ class AccountRegistry {
     return next;
   }
 
+  _withLock(fn) {
+    let lockFd;
+    try {
+      lockFd = fs.openSync(this.lockPath, 'wx', 0o600);
+    } catch (err) {
+      if (err.code === 'EEXIST') throw new Error('account_registry_busy');
+      throw err;
+    }
+    try {
+      return fn();
+    } finally {
+      try { fs.closeSync(lockFd); } catch {}
+      try { fs.unlinkSync(this.lockPath); } catch {}
+    }
+  }
+
   register({ account_id, type, currency = 'EUR', iban = null, owner_binding_sha256, metadata = {} }) {
     const id = assertAccountId(account_id);
     const ccy = assertCurrency(currency);
@@ -58,15 +80,7 @@ class AccountRegistry {
     const normalizedIban = iban ? normalizeIban(iban) : null;
     if (normalizedIban && !isValidIban(normalizedIban)) throw new Error('iban_invalid');
 
-    let lockFd;
-    try {
-      lockFd = fs.openSync(this.lockPath, 'wx', 0o600);
-    } catch (err) {
-      if (err.code === 'EEXIST') throw new Error('account_registry_busy');
-      throw err;
-    }
-
-    try {
+    return this._withLock(() => {
       const doc = this._load();
       if (doc.accounts.some(a => a.account_id === id)) throw new Error('account_id_exists');
       if (normalizedIban && doc.accounts.some(a => a.iban === normalizedIban)) throw new Error('iban_already_bound');
@@ -78,14 +92,46 @@ class AccountRegistry {
         iban: normalizedIban,
         owner_binding_sha256: ownerHash,
         status: 'ACTIVE',
+        status_sequence: 1,
+        status_evidence_sha256: null,
         metadata,
         created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
       return Object.freeze({ ...this._save(doc).accounts.find(a => a.account_id === id) });
-    } finally {
-      try { fs.closeSync(lockFd); } catch {}
-      try { fs.unlinkSync(this.lockPath); } catch {}
-    }
+    });
+  }
+
+  transitionStatus({ account_id, expected_status, to_status, evidence_sha256, reason = null, now = Date.now() }) {
+    const id = assertAccountId(account_id);
+    const expected = String(expected_status || '').toUpperCase();
+    const next = String(to_status || '').toUpperCase();
+    const allowed = {
+      ACTIVE: new Set(['SUSPENDED']),
+      SUSPENDED: new Set(['ACTIVE', 'CLOSED']),
+      CLOSED: new Set(),
+    };
+    if (!allowed[expected] || !allowed[expected].has(next)) throw new Error('account_status_transition_invalid');
+    const evidence = requireEvidenceHash(evidence_sha256);
+
+    return this._withLock(() => {
+      const doc = this._load();
+      const index = doc.accounts.findIndex(a => a.account_id === id);
+      if (index < 0) throw new Error('account_not_found');
+      const account = doc.accounts[index];
+      if (account.status !== expected) throw new Error('account_status_conflict');
+      const updated = {
+        ...account,
+        status: next,
+        status_sequence: Number(account.status_sequence || 1) + 1,
+        status_evidence_sha256: evidence,
+        status_reason: reason ? String(reason).slice(0, 256) : null,
+        updated_at: new Date(now).toISOString(),
+      };
+      doc.accounts[index] = updated;
+      const saved = this._save(doc);
+      return Object.freeze({ ...saved.accounts[index] });
+    });
   }
 
   list({ type = null, currency = null, status = null } = {}) {
@@ -103,6 +149,14 @@ class AccountRegistry {
     const id = assertAccountId(accountId);
     const account = this._load().accounts.find(a => a.account_id === id);
     if (!account) throw new Error('account_not_found');
+    return Object.freeze({ ...account });
+  }
+
+  findByIban(iban) {
+    const normalized = normalizeIban(iban);
+    if (!isValidIban(normalized)) throw new Error('iban_invalid');
+    const account = this._load().accounts.find(a => a.iban === normalized);
+    if (!account) throw new Error('account_not_found_for_iban');
     return Object.freeze({ ...account });
   }
 
