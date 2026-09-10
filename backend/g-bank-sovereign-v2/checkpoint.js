@@ -18,10 +18,11 @@ function hashDirectory(dir) {
   return sha256(canonicalJson(rows));
 }
 
-function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executionsDir, velocityDir = null, inboundStatePath = null, now = Date.now() }) {
+function snapshotState({ accountRegistryPath, customerRegistryPath = null, ledgerPath, receiptsPath, executionsDir, velocityDir = null, inboundStatePath = null, now = Date.now() }) {
   const state = {
     schema: 'g-bank-sovereign-state-checkpoint/v2',
     account_registry_sha256: hashFile(accountRegistryPath),
+    customer_registry_sha256: hashFile(customerRegistryPath),
     ledger_file_sha256: hashFile(ledgerPath),
     receipts_file_sha256: hashFile(receiptsPath),
     executions_root_sha256: hashDirectory(executionsDir),
@@ -31,6 +32,7 @@ function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executio
   };
   const rootBody = {
     account_registry_sha256: state.account_registry_sha256,
+    customer_registry_sha256: state.customer_registry_sha256,
     ledger_file_sha256: state.ledger_file_sha256,
     receipts_file_sha256: state.receipts_file_sha256,
     executions_root_sha256: state.executions_root_sha256,
@@ -58,6 +60,7 @@ function verifyCheckpoint(checkpoint, paths) {
   const current = snapshotState({ ...paths, now: Date.parse(checkpoint.checkpointed_at) });
   const checks = {
     account_registry: current.account_registry_sha256 === checkpoint.account_registry_sha256,
+    customer_registry: current.customer_registry_sha256 === checkpoint.customer_registry_sha256,
     ledger: current.ledger_file_sha256 === checkpoint.ledger_file_sha256,
     receipts: current.receipts_file_sha256 === checkpoint.receipts_file_sha256,
     executions: current.executions_root_sha256 === checkpoint.executions_root_sha256,
