@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -14,7 +14,11 @@
     "gcoin_execution_status": "not_attempted",
     "production_preflight_distinguishes_test_vs_live_mollie_key_shape": true,
     "production_preflight_requires_public_https_base_url": true,
-    "production_preflight_performs_no_external_execution": true
+    "production_preflight_performs_no_external_execution": true,
+    "live_evidence_bundle_format_implemented": true,
+    "live_evidence_requires_verified_provider_readback": true,
+    "live_evidence_binds_deployment_provenance": true,
+    "live_evidence_tamper_detection_sha256": true
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -28,8 +32,9 @@
     "crash_safe_exactly_once_side_effects": true,
     "multi_process_distributed_locking": true,
     "production_deployment": true,
-    "live_transaction_evidence": true,
+    "actual_live_transaction_evidence_captured": true,
     "receipt_signature": true,
+    "evidence_bundle_signature": true,
     "gcoin_external_settlement": true,
     "gcoin_token_transfer": true
   }
