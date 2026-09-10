@@ -11,6 +11,12 @@ function hash64(name, value) {
   return v;
 }
 
+function positiveInt(name, value, min = 1) {
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n < min) throw new Error(`${name}_invalid`);
+  return n;
+}
+
 function createPromotionSigningRequest({ certificate, now = Date.now() } = {}) {
   verifyTechnicalPromotionCertificate(certificate, { now });
   const body = {
@@ -21,6 +27,9 @@ function createPromotionSigningRequest({ certificate, now = Date.now() } = {}) {
     authority_set_sha256: hash64('promotion_signing_authority_set_sha256', certificate.authority_set_sha256),
     trusted_signing_key_binding_sha256: hash64('promotion_signing_trusted_key_sha256', certificate.trusted_signing_key_binding_sha256),
     trusted_runtime_ha_observer_sha256: hash64('promotion_signing_runtime_observer_sha256', certificate.trusted_runtime_ha_observer_sha256),
+    promotion_signer_authority_root_sha256: hash64('promotion_signing_authority_root_sha256', certificate.promotion_signer_authority_root_sha256),
+    promotion_signer_authority_epoch: positiveInt('promotion_signing_authority_epoch', certificate.promotion_signer_authority_epoch),
+    promotion_signature_quorum: positiveInt('promotion_signing_quorum', certificate.promotion_signature_quorum, 2),
     ha_voter_journal_root_sha256: hash64('promotion_signing_ha_voter_journal_root_sha256', certificate.ha_voter_journal_root_sha256),
     ha_cluster_authority_root_sha256: hash64('promotion_signing_ha_cluster_authority_root_sha256', certificate.ha_cluster_authority_root_sha256),
     certificate_expires_at: new Date(Date.parse(certificate.expires_at)).toISOString(),
@@ -41,6 +50,9 @@ function verifyPromotionSigningRequest(request, certificate) {
     if (request.certificate_sha256 !== certificate.certificate_sha256) throw new Error('promotion_signing_certificate_mismatch');
     if (request.trusted_signing_key_binding_sha256 !== certificate.trusted_signing_key_binding_sha256) throw new Error('promotion_signing_trusted_key_mismatch');
     if (request.trusted_runtime_ha_observer_sha256 !== certificate.trusted_runtime_ha_observer_sha256) throw new Error('promotion_signing_observer_mismatch');
+    if (request.promotion_signer_authority_root_sha256 !== certificate.promotion_signer_authority_root_sha256) throw new Error('promotion_signing_authority_root_mismatch');
+    if (request.promotion_signer_authority_epoch !== certificate.promotion_signer_authority_epoch) throw new Error('promotion_signing_authority_epoch_mismatch');
+    if (request.promotion_signature_quorum !== certificate.promotion_signature_quorum) throw new Error('promotion_signing_quorum_mismatch');
     if (request.state_root_sha256 !== certificate.state_root_sha256 || request.policy_sha256 !== certificate.policy_sha256 || request.authority_set_sha256 !== certificate.authority_set_sha256) throw new Error('promotion_signing_governance_binding_mismatch');
     if (request.ha_voter_journal_root_sha256 !== certificate.ha_voter_journal_root_sha256 || request.ha_cluster_authority_root_sha256 !== certificate.ha_cluster_authority_root_sha256) throw new Error('promotion_signing_ha_binding_mismatch');
     if (request.certificate_expires_at !== certificate.expires_at) throw new Error('promotion_signing_expiry_binding_mismatch');
