@@ -21,9 +21,23 @@ Search terms used: `createPayment`, `payments.create`, `execute(`, `https.reques
 
 | # | file | symbol | provider / op | status after this task |
 |---|------|--------|---------------|------------------------|
-| 5 | `backend/routes/openbanking.js` | `POST /api/open-banking/create-payment` → `axios.post(${apiBase}/v3/payments)` | TrueLayer live bank transfer | **DENY by default.** Handler now returns 403 unless `G_BANK_ALLOW_UNSPINED_TRUELAYER=I_ACCEPT_UNSPINED_EXECUTION`. Legacy stack (own approval `assertLiveApproval` + own receipts). **Not yet spine-routed — #1 remaining bypass**, tracked for a follow-up TrueLayer spine connector. |
+| 5 | `backend/routes/openbanking.js` | `POST /api/open-banking/create-payment` | TrueLayer live bank transfer (`/v3/payments`) | **ROUTED** (TRUELAYER-CANONICAL-SPINE-ROUTING-P0). Builds a canonical request, verifies operator + per-payment `X-G-Bank-Approval` HMAC, mints a spine authorization, calls `executeVerified()` → `TrueLayerSpineConnector` → `TrueLayerLiveAdapter`. No direct `axios.post` to `/v3/payments`. **`G_BANK_ALLOW_UNSPINED_TRUELAYER` deleted.** `UNSPINED_TRUELAYER_EXECUTION_PATH_COUNT = 0`. |
 | 6 | `backend/routes/pulsepay.js` | `POST /api/pulsepay/create-payment` → `axios.post(api.pulsepay.io/v1/payments)` | PulsePay | **DENY by default.** Returns 403 unless `G_BANK_ALLOW_UNSPINED_PULSEPAY=I_ACCEPT_UNSPINED_EXECUTION`. Demo scaffolding (`'YOUR_API_KEY'` default); no spine connector exists. |
 | 7 | `backend/routes/webhook.js` | `POST /mollie/webhook` → `mollieClient.payments.get` then token-reward / invoice / email | Mollie webhook side effects | **Neutralised** to a 501 fail-closed stub. Was dead code (mounted by no server) that granted rewards + emailed on an unverified webhook body. |
+
+### TrueLayer call surface (TRUELAYER-CANONICAL-SPINE-ROUTING-P0, Phase 1)
+
+| file · function | endpoint | method | classification | routed |
+|---|---|---|---|---|
+| `openbanking.js` `POST /create-payment` handler | `/v3/payments` | POST | **PAYMENT_MUTATION** | **yes** — `executeVerified()` + `TrueLayerSpineConnector` |
+| `truelayer-live.js` `createPayment()` | `/v3/payments` | POST | PAYMENT_MUTATION (adapter transport) | reached only via connector; CI-guarded |
+| `truelayer-live.js` / `openbanking.js` `getAccessToken()` | `/connect/token` | POST | AUTHENTICATION (`client_credentials`, scope `payments`) | non-mutating |
+| `truelayer-live.js` `preflight()` / `openbanking.js` `performProviderReadiness()` | `/test-signature` | POST | DISCOVERY (204, no side effect) | connector `discover()` |
+| `truelayer-live.js` `getPayment()` / `openbanking.js` `fetchPaymentStatus()` | `/v3/payments/:id` | GET | PAYMENT_STATUS_READBACK | connector `readback()` / `reconcile()` |
+| `openbanking.js` `fetchWebhookJwks()` | provider JWKS `jku` | GET | WEBHOOK_INPUT (signature key) | webhook verification |
+| `openbanking.js` `POST /webhook` | inbound | POST | WEBHOOK_INPUT | observation-only; cannot mark canonical success (see spine doc, Phase 10) |
+| `openbanking.js` `GET /payment/:id`, `/payment/:id/reconcile` | `/v3/payments/:id` | GET | DIAGNOSTIC / PAYMENT_STATUS_READBACK | read-only |
+| `scripts/g-payment-*.js`, `probe-…`, `generate-banking-sandbox-webhook.js` | various | — | DIAGNOSTIC / SANDBOX_ONLY | refuse `G_BANK_ENABLE_LIVE=true`; `payment_endpoint_called:false` |
 
 ## C. Sandbox / diagnostic only — refuse `G_BANK_ENABLE_LIVE=true`
 

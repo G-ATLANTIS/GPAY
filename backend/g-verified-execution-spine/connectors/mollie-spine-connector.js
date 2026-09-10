@@ -102,12 +102,33 @@ class MollieSpineConnector {
   //                   currency + intent-hash + destination-binding are all
   //                   present and all match. Otherwise 'WEAK' -> the spine caps
   //                   assurance at L3 and marks verification PROVIDER_RECEIPT_ONLY.
-  async readback({ params }, exec) {
+  async readback({ params, binding_sha256 }, exec) {
     const paymentId = exec && exec.provider_request_id;
     if (!paymentId) {
       return { verified: false, binding_ok: false, observed_status: 'NO_PAYMENT_ID', external: true, binding_strength: 'WEAK' };
     }
     const readback = await this.adapter.getPayment(paymentId);
+
+    // Reconcile mode: confirm on the non-PII strong triplet (payment id + live
+    // mode + canonical request hash in metadata); redacted params can't be
+    // re-compared.
+    if (params && params.reconcile === true) {
+      const idOk = readback.payment_id === paymentId;
+      const live = !readback.mode || readback.mode === 'live';
+      const storedHash = readback.metadata && readback.metadata.g_intent_sha256;
+      const hashOk = !storedHash
+        ? null
+        : storedHash === binding_sha256 || storedHash === params.intent_sha256;
+      return {
+        verified: idOk && live,
+        binding_ok: idOk && live && hashOk !== false,
+        binding_strength: hashOk === true ? 'STRONG' : 'WEAK',
+        observed_status: readback.status || (idOk ? 'FOUND' : 'NOT_FOUND'),
+        external: true,
+        provider_request_id: readback.payment_id || null,
+        detail: { reconcile: true, id_ok: idOk, live, hash_ok: hashOk },
+      };
+    }
     const intent = buildIntent(params);
 
     const checks = {};

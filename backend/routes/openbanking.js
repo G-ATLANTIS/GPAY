@@ -4,6 +4,24 @@ const crypto = require('crypto');
 const fs = require('node:fs');
 const pathModule = require('node:path');
 
+// TRUELAYER-CANONICAL-SPINE-ROUTING-P0: live payment creation is routed through
+// G_VERIFIED_EXECUTION_SPINE. The route builds a canonical request, mints a
+// narrowly-scoped spine authorization, and calls executeVerified() ->
+// TrueLayerSpineConnector. There is no direct provider POST and no escape hatch.
+const { executeVerified } = require('../g-verified-execution-spine/spine');
+const { createAuthorization } = require('../g-verified-execution-spine/authorization');
+const { SequenceStore } = require('../g-verified-execution-spine/sequence-store');
+const {
+  TRUELAYER_CAPABILITY,
+  buildTrueLayerRegistry,
+  buildTrueLayerPolicy,
+  buildTrueLayerRequest,
+  truelayerBindingSha256,
+} = require('../g-verified-execution-spine/gbank-truelayer-routing');
+
+const SPINE_STATE_DIR = process.env.G_BANK_LIVE_STATE_DIR || '.secrets/g-bank-live-state';
+const TRUELAYER_ROUTE_ACTOR = 'route:truelayer-create-payment';
+
 const router = express.Router();
 
 const webhookJwksCache = new Map();
@@ -1488,27 +1506,25 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
+const SPINE_HTTP_STATUS = {
+  VERIFIED_SUCCESS: 201,
+  DENIED_POLICY: 403,
+  DENIED_SCOPE: 403,
+  DENIED_AUTHORIZATION: 403,
+  NO_VERIFIED_PATH: 503,
+  PROVIDER_FAILURE: 502,
+  EXECUTION_UNVERIFIED: 502,
+  READBACK_MISMATCH: 502,
+  REPLAY_REJECTED: 409,
+  STALE_STATE_REJECTED: 409,
+  INTERNAL_FAIL_CLOSED: 500
+};
+
 router.post('/create-payment', async (req, res) => {
   try {
-    // G-BANK-CANONICAL-LIVE-ROUTING-P0
-    // This TrueLayer payment-creation path is the legacy execution stack. It is
-    // NOT yet routed through executeVerified() / G_VERIFIED_EXECUTION_SPINE, so
-    // it is DENY by default per: DIRECT_PROVIDER_EXECUTION = DENY. Re-enabling
-    // it requires a deliberate, logged environment acknowledgement of the
-    // bypass until the spine TrueLayer connector lands.
-    if (process.env.G_BANK_ALLOW_UNSPINED_TRUELAYER !== 'I_ACCEPT_UNSPINED_EXECUTION') {
-      return res.status(403).json({
-        error: 'legacy_truelayer_create_payment_is_unspined_and_disabled',
-        remediation:
-          'Route through executeVerified() or set G_BANK_ALLOW_UNSPINED_TRUELAYER=I_ACCEPT_UNSPINED_EXECUTION.',
-        payment_created: false,
-        value_moved: false,
-        verified_value_flow: false,
-      });
-    }
+    // Config + input + per-payment human approval gates (unchanged semantics).
     assertConfigured();
-    const { amountEur, amountInMinor, beneficiary, user } = assertPaymentInput(req.body);
-    const path = '/v3/payments';
+    const { amountInMinor, beneficiary, user } = assertPaymentInput(req.body);
     const callerIdempotencyKey = req.get('Idempotency-Key');
     const idempotencyKey = callerIdempotencyKey || crypto.randomUUID();
 
@@ -1520,107 +1536,80 @@ router.post('/create-payment', async (req, res) => {
       approvalHeader: req.get('X-G-Bank-Approval')
     });
 
+    const cfg = requiredConfig();
     const endpointSnapshot = endpoints();
-    const environmentSnapshot = endpointSnapshot.live ? 'live' : 'sandbox';
+    const environment = endpointSnapshot.live ? 'live' : 'sandbox';
+    const maxAmountMinor = Math.round(Number(cfg.maxEur || 0) * 100);
+    if (!Number.isSafeInteger(maxAmountMinor) || maxAmountMinor <= 0) {
+      return res.status(503).json({ error: 'G_BANK_MAX_PAYMENT_EUR_not_configured', payment_created: false });
+    }
 
-    const payload = {
-      amount_in_minor: amountInMinor,
+    const seq = new SequenceStore(pathModule.join(SPINE_STATE_DIR, 'sequence'));
+    const stream = `${TRUELAYER_ROUTE_ACTOR}::${TRUELAYER_CAPABILITY}`;
+    const request = buildTrueLayerRequest({
+      actor: TRUELAYER_ROUTE_ACTOR,
+      requestId: `tlroute-${idempotencyKey}`,
+      idempotencyKey,
+      expectedSequence: seq.current(stream) + 1,
+      environment,
+      amountMinor: amountInMinor,
       currency: 'EUR',
-      payment_method: {
-        type: 'bank_transfer',
-        provider_selection: {
-          type: 'user_selected',
-          filter: {
-            countries: ['NL'],
-            customer_segments: ['retail'],
-            ...(environmentSnapshot === 'sandbox'
-              ? { provider_ids: ['mock-payments-nl-redirect'] }
-              : {})
-          },
-          scheme_selection: {
-            type: 'user_selected',
-            allow_remitter_fee: false
-          }
-        },
-        beneficiary: {
-          type: 'external_account',
-          account_holder_name: String(beneficiary.name),
-          account_identifier: {
-            type: 'iban',
-            iban: beneficiary.iban
-          },
-          reference: String(beneficiary.reference).slice(0, 18)
-        }
-      },
-      hosted_page: {
-        return_uri: requiredConfig().returnUri,
-        country_code: 'NL',
-        language_code: 'nl'
-      },
-      user: {
-        name: String(user.name),
-        email: String(user.email),
-        phone: String(user.phone),
-        date_of_birth: String(user.date_of_birth),
-        address: {
-          address_line1: String(user.address.address_line1),
-          ...(user.address.address_line2 ? { address_line2: String(user.address.address_line2) } : {}),
-          city: String(user.address.city),
-          ...(user.address.state ? { state: String(user.address.state) } : {}),
-          zip: String(user.address.zip),
-          country_code: String(user.address.country_code).toUpperCase()
-        }
-      },
-      metadata: {
-        g_bank: 'true',
-        execution_graph_edge: 'VERIFIED_VALUE_FLOW_CANDIDATE'
-      }
-    };
-
-    const rawBody = JSON.stringify(payload);
-
-    // Local token/signature preparation happens before the durable SUBMITTING
-    // receipt. Once the receipt exists, the provider POST is the next operation,
-    // so an incomplete receipt truthfully represents an ambiguous submission.
-    const token = await getAccessToken(axios, endpointSnapshot);
-    const signature = signRequest({ method: 'POST', path, body: rawBody, idempotencyKey });
-    const intentReceipt = preparePaymentIntentReceipt({
-      idempotencyKey,
-      amountInMinor,
-      beneficiary,
-      rawBody,
-      environment: environmentSnapshot
-    });
-    const apiBase = endpointSnapshot.apiBase;
-
-    const response = await axios.post(`${apiBase}${path}`, rawBody, {
-      timeout: 20000,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Idempotency-Key': idempotencyKey,
-        'Tl-Signature': signature
-      }
+      beneficiary: { iban: beneficiary.iban, name: beneficiary.name, reference: beneficiary.reference },
+      user,
+      returnUri: cfg.returnUri
     });
 
-    const payment = response.data || {};
-    const creationReceipts = recordPaymentCreated({
-      idempotencyKey,
-      payment,
-      rawBody,
-      environment: environmentSnapshot
+    // Operator-authenticated (operatorAuthorizationMiddleware) + per-payment
+    // X-G-Bank-Approval verified above: the server mints the spine authorization
+    // bound to this exact canonical request.
+    request.authorization_token = createAuthorization(
+      {
+        requestCanonicalSha256: truelayerBindingSha256(request),
+        idempotencyKey: request.idempotency_key,
+        actor: request.actor,
+        capability: request.requested_capability,
+        operation: request.operation,
+        ttl_seconds: 120
+      },
+      process.env
+    );
+
+    const result = await executeVerified(request, {
+      env: process.env,
+      stateDir: SPINE_STATE_DIR,
+      registry: buildTrueLayerRegistry({ env: process.env }),
+      policy: buildTrueLayerPolicy({ actor: TRUELAYER_ROUTE_ACTOR, maxAmountMinor }),
+      allowExternalEffects: true
     });
-    res.status(201).json({
+
+    const httpStatus = SPINE_HTTP_STATUS[result.state] || 500;
+    if (result.state !== 'VERIFIED_SUCCESS') {
+      return res.status(httpStatus).json({
+        provider: 'truelayer',
+        environment,
+        state: result.state,
+        detail: result.detail || null,
+        payment_created: false,
+        value_moved: false,
+        verified_value_flow: false
+      });
+    }
+
+    const receipt = (result.execution_result && result.execution_result.receipt) || {};
+    return res.status(201).json({
       provider: 'truelayer',
-      environment: environmentSnapshot,
-      payment_id: payment.id,
-      status: payment.status,
+      environment,
+      state: result.state,
+      payment_id: result.provider_request_id,
+      status: receipt.status || null,
       authorization_required: true,
-      authorization_url: payment.hosted_page?.uri || null,
+      authorization_url: receipt.authorization_url || null,
       idempotency_key: idempotencyKey,
-      intent_receipt_sha256: intentReceipt.receipt.receipt_sha256,
-      created_receipt_sha256: creationReceipts.created_receipt_sha256,
-      payment_binding_sha256: creationReceipts.payment_binding_sha256,
+      assurance_level_achieved: result.assurance_level_achieved,
+      verification_method: result.verification_method,
+      canonical_commit_status: result.canonical_commit_status,
+      audit_entry_hash: result.audit_entry_hash,
+      result_sha256: result.result_sha256,
       execution_graph: {
         edge: 'VERIFIED_VALUE_FLOW_CANDIDATE',
         active: false,
@@ -1631,7 +1620,8 @@ router.post('/create-payment', async (req, res) => {
     const status = err.statusCode || err.response?.status || 500;
     res.status(status).json({
       error: err.message || 'Open Banking payment creation failed.',
-      details: err.publicDetails || err.response?.data || undefined
+      details: err.publicDetails || err.response?.data || undefined,
+      payment_created: false
     });
   }
 });

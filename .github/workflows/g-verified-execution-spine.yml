@@ -8,9 +8,14 @@ on:
       - 'backend/routes/mollie.js'
       - 'backend/routes/pulsepay.js'
       - 'backend/routes/webhook.js'
+      - 'backend/routes/openbanking.js'
       - 'backend/tests/g-verified-execution-spine.test.js'
       - 'backend/tests/g-bank-canonical-live-routing.test.js'
+      - 'backend/tests/g-truelayer-canonical-spine-routing.test.js'
       - 'backend/tests/g-bank-live-v1.test.js'
+      - 'backend/tests/openbanking-policy.test.js'
+      - 'backend/tests/banking-g-finance.test.js'
+      - 'backend/tests/helpers/**'
       - 'scripts/g-verified-execution-spine.js'
       - 'scripts/g-bank-live-v1.js'
       - 'scripts/ci/check-spine-bypass.js'
@@ -19,6 +24,7 @@ on:
     branches:
       - 'feature/g-verified-execution-spine-p0'
       - 'feature/g-bank-canonical-live-routing-p0'
+      - 'feature/g-truelayer-canonical-spine-routing-p0'
 
 permissions:
   contents: read
@@ -26,7 +32,7 @@ permissions:
 jobs:
   spine-safety:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,7 +48,9 @@ jobs:
         run: npm run selfcheck:spine
       - name: Spine adversarial test suite (no network, no value movement)
         run: npm run test:spine
-      - name: Canonical live-routing test suite
+      - name: Canonical live-routing test suites (Mollie + TrueLayer)
         run: npm run test:routing
       - name: Regression - openbanking policy suite
         run: npm run test:banking
+      - name: Regression - g-finance status contract (hermetic)
+        run: node backend/tests/banking-g-finance.test.js

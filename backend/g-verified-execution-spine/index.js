@@ -20,8 +20,10 @@ const { executeVerified, reconcile, normalizeRequest, requestCanonicalSha256, bu
 const { checkResult, assertResult } = require('./invariants');
 const { LocalFileCapability } = require('./connectors/local-file');
 const { MollieSpineConnector } = require('./connectors/mollie-spine-connector');
+const { TrueLayerSpineConnector } = require('./connectors/truelayer-spine-connector');
 const { getExecutionTruth } = require('./execution-truth');
 const mollieRouting = require('./gbank-mollie-routing');
+const truelayerRouting = require('./gbank-truelayer-routing');
 const durableWrite = require('../g-bank-live-v1/durable-write');
 
 module.exports = {
@@ -43,7 +45,9 @@ module.exports = {
   assertResult,
   LocalFileCapability,
   MollieSpineConnector,
+  TrueLayerSpineConnector,
   getExecutionTruth,
   durableWrite,
   ...mollieRouting,
+  ...truelayerRouting,
 };

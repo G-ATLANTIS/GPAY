@@ -28,14 +28,20 @@ const ALLOWLIST = new Set(
   [
     // spine internals + connector implementations
     'backend/g-verified-execution-spine/connectors/mollie-spine-connector.js',
+    'backend/g-verified-execution-spine/connectors/truelayer-spine-connector.js',
     'backend/g-verified-execution-spine/connectors/local-file.js',
     'backend/g-verified-execution-spine/gbank-mollie-routing.js',
+    'backend/g-verified-execution-spine/gbank-truelayer-routing.js',
     'backend/g-verified-execution-spine/index.js',
-    // the adapter itself
+    // the adapters themselves
     'backend/g-bank-live-v1/providers/mollie-live.js',
+    'backend/g-bank-live-v1/providers/truelayer-live.js',
     // sanctioned operator CLI (imports adapter only to hand it to the spine)
     'scripts/g-bank-live-v1.js',
-    // sanctioned HTTP route (routes through executeVerified)
+    // sanctioned HTTP routes (route through executeVerified). openbanking.js is
+    // intentionally NOT allowlisted — its legit OAuth / test-signature /
+    // GET-status calls do not trip the precise rules below, so a future direct
+    // payment POST added there WILL be caught.
     'backend/routes/mollie.js',
     // this guard
     'scripts/ci/check-spine-bypass.js',
@@ -43,8 +49,31 @@ const ALLOWLIST = new Set(
     'backend/tests/g-bank-live-v1.test.js',
     'backend/tests/g-verified-execution-spine.test.js',
     'backend/tests/g-bank-canonical-live-routing.test.js',
+    'backend/tests/g-truelayer-canonical-spine-routing.test.js',
     'backend/tests/mollie-connector-isolation.test.js',
     'backend/tests/banking-smoke.test.js',
+    // Legacy g-payment-* gate / evidence lineage: these are DIAGNOSTIC evidence
+    // producers that by construction never call a payment mutation endpoint
+    // (payment_endpoint_called:false; refuse G_BANK_ENABLE_LIVE=true). They
+    // reference the '/v3/payments' path string as a constant/assertion only.
+    'scripts/g-payment-provider-adapter-preflight.js',
+    'scripts/g-payment-provider-materialization-preflight.js',
+    'scripts/g-payment-provider-request-envelope.js',
+    'scripts/g-payment-provider-entitlement-gate.js',
+    'scripts/g-payment-execution-gate.js',
+    'scripts/g-payment-rail-eligibility-router.js',
+    'scripts/g-payment-live-oauth-proof-capture.js',
+    'scripts/generate-banking-sandbox-webhook.js',
+    'backend/tests/openbanking-policy.test.js',
+    'backend/tests/banking-production-oauth-diagnostic.test.js',
+    'backend/tests/g-chat-payment-intent.test.js',
+    'backend/tests/g-payment-execution-gate.test.js',
+    'backend/tests/g-payment-live-oauth-proof-capture.test.js',
+    'backend/tests/g-payment-provider-adapter-preflight.test.js',
+    'backend/tests/g-payment-provider-entitlement-gate.test.js',
+    'backend/tests/g-payment-provider-request-envelope.test.js',
+    'backend/tests/g-payment-rail-eligibility-router.test.js',
+    'backend/tests/g-payment-provider-materialization-preflight.test.js',
   ].map((p) => p.replace(/\//g, path.sep)),
 );
 
@@ -69,6 +98,21 @@ const RULES = [
     re: /require\(\s*['"]@mollie\/api-client['"]\s*\)/,
   },
   { id: 'retired-gbank-live-core', re: /new\s+GBankLiveCore\s*\(/ },
+  {
+    id: 'raw-truelayer-adapter-import',
+    re: /require\(\s*['"][^'"]*g-bank-live-v1\/providers\/truelayer-live['"]\s*\)|\bTrueLayerLiveAdapter\b/,
+  },
+  {
+    // Direct POST/PUT to the TrueLayer payment-CREATE endpoint. A bare mention
+    // of the path string (assertions, gate constants) is NOT flagged; a status
+    // read `/v3/payments/${id}` (slash after "payments") is NOT flagged.
+    id: 'truelayer-direct-payment-create',
+    re: /\.(post|put)\s*\(\s*[`'"][^`'"]*\/v\d\/payments[`'"]|\.(post|put)\s*\(\s*`\$\{[A-Za-z_.]*[Bb]ase\}\/v\d\/payments`|axios\s*\.\s*(post|put)\s*\([^)]*\/v\d\/payments/,
+  },
+  {
+    id: 'truelayer-payment-post-helper',
+    re: /\bcreateTrueLayerPayment\b|\btruelayerCreatePayment\b|\bpostTrueLayerPayment\b/,
+  },
 ];
 
 // --self-test: prove the rules catch known-bad and pass known-good, without
@@ -77,15 +121,24 @@ if (process.argv.includes('--self-test')) {
   const bad = [
     "const { MollieLiveAdapter } = require('../g-bank-live-v1/providers/mollie-live');",
     "require('../g-verified-execution-spine/connectors/mollie-spine-connector')",
+    "require('../g-verified-execution-spine/connectors/truelayer-spine-connector')",
     'await mollieClient.payments.create({ amount });',
     'const p = await client.payments.create({});',
     'new GBankLiveCore({ adapters })',
     "require('@mollie/api-client')",
+    "const { TrueLayerLiveAdapter } = require('../g-bank-live-v1/providers/truelayer-live');",
+    "await axios.post(`${apiBase}/v3/payments`, rawBody, opts);",
+    "const r = await httpClient.post('/v3/payments', body);",
+    'await createTrueLayerPayment(intent);',
   ];
   const good = [
     "const { executeVerified } = require('../g-verified-execution-spine/spine');",
     'const r = await mollieClient.payments.get(id);',
     'buildMollieRegistry({ env });',
+    "const { buildTrueLayerRegistry } = require('../g-verified-execution-spine/gbank-truelayer-routing');",
+    'const res = await httpClient.get(`${apiBase}/v3/payments/${paymentId}`, opts);',
+    "await httpClient.post(`${authBase}/connect/token`, params);",
+    "const path = `/v3/payments/${paymentId}`;",
   ];
   let failed = 0;
   for (const line of bad) {

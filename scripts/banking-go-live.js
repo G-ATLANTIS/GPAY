@@ -16,6 +16,11 @@ function nowSafe() {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
+function embeddedTimestamp(name) {
+  const m = String(name).match(/-(\d{4}-\d{2}-\d{2}T[\d-]+Z)\.json$/);
+  return m ? m[1] : '';
+}
+
 function allMatching(dir, prefix) {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
@@ -25,7 +30,14 @@ function allMatching(dir, prefix) {
       path: path.join(dir, name),
       mtimeMs: fs.statSync(path.join(dir, name)).mtimeMs
     }))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    // Deterministic newest-first: mtime, then the ISO timestamp embedded in the
+    // filename (two artifacts written in the same millisecond must still order
+    // by their logical creation time), then the name.
+    .sort((a, b) =>
+      (b.mtimeMs - a.mtimeMs) ||
+      embeddedTimestamp(b.name).localeCompare(embeddedTimestamp(a.name)) ||
+      b.name.localeCompare(a.name)
+    );
 }
 
 function latestMatching(dir, prefix) {

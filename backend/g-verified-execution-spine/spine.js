@@ -623,6 +623,9 @@ function safeFinalize(ctx, req, idemRequest, state, resultObj) {
         capability: req.requested_capability,
         operation: req.operation,
         idempotency_key_sha256: sha256(req.idempotency_key),
+        // Non-sensitive canonical request hash — lets reconcile() re-bind the
+        // provider effect to this exact request without any redacted params.
+        binding_sha256: idemRequest && idemRequest.binding_sha256 ? idemRequest.binding_sha256 : null,
         ...resultObj,
       }),
     });
@@ -688,7 +691,12 @@ async function reconcile({ idempotency_key, provider_request_id }, context = {})
   let readback;
   try {
     readback = await connector.readback(
-      { operation: 'reconcile', params: (record.result && record.result.reconcile_params) || {}, binding_sha256: null },
+      {
+        operation: 'reconcile',
+        reconcile: true,
+        params: { ...((record.result && record.result.reconcile_params) || {}), reconcile: true },
+        binding_sha256: (record.result && record.result.binding_sha256) || null,
+      },
       { provider_request_id, idempotency_key_sha256: sha256(String(idempotency_key)) },
     );
   } catch (err) {

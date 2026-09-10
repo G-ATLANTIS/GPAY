@@ -30,6 +30,19 @@ const SENSITIVE_KEY_PATTERNS = [
   /^bearer$/i,
   /mnemonic/i,
   /seed[_-]?phrase/i,
+  // Personal data that must not sit in audit evidence in the clear.
+  /^email$/i,
+  /^phone$/i,
+  /phone[_-]?number/i,
+  /date[_-]?of[_-]?birth/i,
+  /^dob$/i,
+  /address[_-]?line/i,
+  /postal[_-]?code/i,
+  /^zip$/i,
+  /holder[_-]?name/i,
+  /account[_-]?holder/i,
+  /beneficiary[_-]?name/i,
+  /full[_-]?name/i,
 ];
 
 // Value shapes that look like live credentials even under a benign key name.

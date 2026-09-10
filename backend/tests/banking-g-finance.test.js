@@ -3,6 +3,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+// Hermetic: this suite asserts fail-closed defaults, so it must not inherit an
+// ambient .env (e.g. G_BANK_EXTERNAL_ACTIONS_ENABLED=true from a dev shell).
+const { isolateBankingEnv } = require('./helpers/hermetic-env');
+isolateBankingEnv();
+
 const evidence = require('../../scripts/run-g-finance-sandbox-write-proof');
 const openBanking = require('../routes/openbanking');
 

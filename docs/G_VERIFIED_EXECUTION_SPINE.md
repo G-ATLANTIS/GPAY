@@ -294,8 +294,103 @@ non-allowlisted code reaches a live provider mutation outside the spine. See
 
 ### Fail-closed non-Mollie routes
 
-`backend/routes/openbanking.js` `/create-payment` (TrueLayer) and
-`backend/routes/pulsepay.js` are **DENY by default** — 403 unless an explicit
-`G_BANK_ALLOW_UNSPINED_*=I_ACCEPT_UNSPINED_EXECUTION` env acknowledgement is
-set. `backend/routes/webhook.js` is a 501 stub. These remain un-spined pending
-their own connectors.
+`backend/routes/pulsepay.js` is **DENY by default** — 403 unless an explicit
+`G_BANK_ALLOW_UNSPINED_PULSEPAY=I_ACCEPT_UNSPINED_EXECUTION` env acknowledgement
+is set. `backend/routes/webhook.js` is a 501 stub.
+
+---
+
+## Live TrueLayer routing (TRUELAYER-CANONICAL-SPINE-ROUTING-P0)
+
+`backend/routes/openbanking.js` `POST /create-payment` is now spine-routed and
+the `G_BANK_ALLOW_UNSPINED_TRUELAYER` escape hatch is **deleted**.
+
+```
+POST /api/open-banking/create-payment
+  -> operatorAuthorizationMiddleware (X-G-Bank-Operator-Authorization)
+  -> assertConfigured() + assertPaymentInput()
+  -> assertLiveApproval()          (per-payment X-G-Bank-Approval HMAC, live only)
+  -> buildTrueLayerRequest()       (canonical request; PII kept out / hashed)
+  -> createAuthorization()         (spine HMAC bound to the request hash)
+  -> executeVerified(request, ctx)
+  -> TrueLayerSpineConnector       (discover / execute / readback)
+  -> TrueLayerLiveAdapter          (OAuth + ES512 detached JWS + node:https)
+  -> TrueLayer API
+```
+
+`backend/g-verified-execution-spine/gbank-truelayer-routing.js` is the shared
+wiring (`buildTrueLayerRegistry`, `buildTrueLayerPolicy`, `buildTrueLayerRequest`,
+`truelayerBindingSha256`).
+
+### Canonical binding & PII
+
+`buildTrueLayerRequest` puts only safe values in `params`; beneficiary IBAN,
+holder name and payer PII (`full_name`, `email`, `phone`, `date_of_birth`,
+`address_line*`, `zip`) sit under keys that `redaction.js` masks, so they are
+`[REDACTED]` in every audit row / result / idempotency record while the
+connector still receives real values to build the provider body.
+`destination_binding` embeds `sha256(iban):sha256(reference)`, never raw PII.
+The canonical request hash (`g_intent_sha256`) and a `sha256` of the
+destination binding are written into TrueLayer payment `metadata`.
+
+### Assurance
+
+* `discover()` = OAuth token (scope `payments`) + a signed `POST /test-signature`
+  returning 204 → **L2**. Sub-L2 (no token / signature rejected) → `NO_VERIFIED_PATH`.
+* `readback()` binding_strength **STRONG** (→ L4 / `AUTHENTICATED_PROVIDER_READBACK`)
+  requires: payment id + environment (`live`/`sandbox`) + amount + currency +
+  beneficiary IBAN + beneficiary reference + `metadata.g_intent_sha256` +
+  `metadata.g_destination_binding_sha256`, all present and matched.
+* Missing binding evidence → **WEAK** → capped at **L3** / `PROVIDER_RECEIPT_ONLY`.
+* Any positive mismatch (id / amount / currency / iban / reference / wrong
+  environment) → `READBACK_MISMATCH`, quarantined.
+
+### Idempotency ↔ provider
+
+The local idempotency key is sent as TrueLayer's `Idempotency-Key` header on
+`POST /v3/payments`; the returned payment id is bound to the canonical request
+hash via payment `metadata`. `getExecutionTruth()` binds all three.
+
+### Reconciliation
+
+`reconcile()` for TrueLayer: with an operator-supplied payment id it does a
+`GET /v3/payments/:id` and confirms on the non-PII triplet (payment id +
+environment + `metadata.g_intent_sha256` == canonical request hash) →
+`EFFECT_CONFIRMED` (recovers the original outcome, never re-issues). A
+definitive `NOT_FOUND` → `EFFECT_ABSENT`. No payment id, or provider
+unreachable → `MANUAL_REQUIRED` / `STILL_UNCERTAIN`; **retry is not permitted.**
+Redacted reconcile params cannot re-check amount/IBAN, which is why the
+canonical-hash-in-metadata binding is the confirmation basis.
+
+### Beneficiary allowlist
+
+`G_BANK_ALLOWED_BENEFICIARY_IBANS` is enforced in `TrueLayerSpineConnector.execute()`
+(LIVE only) as a pre-provider refusal (`PROVIDER_FAILURE` / `FAILED_FINAL`, no
+call made) and, fast-path, in the route.
+
+## Phase 10 — webhooks cannot forge canonical success
+
+`openbanking.js` `POST /webhook` already verifies the `Tl-Signature` (JWKS +
+detached-JWS), the timestamp/replay window, and classifies the event as
+`observation_only: true`, `value_moved_by_handler: false`. It writes to the
+legacy webhook-receipt store only. `getExecutionTruth()` and the spine's
+`canonical_commit_status` are derived **exclusively** from the spine idempotency
+record + hash-chained audit ledger — a webhook receipt has no path to
+`VERIFIED_SUCCESS`. (Tested: `webhook receipt cannot forge canonical success`.)
+
+## Phase 11 — legacy `scripts/g-payment-*` gate semantics
+
+The parallel gate lineage is **superseded**, not deleted; it stays as a
+diagnostic evidence producer that does not determine execution truth.
+
+| legacy control | absorbed into |
+|---|---|
+| amount cap (`G_BANK_MAX_PAYMENT_EUR`) | spine policy `max_amount_minor` (`buildTrueLayerPolicy`) |
+| beneficiary IBAN allowlist | `TrueLayerSpineConnector.execute()` + route pre-check |
+| OAuth `payments` scope + authenticated + signature proof (`g-payment-live-oauth-proof-capture`, `…-provider-entitlement-gate`) | connector `discover()` → L2 entry gate; sub-L2 ⇒ `NO_VERIFIED_PATH` |
+| per-payment human approval (`assertLiveApproval` / `X-G-Bank-Approval`) | kept in route + spine `createAuthorization` bound to the request hash |
+| single-use authorization, freshness window, replay-deny, canonical hashing, default-deny reason lists (`g-payment-rail-eligibility-router`, `…-execution-gate`, `…-provider-request-envelope`, `…-materialization-preflight`) | spine: authorization TTL + one-request binding, monotonic `SequenceStore`, `IdempotencyStore` replay-deny, `requestCanonicalSha256`, `PolicyEngine` default-deny |
+
+Physically folding each `g-payment-*` script into the connector remains a
+follow-up cleanup; their load-bearing semantics are already enforced by the
+spine.
