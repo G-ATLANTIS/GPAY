@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { canonicalJson, sha256 } = require('../g-bank-live-v1/canonical');
+const { canonicalJson, sha256 } = require('./canonical');
 
 function secret(env = process.env) {
   const value = String(env.G_BANK_SOVEREIGN_APPROVAL_SECRET || '');
