@@ -48,6 +48,7 @@ jobs:
           node --check backend/g-bank-sovereign-v2/recovery-snapshot.js
           node --check backend/g-bank-sovereign-v2/restore-verifier.js
           node --check backend/g-bank-sovereign-v2/recovery-readiness-audit.js
+          node --check backend/g-bank-sovereign-v2/runtime-promotion-gate.js
           node --check backend/g-bank-sovereign-v2/accounts.js
           node --check backend/g-bank-sovereign-v2/account-operation-lock.js
           node --check backend/g-bank-sovereign-v2/account-lifecycle.js
@@ -105,3 +106,4 @@ jobs:
           node backend/tests/g-bank-sovereign-v2-monitoring-policy-store.test.js
           node backend/tests/g-bank-sovereign-v2-monitoring-cycle.test.js
           node backend/tests/g-bank-sovereign-v2-recovery.test.js
+          node backend/tests/g-bank-sovereign-v2-runtime-gate.test.js
