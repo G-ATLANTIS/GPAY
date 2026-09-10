@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
 const { verifyTechnicalPromotionCertificate, verifyReadiness } = require('./promotion-certificate');
+const { verifyHARuntimeObservation } = require('./ha-runtime-attestation');
 
 function hash64(name, value) {
   const hash = String(value || '').toLowerCase();
@@ -39,6 +40,8 @@ const RUNTIME_BINDINGS = Object.freeze([
 function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}) {
   const readinessFile = readJsonFile('runtime_readiness', env.G_BANK_RUNTIME_READINESS_FILE);
   const promotionFile = readJsonFile('runtime_promotion_certificate', env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE);
+  const runtimeHAFile = readJsonFile('runtime_ha_attestation', env.G_BANK_RUNTIME_HA_ATTESTATION_FILE);
+  const runtimeHAObserverFile = readJsonFile('runtime_ha_observer', env.G_BANK_RUNTIME_HA_OBSERVER_FILE);
   const readiness = readinessFile.value;
   const certificate = promotionFile.value;
 
@@ -61,6 +64,20 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
   }
   if (mismatches.length) throw new Error(`runtime_promotion_evidence_binding_mismatch:${mismatches.sort().join(',')}`);
 
+  const runtimeHAAudit = verifyHARuntimeObservation({
+    observation: runtimeHAFile.value,
+    trustedObserver: runtimeHAObserverFile.value,
+    expected: {
+      cluster_authority_root_sha256: certificate.ha_cluster_authority_root_sha256,
+      voter_journal_root_sha256: certificate.ha_voter_journal_root_sha256,
+      state_root_sha256: certificate.state_root_sha256,
+      ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
+      ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256,
+      fence_valid_until: certificate.ha_fence_valid_until,
+    },
+    now,
+  });
+
   const body = {
     schema: 'g-bank-runtime-promotion-gate/v2',
     state: 'PASS',
@@ -71,6 +88,8 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
     authority_set_sha256: certificate.authority_set_sha256,
     ha_voter_journal_root_sha256: certificate.ha_voter_journal_root_sha256,
     ha_cluster_authority_root_sha256: certificate.ha_cluster_authority_root_sha256,
+    ha_runtime_attestation_audit_sha256: runtimeHAAudit.audit_sha256,
+    ha_runtime_observation_sha256: runtimeHAAudit.observation_sha256,
     customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
     recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
     ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
