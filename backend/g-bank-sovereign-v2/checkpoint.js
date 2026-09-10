@@ -28,6 +28,7 @@ function snapshotState({
   inboundStatePath = null,
   monitoringCasesPath = null,
   evidenceRevocationsPath = null,
+  monitoringPolicyDir = null,
   now = Date.now(),
 }) {
   const state = {
@@ -41,6 +42,7 @@ function snapshotState({
     inbound_state_sha256: hashFile(inboundStatePath),
     monitoring_cases_sha256: hashFile(monitoringCasesPath),
     evidence_revocations_sha256: hashFile(evidenceRevocationsPath),
+    monitoring_policy_root_sha256: hashDirectory(monitoringPolicyDir),
     checkpointed_at: new Date(now).toISOString(),
   };
   const rootBody = {
@@ -53,6 +55,7 @@ function snapshotState({
     inbound_state_sha256: state.inbound_state_sha256,
     monitoring_cases_sha256: state.monitoring_cases_sha256,
     evidence_revocations_sha256: state.evidence_revocations_sha256,
+    monitoring_policy_root_sha256: state.monitoring_policy_root_sha256,
   };
   state.state_root_sha256 = sha256(canonicalJson(rootBody));
   return Object.freeze(state);
@@ -83,6 +86,7 @@ function verifyCheckpoint(checkpoint, paths) {
     inbound_state: current.inbound_state_sha256 === checkpoint.inbound_state_sha256,
     monitoring_cases: current.monitoring_cases_sha256 === checkpoint.monitoring_cases_sha256,
     evidence_revocations: current.evidence_revocations_sha256 === checkpoint.evidence_revocations_sha256,
+    monitoring_policy_root: current.monitoring_policy_root_sha256 === checkpoint.monitoring_policy_root_sha256,
     state_root: current.state_root_sha256 === checkpoint.state_root_sha256,
   };
   return Object.freeze({
