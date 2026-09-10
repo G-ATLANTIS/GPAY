@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const checkFraud = require('../utils/g-fraud');
+const { createMolliePaymentWithEvidence } = require('../utils/provider-evidence-client');
 const router = express.Router();
 
 function requireEnv(name) {
@@ -33,6 +34,12 @@ function ensurePaymentLogDir() {
   fs.mkdirSync(path.join(process.cwd(), 'logs'), { recursive: true });
 }
 
+function appendEvidence(evidence) {
+  ensurePaymentLogDir();
+  const evidenceLogPath = path.join(process.cwd(), 'logs', 'provider-evidence.log');
+  fs.appendFileSync(evidenceLogPath, `${JSON.stringify({ ts: new Date().toISOString(), ...evidence })}\n`);
+}
+
 router.post('/create-payment', async (req, res) => {
   const { amount, orderId, email, method } = req.body;
 
@@ -49,18 +56,43 @@ router.post('/create-payment', async (req, res) => {
   if (fraud) return res.status(403).json({ error: 'Transaction rejected by fraud policy' });
 
   try {
-    const mollieClient = getMollieClient();
     const publicBaseUrl = getPublicBaseUrl();
     const encodedOrderId = encodeURIComponent(orderId);
-
-    const payment = await mollieClient.payments.create({
+    const paymentRequest = {
       amount: { currency: 'EUR', value: numericAmount.toFixed(2) },
       description: `Order ${orderId}`,
       redirectUrl: `${publicBaseUrl}/success/${encodedOrderId}`,
       webhookUrl: `${publicBaseUrl}/api/mollie/webhook`,
       metadata: { orderId, amount: numericAmount.toFixed(2), email },
       ...(method ? { method } : {}),
-    });
+    };
+
+    let payment;
+    let providerEvidence = null;
+    if (process.env.G_MOLLIE_EVIDENCE_CLIENT === 'true') {
+      const apiKey = requireEnv('MOLLIE_API_KEY');
+      const result = await createMolliePaymentWithEvidence(paymentRequest, { apiKey });
+      payment = result.payment;
+      providerEvidence = result.evidence;
+      appendEvidence({
+        provider: providerEvidence.provider,
+        provider_scope: providerEvidence.provider_scope,
+        http_status: providerEvidence.http_status,
+        explicit_success: providerEvidence.explicit_success,
+        provider_request_id: providerEvidence.provider_request_id,
+        provider_request_id_source: providerEvidence.provider_request_id_source,
+        provider_request_id_exposed: providerEvidence.provider_request_id_exposed,
+        idempotency_key: providerEvidence.idempotency_key,
+        production_binding_verified: providerEvidence.production_binding_verified,
+        payment_id: payment.id || null,
+      });
+    } else {
+      const mollieClient = getMollieClient();
+      payment = await mollieClient.payments.create(paymentRequest);
+    }
+
+    const checkoutUrl = payment.getCheckoutUrl ? payment.getCheckoutUrl() : payment?._links?.checkout?.href;
+    if (!checkoutUrl) throw new Error('Mollie checkout URL missing');
 
     ensurePaymentLogDir();
     fs.appendFileSync(
@@ -71,14 +103,30 @@ router.post('/create-payment', async (req, res) => {
     return res.json({
       provider: 'mollie',
       paymentId: payment.id,
-      paymentUrl: payment.getCheckoutUrl(),
+      paymentUrl: checkoutUrl,
+      ...(providerEvidence ? {
+        providerRequestId: providerEvidence.provider_request_id,
+        evidenceCaptured: true,
+      } : {}),
     });
   } catch (err) {
-    if (err?.code === 'GPAY_CONFIG_MISSING' || err?.code === 'GPAY_INVALID_PUBLIC_URL') {
-      return res.status(503).json({
-        error: 'Payment provider unavailable',
-        code: err.code,
+    if (err?.providerEvidence) {
+      appendEvidence({
+        provider: err.providerEvidence.provider,
+        provider_scope: err.providerEvidence.provider_scope,
+        http_status: err.providerEvidence.http_status,
+        explicit_success: false,
+        provider_request_id: err.providerEvidence.provider_request_id,
+        provider_request_id_source: err.providerEvidence.provider_request_id_source,
+        provider_request_id_exposed: err.providerEvidence.provider_request_id_exposed,
+        idempotency_key: err.providerEvidence.idempotency_key,
+        production_binding_verified: false,
+        error_type: err.name || 'Error',
       });
+    }
+
+    if (err?.code === 'GPAY_CONFIG_MISSING' || err?.code === 'GPAY_INVALID_PUBLIC_URL') {
+      return res.status(503).json({ error: 'Payment provider unavailable', code: err.code });
     }
 
     console.error('Mollie payment creation error:', err.message);
