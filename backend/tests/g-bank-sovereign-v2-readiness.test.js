@@ -25,9 +25,28 @@ const governance = {
   high_value_quorum: 2,
 };
 
+const prudential = {
+  safeguarding: {
+    schema: 'g-bank-safeguarding-assessment/v2',
+    state: 'PASS',
+    assessment_sha256: H('5'),
+  },
+  liquidity: {
+    schema: 'g-bank-liquidity-assessment/v2',
+    state: 'PASS',
+    assessment_sha256: H('6'),
+  },
+  invariant_audit: {
+    schema: 'g-bank-sovereign-invariant-audit/v2',
+    state: 'PASS',
+    audit_sha256: H('9'),
+  },
+};
+
 const blocked = assessSovereignReadiness({
   env: base,
   governance,
+  prudential,
   transportPreflight: {
     environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
     settlement_system: 'TIPS', external_receipt_sha256: H('b'),
@@ -43,10 +62,12 @@ const completeEnv = {
   G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256: H('d'),
   G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256: H('e'),
   G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256: H('f'),
+  G_BANK_PRUDENTIAL_AUDIT_SHA256: prudential.invariant_audit.audit_sha256,
 };
 const ready = assessSovereignReadiness({
   env: completeEnv,
   governance,
+  prudential,
   transportPreflight: {
     environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
     settlement_system: 'TIPS', external_receipt_sha256: H('1'),
@@ -54,11 +75,42 @@ const ready = assessSovereignReadiness({
 });
 assert.equal(ready.direct_live_ready, true);
 assert.equal(ready.external_transport_verified, true);
+assert.equal(ready.prudential_controls_verified, true);
 assert.equal(ready.checks.high_value_quorum_dual_control, true);
+assert.equal(ready.checks.prudential_audit_binding_matches, true);
+
+const noPrudential = assessSovereignReadiness({
+  env: completeEnv,
+  governance,
+  prudential: null,
+  transportPreflight: {
+    environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
+    settlement_system: 'TIPS', external_receipt_sha256: H('2'),
+  },
+});
+assert.equal(noPrudential.direct_live_ready, false);
+assert.equal(noPrudential.prudential_controls_verified, false);
+assert.equal(noPrudential.checks.safeguarding_pass, false);
+
+const failedSafeguarding = assessSovereignReadiness({
+  env: completeEnv,
+  governance,
+  prudential: {
+    ...prudential,
+    safeguarding: { ...prudential.safeguarding, state: 'BLOCK' },
+  },
+  transportPreflight: {
+    environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
+    settlement_system: 'TIPS', external_receipt_sha256: H('2'),
+  },
+});
+assert.equal(failedSafeguarding.direct_live_ready, false);
+assert.equal(failedSafeguarding.checks.safeguarding_pass, false);
 
 const noGovernance = assessSovereignReadiness({
   env: completeEnv,
   governance: null,
+  prudential,
   transportPreflight: {
     environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
     settlement_system: 'TIPS', external_receipt_sha256: H('2'),
@@ -70,6 +122,7 @@ assert.equal(noGovernance.checks.risk_policy_binding_present, false);
 const weakQuorum = assessSovereignReadiness({
   env: completeEnv,
   governance: { ...governance, high_value_quorum: 1 },
+  prudential,
   transportPreflight: {
     environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
     settlement_system: 'TIPS', external_receipt_sha256: H('3'),
@@ -81,6 +134,7 @@ assert.equal(weakQuorum.checks.high_value_quorum_dual_control, false);
 const fake = assessSovereignReadiness({
   env: { ...completeEnv, G_BANK_SIMULATED_LIVE_SUCCESS: 'true' },
   governance,
+  prudential,
   transportPreflight: {
     environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
     settlement_system: 'TIPS', external_receipt_sha256: H('4'),
