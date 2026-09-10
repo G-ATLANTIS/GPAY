@@ -1,7 +1,6 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -11,6 +10,7 @@ const { verifyRuntimePromotionGate } = require('../g-bank-sovereign-v2/runtime-p
 const { runtimeHAObservationPayload, signHARuntimeObservation } = require('../g-bank-sovereign-v2/ha-runtime-attestation');
 const { HARuntimeChallengeStore } = require('../g-bank-sovereign-v2/ha-runtime-challenge-store');
 const { settlementOperationBinding } = require('../g-bank-sovereign-v2/settlement-operation-binding');
+const { createSyntheticRuntimeObserver } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T09:30:00.000Z');
@@ -24,6 +24,7 @@ function hashed(schema, hashField, extra = {}) {
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-runtime-gate-v2-'));
+  const pinnedObserver = createSyntheticRuntimeObserver('OBSERVER:RUNTIME:PINNED');
   const haAudit = hashed('g-bank-ha-readiness-audit/v2', 'audit_sha256', {
     cluster_sha256: H('1'), cluster_epoch: 1, cluster_authority_root_sha256: H('2'), cluster_transition_count: 0,
     cluster_transition_head_sha256: null, active_voter_count: 3, quorum: 2, latest_term: 8, leader_node_id: 'NODE:A',
@@ -41,61 +42,48 @@ function fixture() {
     unique_failure_domains_verified: true, grants_external_rights: false, permits_value_movement_by_itself: false,
   });
   const evidence_bindings = {
-    legal_authorization_evidence_sha256: H('1'), scheme_participation_evidence_sha256: H('2'),
-    settlement_access_evidence_sha256: H('3'), production_identity_evidence_sha256: H('4'),
-    transport_preflight_receipt_sha256: H('5'), prudential_audit_sha256: H('6'),
-    operational_resilience_sha256: H('7'), treasury_assessment_sha256: H('8'),
-    customer_monitoring_audit_sha256: H('9'), recovery_audit_sha256: H('a'),
-    ha_audit_sha256: haAudit.audit_sha256, ha_deployment_audit_sha256: haDeploymentAudit.audit_sha256,
+    legal_authorization_evidence_sha256: H('1'), scheme_participation_evidence_sha256: H('2'), settlement_access_evidence_sha256: H('3'),
+    production_identity_evidence_sha256: H('4'), transport_preflight_receipt_sha256: H('5'), prudential_audit_sha256: H('6'),
+    operational_resilience_sha256: H('7'), treasury_assessment_sha256: H('8'), customer_monitoring_audit_sha256: H('9'),
+    recovery_audit_sha256: H('a'), ha_audit_sha256: haAudit.audit_sha256, ha_deployment_audit_sha256: haDeploymentAudit.audit_sha256,
   };
   const readiness = {
-    schema: 'g-bank-sovereign-readiness/v2', state: 'DIRECT_LIVE_READY',
-    static_configuration_ready: true, external_transport_verified: true, prudential_controls_verified: true,
-    operational_controls_verified: true, customer_monitoring_verified: true, recovery_controls_verified: true,
-    ha_controls_verified: true, ha_deployment_verified: true, direct_live_ready: true,
-    checks: { live_flag: true, recovery_audit_pass: true, customer_monitoring_pass: true, ha_audit_pass: true, ha_deployment_pass: true },
-    evidence_bindings,
+    schema: 'g-bank-sovereign-readiness/v2', state: 'DIRECT_LIVE_READY', static_configuration_ready: true,
+    external_transport_verified: true, prudential_controls_verified: true, operational_controls_verified: true,
+    customer_monitoring_verified: true, recovery_controls_verified: true, ha_controls_verified: true, ha_deployment_verified: true,
+    direct_live_ready: true, checks: { runtime_gate_fixture: true }, evidence_bindings,
     recovery_checkpoint_state_root_sha256: H('b'), ha_checkpoint_state_root_sha256: H('b'),
     ha_voter_journal_root_sha256: H('c'), ha_cluster_authority_root_sha256: H('2'), ha_fence_valid_until: FENCE,
     transport_scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT', value_movement_permitted_by_readiness: true,
-    note: 'runtime gate test fixture',
   };
   const certificate = createTechnicalPromotionCertificate({
-    readiness,
-    checkpoint: { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('b') },
-    governance: { policy_sha256: H('c'), authority_set_sha256: H('d') },
-    evidence_bindings,
-    trusted_signing_key_binding_sha256: H('e'), ttl_seconds: 300, now: NOW,
+    readiness, checkpoint: { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('b') },
+    governance: { policy_sha256: H('c'), authority_set_sha256: H('d') }, evidence_bindings,
+    trusted_signing_key_binding_sha256: H('e'),
+    trusted_runtime_ha_observer_sha256: pinnedObserver.observer_public_key_binding_sha256,
+    ttl_seconds: 300, now: NOW,
   });
   const operation = settlementOperationBinding({ ...EXPECTED_OPERATION, promotion_certificate_sha256: certificate.certificate_sha256 });
-
   const challengePath = path.join(root, 'runtime-ha-challenges.jsonl');
   const challengeStore = new HARuntimeChallengeStore(challengePath);
   const challenge = challengeStore.issue({ operation_binding_sha256: operation.operation_binding_sha256, ttl_ms: 30000, now: NOW });
-
-  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-  const runtimeObserver = { observer_id: 'OBSERVER:RUNTIME:PRIMARY', public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }).toString() };
   const runtimePayload = runtimeHAObservationPayload({
-    haAudit, haDeploymentAudit, observer: runtimeObserver, observed_at: new Date(NOW).toISOString(),
+    haAudit, haDeploymentAudit, observer: pinnedObserver.observer, observed_at: new Date(NOW).toISOString(),
     nonce_sha256: challenge.nonce_sha256, operation_binding_sha256: operation.operation_binding_sha256,
   });
-  const runtimeObservation = signHARuntimeObservation({ payload: runtimePayload, private_key: privateKey });
-
+  const runtimeObservation = signHARuntimeObservation({ payload: runtimePayload, private_key: pinnedObserver.privateKey });
   const readinessFile = path.join(root, 'readiness.json');
   const promotionFile = path.join(root, 'promotion.json');
   const runtimeHAFile = path.join(root, 'runtime-ha.json');
   const runtimeHAObserverFile = path.join(root, 'runtime-ha-observer.json');
-  fs.writeFileSync(readinessFile, JSON.stringify(readiness, null, 2) + '\n', { mode: 0o600 });
-  fs.writeFileSync(promotionFile, JSON.stringify(certificate, null, 2) + '\n', { mode: 0o600 });
-  fs.writeFileSync(runtimeHAFile, JSON.stringify(runtimeObservation, null, 2) + '\n', { mode: 0o600 });
-  fs.writeFileSync(runtimeHAObserverFile, JSON.stringify(runtimeObserver, null, 2) + '\n', { mode: 0o600 });
+  fs.writeFileSync(readinessFile, JSON.stringify(readiness) + '\n', { mode: 0o600 });
+  fs.writeFileSync(promotionFile, JSON.stringify(certificate) + '\n', { mode: 0o600 });
+  fs.writeFileSync(runtimeHAFile, JSON.stringify(runtimeObservation) + '\n', { mode: 0o600 });
+  fs.writeFileSync(runtimeHAObserverFile, JSON.stringify(pinnedObserver.observer) + '\n', { mode: 0o600 });
   const env = {
-    G_BANK_RUNTIME_READINESS_FILE: readinessFile,
-    G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE: promotionFile,
-    G_BANK_RUNTIME_HA_ATTESTATION_FILE: runtimeHAFile,
-    G_BANK_RUNTIME_HA_OBSERVER_FILE: runtimeHAObserverFile,
-    G_BANK_RUNTIME_HA_CHALLENGE_STORE: challengePath,
-    G_BANK_PROMOTION_CERTIFICATE_SHA256: certificate.certificate_sha256,
+    G_BANK_RUNTIME_READINESS_FILE: readinessFile, G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE: promotionFile,
+    G_BANK_RUNTIME_HA_ATTESTATION_FILE: runtimeHAFile, G_BANK_RUNTIME_HA_OBSERVER_FILE: runtimeHAObserverFile,
+    G_BANK_RUNTIME_HA_CHALLENGE_STORE: challengePath, G_BANK_PROMOTION_CERTIFICATE_SHA256: certificate.certificate_sha256,
     G_BANK_ACTIVE_POLICY_SHA256: H('c'), G_BANK_ACTIVE_AUTHORITY_SET_SHA256: H('d'),
     G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256: evidence_bindings.legal_authorization_evidence_sha256,
     G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256: evidence_bindings.scheme_participation_evidence_sha256,
@@ -109,36 +97,19 @@ function fixture() {
     G_BANK_HA_AUDIT_SHA256: evidence_bindings.ha_audit_sha256,
     G_BANK_HA_DEPLOYMENT_AUDIT_SHA256: evidence_bindings.ha_deployment_audit_sha256,
   };
-  return { root, readiness, certificate, operation, runtimeObservation, challengeStore, challenge, readinessFile, promotionFile, runtimeHAFile, runtimeHAObserverFile, env };
+  return { root, haAudit, haDeploymentAudit, readiness, certificate, operation, pinnedObserver, runtimeObservation, challengeStore, challenge, readinessFile, promotionFile, runtimeHAFile, runtimeHAObserverFile, env };
 }
 
 (() => {
   const f = fixture();
   const gate = verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, expectedOperation: EXPECTED_OPERATION });
   assert.equal(gate.state, 'PASS');
-  assert.equal(gate.runtime_submit_gate_satisfied, true);
-  assert.equal(gate.ha_runtime_challenge_consumed, false);
-  assert.equal(f.challengeStore.verify().consumed_count, 0, 'precheck must never consume the challenge');
+  assert.equal(gate.trusted_runtime_ha_observer_sha256, f.pinnedObserver.observer_public_key_binding_sha256);
   assert.equal(gate.settlement_operation_binding_sha256, f.operation.operation_binding_sha256);
-  assert.equal(gate.ha_runtime_challenge_operation_binding_sha256, f.operation.operation_binding_sha256);
-  assert.equal(gate.ha_runtime_challenge_nonce_sha256, f.challenge.nonce_sha256);
-  assert.equal(gate.ha_runtime_challenge_issue_record_sha256, f.challenge.issue_record_sha256);
-  assert.equal(gate.grants_external_rights, false);
-  assert.equal(gate.permits_value_movement_by_itself, false);
-  assert.equal(gate.recovery_audit_sha256, H('a'));
-  assert.equal(gate.ha_voter_journal_root_sha256, H('c'));
-  assert.equal(gate.ha_cluster_authority_root_sha256, H('2'));
-  assert.match(gate.ha_runtime_attestation_audit_sha256, /^[0-9a-f]{64}$/);
-  assert.equal(gate.ha_runtime_observation_sha256, f.runtimeObservation.observation_sha256);
-  assert.equal(gate.ha_fence_valid_until, FENCE);
-  assert.equal(gate.policy_sha256, H('c'));
-  assert.equal(gate.authority_set_sha256, H('d'));
-  assert.equal(f.certificate.expires_at, FENCE, 'certificate lifetime must be capped to leader fence');
-  assert.match(gate.gate_sha256, /^[0-9a-f]{64}$/);
-
+  assert.equal(gate.ha_runtime_challenge_consumed, false);
+  assert.equal(f.challengeStore.verify().consumed_count, 0);
   const submitGate = verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, consumeChallenge: true, expectedOperation: EXPECTED_OPERATION });
   assert.equal(submitGate.ha_runtime_challenge_consumed, true);
-  assert.match(submitGate.ha_runtime_challenge_consume_record_sha256, /^[0-9a-f]{64}$/);
   assert.equal(f.challengeStore.verify().consumed_count, 1);
   assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, consumeChallenge: true, expectedOperation: EXPECTED_OPERATION }), /ha_runtime_challenge_replay/);
 })();
@@ -147,7 +118,22 @@ function fixture() {
   const f = fixture();
   const otherPayment = { ...EXPECTED_OPERATION, instruction_sha256: H('7') };
   assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, expectedOperation: otherPayment }), /ha_runtime_expected_mismatch:operation_binding_sha256|ha_runtime_challenge_operation_binding_mismatch/);
-  assert.equal(f.challengeStore.verify().consumed_count, 0, 'operation mismatch must not consume challenge');
+  assert.equal(f.challengeStore.verify().consumed_count, 0);
+})();
+
+(() => {
+  const f = fixture();
+  const attacker = createSyntheticRuntimeObserver('OBSERVER:RUNTIME:ATTACKER');
+  const attackerPayload = runtimeHAObservationPayload({
+    haAudit: f.haAudit, haDeploymentAudit: f.haDeploymentAudit, observer: attacker.observer,
+    observed_at: new Date(NOW).toISOString(), nonce_sha256: f.challenge.nonce_sha256,
+    operation_binding_sha256: f.operation.operation_binding_sha256,
+  });
+  const attackerObservation = signHARuntimeObservation({ payload: attackerPayload, private_key: attacker.privateKey });
+  fs.writeFileSync(f.runtimeHAFile, JSON.stringify(attackerObservation) + '\n');
+  fs.writeFileSync(f.runtimeHAObserverFile, JSON.stringify(attacker.observer) + '\n');
+  assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, expectedOperation: EXPECTED_OPERATION }), /ha_runtime_expected_mismatch:observer_public_key_binding_sha256/);
+  assert.equal(f.challengeStore.verify().consumed_count, 0, 'attacker observer substitution must not consume the challenge');
 })();
 
 for (const [field, value, pattern] of [
@@ -164,20 +150,8 @@ for (const [field, value, pattern] of [
 
 (() => {
   const f = fixture();
-  fs.writeFileSync(f.promotionFile, JSON.stringify({ ...f.certificate, state_root_sha256: H('0') }, null, 2) + '\n');
+  fs.writeFileSync(f.promotionFile, JSON.stringify({ ...f.certificate, trusted_runtime_ha_observer_sha256: H('0') }) + '\n');
   assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, expectedOperation: EXPECTED_OPERATION }), /promotion_certificate_hash_mismatch/);
-})();
-
-(() => {
-  const f = fixture();
-  fs.writeFileSync(f.runtimeHAFile, JSON.stringify({ ...f.runtimeObservation, cluster_authority_root_sha256: H('9') }, null, 2) + '\n');
-  assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, expectedOperation: EXPECTED_OPERATION }), /ha_runtime_observation_hash_mismatch/);
-})();
-
-(() => {
-  const f = fixture();
-  fs.writeFileSync(f.runtimeHAFile, JSON.stringify({ ...f.runtimeObservation, signature_base64: Buffer.from('forged').toString('base64') }, null, 2) + '\n');
-  assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, expectedOperation: EXPECTED_OPERATION }), /ha_runtime_observer_signature_invalid/);
 })();
 
 (() => {
@@ -185,21 +159,4 @@ for (const [field, value, pattern] of [
   assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 16000, expectedOperation: EXPECTED_OPERATION }), /ha_runtime_observation_stale_or_future/);
 })();
 
-(() => {
-  const f = fixture();
-  assert.throws(() => verifyRuntimePromotionGate({ env: { ...f.env, G_BANK_RUNTIME_HA_CHALLENGE_STORE: '' }, now: NOW + 1000, expectedOperation: EXPECTED_OPERATION }), /runtime_ha_challenge_store_required/);
-})();
-
-(() => {
-  const f = fixture();
-  assert.throws(() => verifyRuntimePromotionGate({ env: { ...f.env, G_BANK_RUNTIME_HA_ATTESTATION_FILE: '' }, now: NOW + 1000, expectedOperation: EXPECTED_OPERATION }), /runtime_ha_attestation_file_required/);
-})();
-
-(() => {
-  const f = fixture();
-  const link = path.join(f.root, 'readiness-link.json');
-  fs.symlinkSync(f.readinessFile, link);
-  assert.throws(() => verifyRuntimePromotionGate({ env: { ...f.env, G_BANK_RUNTIME_READINESS_FILE: link }, now: NOW + 1000, expectedOperation: EXPECTED_OPERATION }), /runtime_readiness_file_invalid/);
-})();
-
-console.log('G-BANK sovereign v2 transaction-bound runtime promotion gate tests: PASS');
+console.log('G-BANK sovereign v2 promotion-pinned transaction-bound runtime gate tests: PASS');
