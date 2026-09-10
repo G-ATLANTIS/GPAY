@@ -10,6 +10,12 @@ const ALLOWED = {
   AVAILABLE: new Set(),
 };
 
+function businessDate(value) {
+  const date = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('inbound_business_date_invalid');
+  return date;
+}
+
 class InboundStore {
   constructor(filePath) {
     this.filePath = path.resolve(filePath);
@@ -100,11 +106,12 @@ class InboundStore {
     return Object.freeze(record);
   }
 
-  claim({ inbound_id, event_sha256, target_account_id, amount_minor, currency, now = Date.now() }) {
+  claim({ inbound_id, event_sha256, target_account_id, amount_minor, currency, settlement_business_date, now = Date.now() }) {
     const id = String(inbound_id || '').trim();
     if (!id || id.length > 256) throw new Error('inbound_id_invalid');
     const eventHash = String(event_sha256 || '').toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(eventHash)) throw new Error('inbound_event_sha256_invalid');
+    const settledDate = businessDate(settlement_business_date);
     return this._withLock(() => {
       const rows = this._rows();
       this._verifyRows(rows);
@@ -112,6 +119,7 @@ class InboundStore {
       if (matches.length) {
         const existing = matches[matches.length - 1];
         if (existing.event_sha256 !== eventHash) throw new Error('inbound_id_reused_for_different_event');
+        if (existing.settlement_business_date !== settledDate) throw new Error('inbound_business_date_conflict');
         return Object.freeze({ owner: false, record: Object.freeze({ ...existing }) });
       }
       const record = this._appendUnlocked(rows, {
@@ -121,6 +129,7 @@ class InboundStore {
         target_account_id: String(target_account_id),
         amount_minor: Number(amount_minor),
         currency: String(currency).toUpperCase(),
+        settlement_business_date: settledDate,
         observed_at: new Date(now).toISOString(),
       });
       return Object.freeze({ owner: true, record });
@@ -151,6 +160,7 @@ class InboundStore {
         target_account_id: current.target_account_id,
         amount_minor: current.amount_minor,
         currency: current.currency,
+        settlement_business_date: current.settlement_business_date,
         transition_evidence_sha256: evidence,
         ledger_record_sha256: ledgerHash,
         observed_at: new Date(now).toISOString(),
