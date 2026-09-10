@@ -55,6 +55,16 @@ class InboundStore {
     return matches.length ? Object.freeze({ ...matches[matches.length - 1] }) : null;
   }
 
+  currentAll() {
+    const rows = this._rows();
+    this._verifyRows(rows);
+    const latest = new Map();
+    for (const row of rows) latest.set(row.inbound_id, row);
+    return Object.freeze([...latest.values()]
+      .sort((a, b) => a.inbound_id.localeCompare(b.inbound_id))
+      .map(row => Object.freeze({ ...row })));
+  }
+
   _withLock(fn) {
     let lockFd;
     try {
