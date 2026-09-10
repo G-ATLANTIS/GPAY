@@ -9,6 +9,9 @@ const { verifyComplianceBundle } = require('./compliance');
 const { verifySchemeValidationEvidence } = require('./scheme-validation');
 const { verifySovereignApproval } = require('./approval');
 const { createGovernanceProof } = require('./governance');
+const { normalizePolicy } = require('./risk-policy');
+const { normalizeAuthoritySet } = require('./authority');
+const { VelocityStore, dayFromNow } = require('./velocity-store');
 const { SovereignExecutionStore } = require('./execution-store');
 
 function requireSovereignLive(env = process.env) {
@@ -34,12 +37,13 @@ class GBankSovereignCore {
     this.accounts = accounts;
     this.ledger = ledger;
     this.settlement = settlement;
-    this.riskPolicy = riskPolicy;
-    this.authoritySet = authoritySet;
+    this.riskPolicy = normalizePolicy(riskPolicy);
+    this.authoritySet = normalizeAuthoritySet(authoritySet);
     this.env = env;
     const root = path.resolve(stateDir);
     this.executions = new SovereignExecutionStore(path.join(root, 'executions'));
     this.receipts = new SovereignReceiptLedger(path.join(root, 'receipts.jsonl'));
+    this.velocity = new VelocityStore(path.join(root, 'velocity'));
   }
 
   _systemAccounts(currency) {
@@ -89,7 +93,7 @@ class GBankSovereignCore {
     return Object.freeze(prepared);
   }
 
-  _request(prepared, schemeProof, approval, governance) {
+  _request(prepared, schemeProof, approval, governance, now) {
     const { suspense, settlementOut } = this._systemAccounts(prepared.instruction.currency);
     return {
       schema: 'g-bank-sovereign-execution-request/v2',
@@ -113,6 +117,7 @@ class GBankSovereignCore {
       currency: prepared.instruction.currency,
       scheme: prepared.instruction.scheme,
       beneficiary_binding_sha256: prepared.instruction.beneficiary_binding_sha256,
+      velocity_day: dayFromNow(now),
     };
   }
 
@@ -131,7 +136,7 @@ class GBankSovereignCore {
     });
   }
 
-  _release({ request, key, reason }) {
+  _release({ request, key, reason, now = Date.now() }) {
     const release = this.ledger.post({
       transaction_id: `RELEASE-${sha256(String(key)).slice(0, 24)}`,
       reference: request.instruction_sha256,
@@ -147,6 +152,7 @@ class GBankSovereignCore {
       instruction_sha256: request.instruction_sha256,
       amount_minor: request.amount_minor,
       currency: request.currency,
+      velocity_day: request.velocity_day,
       release_record_sha256: release.record_sha256,
       reason,
       value_moved: false,
@@ -191,6 +197,28 @@ class GBankSovereignCore {
     throw new Error(`execution_exists_${existing.state.toLowerCase()}_use_reconcile`);
   }
 
+  _releaseVelocity({ request, key, now = Date.now() }) {
+    return this.velocity.transition({
+      idempotencyKey: key,
+      accountId: request.source_account_id,
+      currency: request.currency,
+      day: request.velocity_day,
+      to: 'RELEASED',
+      now,
+    });
+  }
+
+  _settleVelocity({ request, key, now = Date.now() }) {
+    return this.velocity.transition({
+      idempotencyKey: key,
+      accountId: request.source_account_id,
+      currency: request.currency,
+      day: request.velocity_day,
+      to: 'SETTLED',
+      now,
+    });
+  }
+
   async execute({ prepared, schemeValidationEvidence, approvalToken, authoritySignatures, idempotencyKey, now = Date.now() }) {
     requireSovereignLive(this.env);
     verifyPrepared(prepared);
@@ -216,7 +244,7 @@ class GBankSovereignCore {
       now,
     });
     const approval = verifySovereignApproval(approvalToken, { prepared, schemeValidationEvidence, idempotencyKey, now }, this.env);
-    const request = this._request(prepared, schemeProof, approval, governance);
+    const request = this._request(prepared, schemeProof, approval, governance, now);
 
     const preflight = await this.settlement.preflight();
     if (preflight.scheme !== prepared.instruction.scheme) throw new Error('settlement_preflight_scheme_mismatch');
@@ -230,8 +258,19 @@ class GBankSovereignCore {
       throw new Error(`execution_exists_${claim.record.state.toLowerCase()}_use_reconcile`);
     }
 
+    let velocityReservation;
     let hold;
     try {
+      velocityReservation = this.velocity.reserve({
+        idempotencyKey,
+        accountId: request.source_account_id,
+        currency: request.currency,
+        instructionSha256: request.instruction_sha256,
+        amountMinor: request.amount_minor,
+        maxDailyMinor: this.riskPolicy.max_daily_amount_minor,
+        day: request.velocity_day,
+        now,
+      });
       hold = this._hold({ request, key: idempotencyKey });
       this.executions.transition({
         key: idempotencyKey,
@@ -240,9 +279,13 @@ class GBankSovereignCore {
         result: {
           hold_transaction_id: hold.transaction_id,
           hold_record_sha256: hold.record_sha256,
+          velocity_day: velocityReservation.day,
         },
       });
     } catch (err) {
+      if (velocityReservation && !hold) {
+        try { this._releaseVelocity({ request, key: idempotencyKey, now }); } catch {}
+      }
       this.executions.transition({
         key: idempotencyKey,
         request,
@@ -264,6 +307,7 @@ class GBankSovereignCore {
       hold_record_sha256: hold.record_sha256,
       amount_minor: request.amount_minor,
       currency: request.currency,
+      velocity_day: request.velocity_day,
       external_submission_performed: false,
       value_moved: false,
     });
@@ -291,12 +335,14 @@ class GBankSovereignCore {
         submission_id: submission.submission_id,
         amount_minor: request.amount_minor,
         currency: request.currency,
+        velocity_day: request.velocity_day,
         external_receipt_sha256: submission.external_receipt_sha256,
         value_moved: false,
       });
     } catch (err) {
       if (err.definitive_rejection === true) {
-        const release = this._release({ request, key: idempotencyKey, reason: 'DEFINITIVE_SUBMISSION_REJECTION' });
+        this._releaseVelocity({ request, key: idempotencyKey, now });
+        const release = this._release({ request, key: idempotencyKey, reason: 'DEFINITIVE_SUBMISSION_REJECTION', now });
         const result = this._result(request, { state: 'REJECTED', error: err.message, release_record_sha256: release.record_sha256, value_moved: false });
         this.executions.transition({ key: idempotencyKey, request, to: 'REJECTED', result });
       } else {
@@ -317,12 +363,13 @@ class GBankSovereignCore {
       throw err;
     }
 
-    return this._applyReadback({ key: idempotencyKey, request, readback, submissionId: submission.submission_id });
+    return this._applyReadback({ key: idempotencyKey, request, readback, submissionId: submission.submission_id, now });
   }
 
-  _applyReadback({ key, request, readback, submissionId }) {
+  _applyReadback({ key, request, readback, submissionId, now = Date.now() }) {
     const status = String(readback.status || 'UNKNOWN').toUpperCase();
     if (status === 'SETTLED') {
+      this._settleVelocity({ request, key, now });
       const booking = this._bookSettled({ request, key, settlementReference: readback.settlement_reference });
       const result = this._result(request, {
         state: 'SETTLED', submission_id: submissionId, settlement_reference: readback.settlement_reference || null,
@@ -337,6 +384,7 @@ class GBankSovereignCore {
         submission_id: submissionId,
         amount_minor: request.amount_minor,
         currency: request.currency,
+        velocity_day: request.velocity_day,
         settlement_ledger_record_sha256: booking.record_sha256,
         external_receipt_sha256: readback.external_receipt_sha256,
         value_moved: true,
@@ -344,7 +392,8 @@ class GBankSovereignCore {
       return Object.freeze(result);
     }
     if (status === 'REJECTED') {
-      const release = this._release({ request, key, reason: 'SETTLEMENT_REJECTED' });
+      this._releaseVelocity({ request, key, now });
+      const release = this._release({ request, key, reason: 'SETTLEMENT_REJECTED', now });
       const result = this._result(request, { state: 'REJECTED', submission_id: submissionId, external_receipt_sha256: readback.external_receipt_sha256, release_record_sha256: release.record_sha256, value_moved: false });
       this.executions.transitionExisting({ key, to: 'REJECTED', result });
       return Object.freeze(result);
@@ -360,13 +409,14 @@ class GBankSovereignCore {
       submission_id: submissionId,
       amount_minor: request.amount_minor,
       currency: request.currency,
+      velocity_day: request.velocity_day,
       provider_status: status,
       value_moved: false,
     });
     return Object.freeze(result);
   }
 
-  async reconcile({ idempotencyKey }) {
+  async reconcile({ idempotencyKey, now = Date.now() }) {
     requireSovereignLive(this.env);
     const record = this.executions.read(idempotencyKey);
     if (!record) throw new Error('execution_state_missing');
@@ -374,7 +424,7 @@ class GBankSovereignCore {
     const submissionId = record.result?.submission_id;
     if (!submissionId) throw new Error('reconciliation_requires_submission_id_manual_investigation');
     const readback = await this.settlement.readback(submissionId);
-    return this._applyReadback({ key: idempotencyKey, request: record.request, readback, submissionId });
+    return this._applyReadback({ key: idempotencyKey, request: record.request, readback, submissionId, now });
   }
 }
 
