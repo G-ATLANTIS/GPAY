@@ -13,26 +13,61 @@ function assertSafeSourcePath(value) {
   return resolved;
 }
 
+function assertSafeRelativePath(value) {
+  const relative = String(value || '').replace(/\\/g, '/');
+  if (!relative || relative.startsWith('/') || relative.includes('../') || relative === '..') throw new Error('recovery_relative_path_invalid');
+  if (SECRET_PATTERN.test(relative)) throw new Error('recovery_secret_entry_forbidden');
+  return relative;
+}
+
+function safeLstat(target, missingError) {
+  if (!fs.existsSync(target)) throw new Error(missingError);
+  const stat = fs.lstatSync(target);
+  if (stat.isSymbolicLink()) throw new Error('recovery_symlink_forbidden');
+  return stat;
+}
+
 function hashFile(filePath) {
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) throw new Error('recovery_file_missing');
+  const stat = safeLstat(filePath, 'recovery_file_missing');
+  if (!stat.isFile()) throw new Error('recovery_file_missing');
   return sha256(fs.readFileSync(filePath));
 }
 
 function hashDirectory(dirPath) {
-  if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) throw new Error('recovery_directory_missing');
+  const rootStat = safeLstat(dirPath, 'recovery_directory_missing');
+  if (!rootStat.isDirectory()) throw new Error('recovery_directory_missing');
   const rows = [];
   function walk(current, relativeBase = '') {
     const entries = fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       const absolute = path.join(current, entry.name);
-      const relative = path.posix.join(relativeBase, entry.name);
-      if (entry.isDirectory()) walk(absolute, relative);
-      else if (entry.isFile()) rows.push({ relative_path: relative, sha256: hashFile(absolute), size_bytes: fs.statSync(absolute).size });
+      const relative = assertSafeRelativePath(path.posix.join(relativeBase, entry.name));
+      const stat = fs.lstatSync(absolute);
+      if (stat.isSymbolicLink()) throw new Error('recovery_symlink_forbidden');
+      if (stat.isDirectory()) walk(absolute, relative);
+      else if (stat.isFile()) rows.push({ relative_path: relative, sha256: hashFile(absolute), size_bytes: stat.size });
       else throw new Error('recovery_unsupported_filesystem_entry');
     }
   }
   walk(dirPath);
   return Object.freeze({ rows: Object.freeze(rows), root_sha256: sha256(canonicalJson(rows)) });
+}
+
+function validateDirectoryEntries(entries) {
+  if (!Array.isArray(entries)) throw new Error('recovery_manifest_directory_entries_invalid');
+  const paths = new Set();
+  let previous = null;
+  for (const row of entries) {
+    const relative = assertSafeRelativePath(row?.relative_path);
+    if (paths.has(relative)) throw new Error('recovery_manifest_duplicate_directory_entry');
+    if (previous !== null && relative.localeCompare(previous) < 0) throw new Error('recovery_manifest_directory_entries_not_canonical');
+    const hash = String(row?.sha256 || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('recovery_manifest_directory_entry_hash_invalid');
+    if (!Number.isSafeInteger(Number(row?.size_bytes)) || Number(row.size_bytes) < 0) throw new Error('recovery_manifest_directory_entry_size_invalid');
+    paths.add(relative);
+    previous = relative;
+  }
+  return true;
 }
 
 function normalizeItem(item) {
@@ -42,16 +77,19 @@ function normalizeItem(item) {
   const kind = String(item.kind || '').toUpperCase();
   if (!['FILE', 'DIRECTORY'].includes(kind)) throw new Error('recovery_manifest_kind_invalid');
   const source = assertSafeSourcePath(item.path);
+  const stat = safeLstat(source, kind === 'FILE' ? 'recovery_file_missing' : 'recovery_directory_missing');
   if (kind === 'FILE') {
+    if (!stat.isFile()) throw new Error('recovery_file_missing');
     return Object.freeze({
       label,
       kind,
       source_path: source,
       content_sha256: hashFile(source),
-      size_bytes: fs.statSync(source).size,
+      size_bytes: stat.size,
       directory_entries: null,
     });
   }
+  if (!stat.isDirectory()) throw new Error('recovery_directory_missing');
   const directory = hashDirectory(source);
   return Object.freeze({
     label,
@@ -61,6 +99,13 @@ function normalizeItem(item) {
     size_bytes: directory.rows.reduce((sum, row) => sum + row.size_bytes, 0),
     directory_entries: directory.rows,
   });
+}
+
+function pathsOverlap(a, b) {
+  const relAB = path.relative(a, b);
+  const relBA = path.relative(b, a);
+  const inside = rel => rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return inside(relAB) || inside(relBA);
 }
 
 function createRecoveryManifest({
@@ -77,15 +122,19 @@ function createRecoveryManifest({
   if (!Number.isSafeInteger(gen) || gen <= 0) throw new Error('recovery_generation_invalid');
   const previous = previous_manifest_sha256 === null ? null : String(previous_manifest_sha256).toLowerCase();
   if (previous !== null && !/^[0-9a-f]{64}$/.test(previous)) throw new Error('recovery_previous_manifest_hash_invalid');
+  if (gen === 1 && previous !== null) throw new Error('recovery_genesis_previous_manifest_forbidden');
+  if (gen > 1 && previous === null) throw new Error('recovery_previous_manifest_required');
   if (!Array.isArray(items) || !items.length) throw new Error('recovery_manifest_items_required');
   const normalized = items.map(normalizeItem).sort((a, b) => a.label.localeCompare(b.label));
   const labels = new Set();
-  const paths = new Set();
+  const paths = [];
   for (const item of normalized) {
     if (labels.has(item.label)) throw new Error('recovery_manifest_duplicate_label');
-    if (paths.has(item.source_path)) throw new Error('recovery_manifest_duplicate_source');
+    for (const existing of paths) {
+      if (pathsOverlap(existing, item.source_path)) throw new Error('recovery_manifest_overlapping_source');
+    }
     labels.add(item.label);
-    paths.add(item.source_path);
+    paths.push(item.source_path);
   }
 
   const body = {
@@ -112,8 +161,34 @@ function verifyRecoveryManifest(manifest) {
   if (manifest.contains_secret_material !== false || manifest.grants_external_rights !== false || manifest.permits_value_movement !== false) {
     throw new Error('recovery_manifest_boundary_invalid');
   }
-  if (!Number.isSafeInteger(Number(manifest.generation)) || Number(manifest.generation) <= 0) throw new Error('recovery_manifest_generation_invalid');
+  const generation = Number(manifest.generation);
+  if (!Number.isSafeInteger(generation) || generation <= 0) throw new Error('recovery_manifest_generation_invalid');
+  const previous = manifest.previous_manifest_sha256;
+  if (generation === 1 && previous !== null) throw new Error('recovery_manifest_genesis_chain_invalid');
+  if (generation > 1 && !/^[0-9a-f]{64}$/i.test(String(previous || ''))) throw new Error('recovery_manifest_previous_hash_invalid');
+  if (!/^[0-9a-f]{64}$/i.test(String(manifest.checkpoint_state_root_sha256 || ''))) throw new Error('recovery_manifest_state_root_invalid');
   if (!Array.isArray(manifest.items) || !manifest.items.length) throw new Error('recovery_manifest_items_invalid');
+  const labels = new Set();
+  const sources = [];
+  let previousLabel = null;
+  for (const item of manifest.items) {
+    const label = String(item?.label || '');
+    if (!/^[A-Z0-9_:-]{3,128}$/.test(label)) throw new Error('recovery_manifest_label_invalid');
+    if (previousLabel !== null && label.localeCompare(previousLabel) < 0) throw new Error('recovery_manifest_items_not_canonical');
+    if (labels.has(label)) throw new Error('recovery_manifest_duplicate_label');
+    if (!['FILE', 'DIRECTORY'].includes(item.kind)) throw new Error('recovery_manifest_kind_invalid');
+    const source = assertSafeSourcePath(item.source_path);
+    for (const existing of sources) {
+      if (pathsOverlap(existing, source)) throw new Error('recovery_manifest_overlapping_source');
+    }
+    if (!/^[0-9a-f]{64}$/i.test(String(item.content_sha256 || ''))) throw new Error('recovery_manifest_content_hash_invalid');
+    if (!Number.isSafeInteger(Number(item.size_bytes)) || Number(item.size_bytes) < 0) throw new Error('recovery_manifest_size_invalid');
+    if (item.kind === 'FILE' && item.directory_entries !== null) throw new Error('recovery_manifest_file_entries_invalid');
+    if (item.kind === 'DIRECTORY') validateDirectoryEntries(item.directory_entries);
+    labels.add(label);
+    sources.push(source);
+    previousLabel = label;
+  }
   return true;
 }
 
@@ -126,7 +201,7 @@ function verifyRecoverySources(manifest) {
     let currentSize;
     if (item.kind === 'FILE') {
       currentHash = hashFile(source);
-      currentSize = fs.statSync(source).size;
+      currentSize = safeLstat(source, 'recovery_file_missing').size;
     } else if (item.kind === 'DIRECTORY') {
       const directory = hashDirectory(source);
       currentHash = directory.root_sha256;
@@ -151,5 +226,6 @@ module.exports = {
   verifyRecoveryManifest,
   verifyRecoverySources,
   assertSafeSourcePath,
+  assertSafeRelativePath,
   hashDirectory,
 };
