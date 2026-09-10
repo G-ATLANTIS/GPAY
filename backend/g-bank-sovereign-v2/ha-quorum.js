@@ -38,10 +38,7 @@ function normalizeCluster(config) {
     try { key = crypto.createPublicKey(publicKeyPem); } catch { throw new Error('ha_node_public_key_invalid'); }
     if (key.asymmetricKeyType !== 'ed25519') throw new Error('ha_node_key_type_must_be_ed25519');
     return Object.freeze({
-      node_id: nodeId,
-      role,
-      status,
-      public_key_pem: publicKeyPem,
+      node_id: nodeId, role, status, public_key_pem: publicKeyPem,
       public_key_binding_sha256: sha256(key.export({ type: 'spki', format: 'der' })),
     });
   }).sort((a, b) => a.node_id.localeCompare(b.node_id));
@@ -49,14 +46,7 @@ function normalizeCluster(config) {
   const activeVoters = nodes.filter(node => node.role === 'VOTER' && node.status === 'ACTIVE');
   if (activeVoters.length < 3) throw new Error('ha_active_voter_count_too_low');
   const quorum = Math.floor(activeVoters.length / 2) + 1;
-  const body = {
-    schema: 'g-bank-ha-cluster/v2',
-    cluster_id: clusterId,
-    cluster_epoch: clusterEpoch,
-    nodes,
-    active_voter_count: activeVoters.length,
-    quorum,
-  };
+  const body = { schema: 'g-bank-ha-cluster/v2', cluster_id: clusterId, cluster_epoch: clusterEpoch, nodes, active_voter_count: activeVoters.length, quorum };
   return Object.freeze({ ...body, cluster_sha256: sha256(canonicalJson(body)) });
 }
 
@@ -73,29 +63,15 @@ function createFenceProposal({ cluster, term, leader_node_id, previous_fence_sha
   const start = Date.parse(valid_from);
   const end = Date.parse(valid_until);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end - start > 300000) throw new Error('ha_fence_window_invalid');
-  return proposal({
-    cluster_sha256: c.cluster_sha256,
-    cluster_epoch: c.cluster_epoch,
-    term: positiveInt('ha_fence_term', term),
-    leader_node_id: leader,
-    previous_fence_sha256: hash64('ha_previous_fence_sha256', previous_fence_sha256, { nullable: true }),
-    valid_from: new Date(start).toISOString(),
-    valid_until: new Date(end).toISOString(),
-  }, 'g-bank-ha-fence-proposal/v2');
+  return proposal({ cluster_sha256: c.cluster_sha256, cluster_epoch: c.cluster_epoch, term: positiveInt('ha_fence_term', term), leader_node_id: leader,
+    previous_fence_sha256: hash64('ha_previous_fence_sha256', previous_fence_sha256, { nullable: true }), valid_from: new Date(start).toISOString(), valid_until: new Date(end).toISOString() }, 'g-bank-ha-fence-proposal/v2');
 }
 
 function createCommitProposal({ cluster, term, leader_node_id, commit_index, state_root_sha256, fence_record_sha256, previous_commit_sha256 = null }) {
   const c = normalizeCluster(cluster);
-  return proposal({
-    cluster_sha256: c.cluster_sha256,
-    cluster_epoch: c.cluster_epoch,
-    term: positiveInt('ha_commit_term', term),
-    leader_node_id: String(leader_node_id || '').toUpperCase(),
-    commit_index: positiveInt('ha_commit_index', commit_index),
-    state_root_sha256: hash64('ha_state_root_sha256', state_root_sha256),
-    fence_record_sha256: hash64('ha_fence_record_sha256', fence_record_sha256),
-    previous_commit_sha256: hash64('ha_previous_commit_sha256', previous_commit_sha256, { nullable: true }),
-  }, 'g-bank-ha-commit-proposal/v2');
+  return proposal({ cluster_sha256: c.cluster_sha256, cluster_epoch: c.cluster_epoch, term: positiveInt('ha_commit_term', term), leader_node_id: String(leader_node_id || '').toUpperCase(),
+    commit_index: positiveInt('ha_commit_index', commit_index), state_root_sha256: hash64('ha_state_root_sha256', state_root_sha256),
+    fence_record_sha256: hash64('ha_fence_record_sha256', fence_record_sha256), previous_commit_sha256: hash64('ha_previous_commit_sha256', previous_commit_sha256, { nullable: true }) }, 'g-bank-ha-commit-proposal/v2');
 }
 
 function signProposal({ proposal: p, node_id, private_key, signed_at = new Date().toISOString() }) {
@@ -128,23 +104,30 @@ function verifyQuorumCertificate({ cluster, proposal: p, signatures, now = Date.
     let ok = false;
     try { ok = crypto.verify(null, Buffer.from(p.proposal_sha256, 'utf8'), node.public_key_pem, Buffer.from(String(sig.signature_base64 || ''), 'base64')); } catch { ok = false; }
     if (!ok) throw new Error('ha_signature_invalid');
-    accepted.push(nodeId);
+    accepted.push(Object.freeze({ node_id: nodeId, proposal_sha256: p.proposal_sha256, signed_at: new Date(signedAt).toISOString(), signature_base64: String(sig.signature_base64) }));
   }
-  accepted.sort();
+  accepted.sort((a, b) => a.node_id.localeCompare(b.node_id));
   if (accepted.length < c.quorum) throw new Error('ha_quorum_not_met');
   const certBody = {
-    schema: 'g-bank-ha-quorum-certificate/v2',
-    cluster_sha256: c.cluster_sha256,
-    cluster_epoch: c.cluster_epoch,
-    proposal_sha256: p.proposal_sha256,
-    proposal_schema: p.schema,
-    quorum_required: c.quorum,
-    signer_node_ids: accepted,
-    verified_at: new Date(now).toISOString(),
-    grants_external_rights: false,
-    permits_value_movement_by_itself: false,
+    schema: 'g-bank-ha-quorum-certificate/v2', cluster_sha256: c.cluster_sha256, cluster_epoch: c.cluster_epoch,
+    proposal_sha256: p.proposal_sha256, proposal_schema: p.schema, quorum_required: c.quorum,
+    signer_node_ids: accepted.map(sig => sig.node_id), signatures: accepted,
+    verified_at: new Date(now).toISOString(), grants_external_rights: false, permits_value_movement_by_itself: false,
   };
   return Object.freeze({ ...certBody, certificate_sha256: sha256(canonicalJson(certBody)) });
 }
 
-module.exports = { normalizeCluster, createFenceProposal, createCommitProposal, signProposal, verifyQuorumCertificate };
+function verifyStoredQuorumCertificate({ cluster, proposal: p, certificate }) {
+  if (!certificate || certificate.schema !== 'g-bank-ha-quorum-certificate/v2') throw new Error('ha_stored_certificate_required');
+  const supplied = hash64('ha_certificate_sha256', certificate.certificate_sha256);
+  const { certificate_sha256, ...body } = certificate;
+  if (sha256(canonicalJson(body)) !== supplied) throw new Error('ha_certificate_hash_mismatch');
+  if (certificate.grants_external_rights !== false || certificate.permits_value_movement_by_itself !== false) throw new Error('ha_certificate_boundary_invalid');
+  const verifiedAt = Date.parse(certificate.verified_at);
+  if (!Number.isFinite(verifiedAt)) throw new Error('ha_certificate_verified_at_invalid');
+  const reconstructed = verifyQuorumCertificate({ cluster, proposal: p, signatures: certificate.signatures, now: verifiedAt });
+  if (reconstructed.certificate_sha256 !== supplied) throw new Error('ha_certificate_reverification_mismatch');
+  return true;
+}
+
+module.exports = { normalizeCluster, createFenceProposal, createCommitProposal, signProposal, verifyQuorumCertificate, verifyStoredQuorumCertificate };
