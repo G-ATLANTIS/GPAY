@@ -57,10 +57,14 @@ class DirectSettlementAdapter {
     const authorization_sha256 = this._requireEnabled();
     const now = this.clock();
     const preflight = this._requireFreshPreflight(instruction, now);
-    const runtimeGate = verifyRuntimePromotionGate({ env: this.env, now });
     if (!message?.document || !message?.document_sha256) throw new Error('settlement_message_required');
     if (!instruction?.instruction_sha256) throw new Error('settlement_instruction_required');
     if (!idempotencyKey) throw new Error('settlement_idempotency_key_required');
+
+    // This is the final local gate before the external transport call. The one-time
+    // challenge is consumed here so a signed runtime witness cannot be replayed.
+    const runtimeGate = verifyRuntimePromotionGate({ env: this.env, now, consumeChallenge: true });
+    if (runtimeGate.ha_runtime_challenge_consumed !== true) throw new Error('runtime_ha_challenge_not_consumed');
 
     const response = await this.transport.submit({
       message_type: message.message_type, message_document: message.document, message_sha256: message.document_sha256,
@@ -75,6 +79,10 @@ class DirectSettlementAdapter {
       ha_cluster_authority_root_sha256: runtimeGate.ha_cluster_authority_root_sha256,
       ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
       ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
+      ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256,
+      ha_runtime_challenge_issue_record_sha256: runtimeGate.ha_runtime_challenge_issue_record_sha256,
+      ha_runtime_challenge_consume_record_sha256: runtimeGate.ha_runtime_challenge_consume_record_sha256,
+      ha_runtime_challenge_store_head_sha256: runtimeGate.ha_runtime_challenge_store_head_sha256,
       runtime_preflight_receipt_sha256: preflight.external_receipt_sha256,
     });
     if (!response?.submission_id) throw new Error('settlement_submission_id_missing');
@@ -92,6 +100,10 @@ class DirectSettlementAdapter {
       ha_cluster_authority_root_sha256: runtimeGate.ha_cluster_authority_root_sha256,
       ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
       ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
+      ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256,
+      ha_runtime_challenge_issue_record_sha256: runtimeGate.ha_runtime_challenge_issue_record_sha256,
+      ha_runtime_challenge_consume_record_sha256: runtimeGate.ha_runtime_challenge_consume_record_sha256,
+      ha_runtime_challenge_store_head_sha256: runtimeGate.ha_runtime_challenge_store_head_sha256,
       runtime_preflight_receipt_sha256: preflight.external_receipt_sha256,
       external_receipt_sha256: response.external_receipt_sha256, provider_request_id: response.provider_request_id || null,
       observed_at: new Date(now).toISOString(),
