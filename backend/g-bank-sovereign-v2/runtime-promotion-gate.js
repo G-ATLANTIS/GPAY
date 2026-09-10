@@ -5,6 +5,7 @@ const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
 const { verifyTechnicalPromotionCertificate, verifyReadiness } = require('./promotion-certificate');
 const { verifyExternalPromotionSignatureEvidence } = require('./promotion-signing');
+const { verifyPromotionSignatureQuorum } = require('./promotion-signer-authority');
 const { verifyHARuntimeObservation } = require('./ha-runtime-attestation');
 const { HARuntimeChallengeStore } = require('./ha-runtime-challenge-store');
 const { settlementOperationBinding } = require('./settlement-operation-binding');
@@ -45,6 +46,8 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
   const promotionFile = readJsonFile('runtime_promotion_certificate', env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE);
   const promotionSigningRequestFile = readJsonFile('runtime_promotion_signing_request', env.G_BANK_RUNTIME_PROMOTION_SIGNING_REQUEST_FILE);
   const promotionSignatureFile = readJsonFile('runtime_promotion_signature_evidence', env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_EVIDENCE_FILE);
+  const promotionSignerAuthorityFile = readJsonFile('runtime_promotion_signer_authority', env.G_BANK_RUNTIME_PROMOTION_SIGNER_AUTHORITY_FILE);
+  const promotionSignatureBundleFile = readJsonFile('runtime_promotion_signature_bundle', env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_BUNDLE_FILE);
   const runtimeHAFile = readJsonFile('runtime_ha_attestation', env.G_BANK_RUNTIME_HA_ATTESTATION_FILE);
   const runtimeHAObserverFile = readJsonFile('runtime_ha_observer', env.G_BANK_RUNTIME_HA_OBSERVER_FILE);
   const challengeStorePath = String(env.G_BANK_RUNTIME_HA_CHALLENGE_STORE || '');
@@ -59,6 +62,13 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
     request: promotionSigningRequestFile.value,
     certificate,
     evidence: promotionSignatureFile.value,
+    now,
+  });
+  const promotionSignatureQuorumProof = verifyPromotionSignatureQuorum({
+    request: promotionSigningRequestFile.value,
+    certificate,
+    authority: promotionSignerAuthorityFile.value,
+    bundle: promotionSignatureBundleFile.value,
     now,
   });
 
@@ -113,6 +123,11 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
     promotion_signing_request_sha256: promotionSignatureProof.signing_request_sha256,
     promotion_signer_key_binding_sha256: promotionSignatureProof.key_binding_sha256,
     promotion_signer_receipt_sha256: promotionSignatureProof.signer_receipt_sha256,
+    promotion_signature_quorum_proof_sha256: promotionSignatureQuorumProof.proof_sha256,
+    promotion_signer_authority_root_sha256: promotionSignatureQuorumProof.authority_root_sha256,
+    promotion_signer_authority_epoch: promotionSignatureQuorumProof.authority_epoch,
+    promotion_signature_quorum: promotionSignatureQuorumProof.quorum,
+    promotion_signature_valid_signer_count: promotionSignatureQuorumProof.valid_signer_count,
     trusted_runtime_ha_observer_sha256: certificate.trusted_runtime_ha_observer_sha256,
     settlement_operation_binding_sha256: operationBinding.operation_binding_sha256,
     settlement_message_sha256: operationBinding.message_sha256,
