@@ -1,7 +1,6 @@
 const express = require('express');
 const fs = require('fs');
 const crypto = require('crypto');
-const mollieClient = require('@mollie/api-client').default({ apiKey: process.env.MOLLIE_API_KEY });
 const rewardTokens = require('../utils/g-token-reward');
 const generateInvoice = require('../utils/invoice-generator');
 const sendMail = require('../utils/mailer');
@@ -12,11 +11,18 @@ const { createGcoinSettlementIntent } = require('../utils/gcoin-settlement-inten
 const router = express.Router();
 
 function requireMollieConfig() {
-  if (!process.env.MOLLIE_API_KEY) {
+  const apiKey = process.env.MOLLIE_API_KEY;
+  if (!apiKey || !apiKey.trim()) {
     const err = new Error('MOLLIE_API_KEY is required');
     err.code = 'CONFIG_ERROR';
     throw err;
   }
+  return apiKey.trim();
+}
+
+function getMollieClient() {
+  const apiKey = requireMollieConfig();
+  return require('@mollie/api-client').default({ apiKey });
 }
 
 router.post('/mollie/webhook', async (req, res) => {
@@ -25,7 +31,7 @@ router.post('/mollie/webhook', async (req, res) => {
 
   let lock;
   try {
-    requireMollieConfig();
+    const mollieClient = getMollieClient();
 
     lock = acquirePaymentLock('mollie', id);
     if (!lock.acquired) {
