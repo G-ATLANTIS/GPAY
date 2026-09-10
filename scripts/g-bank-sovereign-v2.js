@@ -14,6 +14,7 @@ const { normalizeAuthoritySet } = require('../backend/g-bank-sovereign-v2/author
 const { assessSovereignReadiness } = require('../backend/g-bank-sovereign-v2/readiness');
 const { createTechnicalPromotionCertificate } = require('../backend/g-bank-sovereign-v2/promotion-certificate');
 const { verifyRuntimePromotionGate } = require('../backend/g-bank-sovereign-v2/runtime-promotion-gate');
+const { HARuntimeChallengeStore } = require('../backend/g-bank-sovereign-v2/ha-runtime-challenge-store');
 
 function args(argv = process.argv.slice(2)) {
   const out = { _: [] };
@@ -110,19 +111,21 @@ function governanceSnapshot(riskPolicy, authoritySet) {
 }
 
 function configureRuntimePromotionArtifacts(a, env = process.env) {
-  if (!a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer']) {
-    throw new Error('--readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer_required');
+  if (!a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) {
+    throw new Error('--readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
   }
   env.G_BANK_RUNTIME_READINESS_FILE = path.resolve(a.readiness);
   env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = path.resolve(a.promotion);
   env.G_BANK_RUNTIME_HA_ATTESTATION_FILE = path.resolve(a['runtime-ha-attestation']);
   env.G_BANK_RUNTIME_HA_OBSERVER_FILE = path.resolve(a['runtime-ha-observer']);
+  env.G_BANK_RUNTIME_HA_CHALLENGE_STORE = path.resolve(a['runtime-ha-challenge-store']);
   env.G_BANK_PROMOTION_CERTIFICATE_SHA256 = sha256Arg('promotion_sha256', a['promotion-sha256']);
   return Object.freeze({
     readiness_file: env.G_BANK_RUNTIME_READINESS_FILE,
     promotion_file: env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE,
     runtime_ha_attestation_file: env.G_BANK_RUNTIME_HA_ATTESTATION_FILE,
     runtime_ha_observer_file: env.G_BANK_RUNTIME_HA_OBSERVER_FILE,
+    runtime_ha_challenge_store: env.G_BANK_RUNTIME_HA_CHALLENGE_STORE,
     promotion_sha256: env.G_BANK_PROMOTION_CERTIFICATE_SHA256,
   });
 }
@@ -152,6 +155,28 @@ async function main() {
   if (command === 'verify-ledger') {
     const p = statePaths(a);
     console.log(JSON.stringify({ state: 'LEDGER_VERIFIED', ...new SovereignLedger(p.ledger).verify() }, null, 2));
+    return;
+  }
+
+  if (command === 'issue-ha-challenge') {
+    if (!a['challenge-store'] || !a.out) throw new Error('--challenge-store --out_required');
+    const store = new HARuntimeChallengeStore(a['challenge-store']);
+    const challenge = store.issue({ ttl_ms: a['ttl-ms'] === undefined ? 30000 : Number(a['ttl-ms']) });
+    const output = writePrivate(a.out, {
+      schema: 'g-bank-ha-runtime-challenge/v2',
+      nonce_sha256: challenge.nonce_sha256,
+      issued_at: challenge.issued_at,
+      expires_at: challenge.expires_at,
+      issue_record_sha256: challenge.issue_record_sha256,
+      grants_external_rights: false,
+      permits_value_movement_by_itself: false,
+    });
+    console.log(JSON.stringify({
+      state: 'HA_RUNTIME_CHALLENGE_ISSUED', nonce_sha256: challenge.nonce_sha256,
+      issue_record_sha256: challenge.issue_record_sha256, expires_at: challenge.expires_at,
+      challenge_store: path.resolve(a['challenge-store']), output,
+      grants_external_rights: false, permits_value_movement_by_itself: false,
+    }, null, 2));
     return;
   }
 
@@ -237,12 +262,12 @@ async function main() {
   }
 
   if (command === 'execute') {
-    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer']) {
-      throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer_required');
+    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) {
+      throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
     }
     configureRuntimePromotionArtifacts(a, process.env);
     const { core } = coreFor(a, { live: true, governanceRequired: true });
-    const runtimeGate = verifyRuntimePromotionGate({ env: process.env });
+    const runtimeGate = verifyRuntimePromotionGate({ env: process.env, consumeChallenge: false });
     const result = await core.execute({
       prepared: readJson(a.prepared), schemeValidationEvidence: readJson(a.validation),
       approvalToken: fs.readFileSync(path.resolve(a.approval), 'utf8').trim(), authoritySignatures: readJson(a.signatures), idempotencyKey: a['idempotency-key'],
@@ -252,6 +277,7 @@ async function main() {
       runtime_promotion_gate_sha256: runtimeGate.gate_sha256,
       ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
       ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
+      ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256,
     }, null, 2));
     return;
   }
