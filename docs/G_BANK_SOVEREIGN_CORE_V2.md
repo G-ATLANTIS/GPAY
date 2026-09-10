@@ -191,6 +191,6 @@ G_BANK_VALUE_MOVEMENT = DENY_UNTIL_VERIFIED_AUTHORIZED_TRANSPORT
 
 ## Promotion rule
 
-Do not label direct settlement `LIVE` until legal/regulatory authorization, scheme/settlement admission, production identity/certificate material, production network path, authenticated transport preflight, scheme-validation path, current governance/prudential/treasury/resilience PASS evidence, bounded submission, provider/CSM readback and reconciliation receipts all exist as real external evidence.
+Do not label direct settlement `LIVE` until legal/regulatory authorization, scheme/settlement admission, production identity/certificate material, production network path, authenticated transport preflight, scheme-validation path, current governance/prudential/treasury/resilience PASS evidence, bounded submission, provider/CSM readback and settlement reconciliation receipts all exist as real external evidence.
 
 No simulated, mocked or locally inferred result can satisfy these conditions.
