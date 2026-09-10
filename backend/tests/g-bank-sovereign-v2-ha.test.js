@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { canonicalJson, sha256 } = require('../g-bank-sovereign-v2/canonical');
 const { normalizeCluster, createFenceProposal, createCommitProposal, signProposal, verifyQuorumCertificate } = require('../g-bank-sovereign-v2/ha-quorum');
 const { HAFenceStore, HACommitStore } = require('../g-bank-sovereign-v2/ha-replication-store');
 const { assessHAReadiness } = require('../g-bank-sovereign-v2/ha-readiness-audit');
@@ -14,13 +15,7 @@ const H = c => c.repeat(64);
 
 function keyNode(id) {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-  return {
-    node_id: id,
-    role: 'VOTER',
-    status: 'ACTIVE',
-    public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
-    privateKey,
-  };
+  return { node_id: id, role: 'VOTER', status: 'ACTIVE', public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }).toString(), privateKey };
 }
 
 function fixture() {
@@ -37,17 +32,17 @@ function signatures(proposal, nodes, count = 2) {
   return nodes.slice(0, count).map(node => signProposal({ proposal, node_id: node.node_id, private_key: node.privateKey, signed_at: new Date(NOW).toISOString() }));
 }
 
+function fenceProposal(f, overrides = {}) {
+  return createFenceProposal({
+    cluster: f.clusterInput, term: 1, leader_node_id: 'NODE:A', previous_fence_sha256: null,
+    valid_from: new Date(NOW - 1000).toISOString(), valid_until: new Date(NOW + 240000).toISOString(), ...overrides,
+  });
+}
+
 (() => {
   const f = fixture();
   assert.equal(f.cluster.quorum, 2);
-  const fence = createFenceProposal({
-    cluster: f.clusterInput,
-    term: 1,
-    leader_node_id: 'NODE:A',
-    previous_fence_sha256: null,
-    valid_from: new Date(NOW - 1000).toISOString(),
-    valid_until: new Date(NOW + 240000).toISOString(),
-  });
+  const fence = fenceProposal(f);
 
   assert.throws(() => verifyQuorumCertificate({ cluster: f.clusterInput, proposal: fence, signatures: signatures(fence, f.nodes, 1), now: NOW }), /ha_quorum_not_met/);
   const duplicate = signatures(fence, f.nodes, 1);
@@ -56,39 +51,24 @@ function signatures(proposal, nodes, count = 2) {
   const committedFence = f.fenceStore.commit({ proposal: fence, signatures: signatures(fence, f.nodes), now: NOW });
   assert.equal(committedFence.record.term, 1);
   assert.equal(committedFence.record.leader_node_id, 'NODE:A');
+  assert.equal(f.fenceStore.verify().verified, true);
 
-  const splitBrain = createFenceProposal({
-    cluster: f.clusterInput,
-    term: 1,
-    leader_node_id: 'NODE:B',
-    previous_fence_sha256: null,
-    valid_from: new Date(NOW - 1000).toISOString(),
-    valid_until: new Date(NOW + 240000).toISOString(),
-  });
+  const splitBrain = fenceProposal(f, { term: 1, leader_node_id: 'NODE:B' });
   assert.throws(() => f.fenceStore.commit({ proposal: splitBrain, signatures: signatures(splitBrain, f.nodes), now: NOW }), /ha_fence_next_term_required/);
 
   const commit1 = createCommitProposal({
-    cluster: f.clusterInput,
-    term: 1,
-    leader_node_id: 'NODE:A',
-    commit_index: 1,
-    state_root_sha256: H('a'),
-    fence_record_sha256: committedFence.record.record_sha256,
-    previous_commit_sha256: null,
+    cluster: f.clusterInput, term: 1, leader_node_id: 'NODE:A', commit_index: 1, state_root_sha256: H('a'),
+    fence_record_sha256: committedFence.record.record_sha256, previous_commit_sha256: null,
   });
   const committed = f.commitStore.commit({ proposal: commit1, signatures: signatures(commit1, f.nodes), now: NOW + 1000 });
   assert.equal(committed.record.commit_index, 1);
+  assert.equal(f.commitStore.verify().verified, true);
 
   assert.throws(() => f.commitStore.commit({ proposal: commit1, signatures: signatures(commit1, f.nodes), now: NOW + 2000 }), /ha_commit_next_index_required/);
 
   const gap = createCommitProposal({
-    cluster: f.clusterInput,
-    term: 1,
-    leader_node_id: 'NODE:A',
-    commit_index: 3,
-    state_root_sha256: H('b'),
-    fence_record_sha256: committedFence.record.record_sha256,
-    previous_commit_sha256: committed.record.record_sha256,
+    cluster: f.clusterInput, term: 1, leader_node_id: 'NODE:A', commit_index: 3, state_root_sha256: H('b'),
+    fence_record_sha256: committedFence.record.record_sha256, previous_commit_sha256: committed.record.record_sha256,
   });
   assert.throws(() => f.commitStore.commit({ proposal: gap, signatures: signatures(gap, f.nodes), now: NOW + 2000 }), /ha_commit_next_index_required/);
 
@@ -109,23 +89,37 @@ function signatures(proposal, nodes, count = 2) {
   assert.ok(stale.reasons.includes('COMMIT_STALE'));
 
   const fenceFile = path.join(f.root, 'fences.jsonl');
-  const rows = fs.readFileSync(fenceFile, 'utf8').trim().split('\n').map(JSON.parse);
-  rows[0].leader_node_id = 'NODE:C';
-  fs.writeFileSync(fenceFile, rows.map(JSON.stringify).join('\n') + '\n');
+  const fenceRows = fs.readFileSync(fenceFile, 'utf8').trim().split('\n').map(JSON.parse);
+  fenceRows[0].leader_node_id = 'NODE:C';
+  fs.writeFileSync(fenceFile, fenceRows.map(JSON.stringify).join('\n') + '\n');
   assert.throws(() => f.fenceStore.verify(), /ha_fence_record_hash_mismatch/);
 })();
 
 (() => {
   const f = fixture();
-  const fence = createFenceProposal({
-    cluster: f.clusterInput,
-    term: 1,
-    leader_node_id: 'NODE:A',
-    previous_fence_sha256: null,
-    valid_from: new Date(NOW - 300000).toISOString(),
-    valid_until: new Date(NOW - 1).toISOString(),
-  });
-  assert.throws(() => f.fenceStore.commit({ proposal: fence, signatures: signatures(fence, f.nodes), now: NOW }), /ha_fence_not_current/);
+  const fence = fenceProposal(f);
+  f.fenceStore.commit({ proposal: fence, signatures: signatures(fence, f.nodes), now: NOW });
+  const fenceFile = path.join(f.root, 'fences.jsonl');
+  const rows = fs.readFileSync(fenceFile, 'utf8').trim().split('\n').map(JSON.parse);
+  const row = rows[0];
+
+  row.quorum_certificate.signatures[0].signature_base64 = Buffer.from('forged-signature').toString('base64');
+  const { certificate_sha256: oldCertHash, ...certBody } = row.quorum_certificate;
+  row.quorum_certificate.certificate_sha256 = sha256(canonicalJson(certBody));
+  row.quorum_certificate_sha256 = row.quorum_certificate.certificate_sha256;
+  const { record_sha256: oldRecordHash, ...recordBody } = row;
+  row.record_sha256 = sha256(canonicalJson(recordBody));
+  fs.writeFileSync(fenceFile, JSON.stringify(row) + '\n');
+
+  assert.notEqual(row.quorum_certificate.certificate_sha256, oldCertHash);
+  assert.notEqual(row.record_sha256, oldRecordHash);
+  assert.throws(() => f.fenceStore.verify(), /ha_signature_invalid|ha_certificate_reverification_mismatch/);
+})();
+
+(() => {
+  const f = fixture();
+  const expired = fenceProposal(f, { valid_from: new Date(NOW - 300000).toISOString(), valid_until: new Date(NOW - 1).toISOString() });
+  assert.throws(() => f.fenceStore.commit({ proposal: expired, signatures: signatures(expired, f.nodes), now: NOW }), /ha_fence_not_current/);
 })();
 
 console.log('G-BANK sovereign v2 HA quorum/fencing tests: PASS');
