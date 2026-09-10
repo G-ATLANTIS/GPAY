@@ -13,7 +13,8 @@ const { createSovereignApproval, verifySovereignApproval } = require('../g-bank-
 const { evaluatePaymentPolicy } = require('../g-bank-sovereign-v2/risk-policy');
 const { approvalPayload } = require('../g-bank-sovereign-v2/authority');
 const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/promotion-certificate');
-const { configureSyntheticRuntimeHA } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
+const { settlementOperationBinding } = require('../g-bank-sovereign-v2/settlement-operation-binding');
+const { configureSyntheticHAState, issueSyntheticRuntimeHAWitness } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T06:30:00.000Z');
@@ -53,8 +54,8 @@ function instruction(id = 'PAY0000000000001') {
 
 function configureRuntimePromotion(root, e, policySha256, authoritySetSha256) {
   const fenceValidUntil = new Date(NOW + 240000).toISOString();
-  const runtimeHA = configureSyntheticRuntimeHA({
-    root, env: e, state_root_sha256: H('6'), cluster_authority_root_sha256: H('8'), voter_journal_root_sha256: H('7'),
+  const haState = configureSyntheticHAState({
+    env: e, state_root_sha256: H('6'), cluster_authority_root_sha256: H('8'), voter_journal_root_sha256: H('7'),
     fence_valid_until: fenceValidUntil, now: NOW,
   });
   const evidenceBindings = {
@@ -73,8 +74,8 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256) {
     customer_monitoring_verified: true, recovery_controls_verified: true, ha_controls_verified: true, ha_deployment_verified: true,
     direct_live_ready: true, checks: { synthetic_runtime_fixture_verified: true }, evidence_bindings: evidenceBindings,
     recovery_checkpoint_state_root_sha256: H('6'), ha_checkpoint_state_root_sha256: H('6'),
-    ha_voter_journal_root_sha256: runtimeHA.voter_journal_root_sha256, ha_cluster_authority_root_sha256: runtimeHA.cluster_authority_root_sha256,
-    ha_fence_valid_until: runtimeHA.fence_valid_until, transport_scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT',
+    ha_voter_journal_root_sha256: haState.voter_journal_root_sha256, ha_cluster_authority_root_sha256: haState.cluster_authority_root_sha256,
+    ha_fence_valid_until: haState.fence_valid_until, transport_scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT',
     value_movement_permitted_by_readiness: true, note: 'test fixture only',
   };
   const certificate = createTechnicalPromotionCertificate({
@@ -89,7 +90,7 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256) {
   e.G_BANK_RUNTIME_READINESS_FILE = readinessPath;
   e.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = promotionPath;
   e.G_BANK_PROMOTION_CERTIFICATE_SHA256 = certificate.certificate_sha256;
-  return { readiness, certificate, runtimeHA };
+  return { readiness, certificate, haState };
 }
 
 function setup(transport, { promotion = true } = {}) {
@@ -118,6 +119,24 @@ function setup(transport, { promotion = true } = {}) {
   return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimePromotion };
 }
 
+function bindRuntimeWitness(s, prepared, idempotencyKey) {
+  const operation = settlementOperationBinding({
+    message_sha256: prepared.iso20022.document_sha256,
+    instruction_sha256: prepared.instruction.instruction_sha256,
+    idempotency_key: idempotencyKey,
+    promotion_certificate_sha256: s.runtimePromotion.certificate.certificate_sha256,
+  });
+  const witness = issueSyntheticRuntimeHAWitness({
+    root: s.root,
+    env: s.e,
+    haAudit: s.runtimePromotion.haState.haAudit,
+    haDeploymentAudit: s.runtimePromotion.haState.haDeploymentAudit,
+    operation_binding_sha256: operation.operation_binding_sha256,
+    now: NOW,
+  });
+  return { operation, witness };
+}
+
 function schemeEvidence(prepared) {
   return { result: 'PASS', scheme: prepared.instruction.scheme, message_type: prepared.iso20022.message_type, message_sha256: prepared.iso20022.document_sha256,
     validation_level: 'EXTERNAL_SCHEME_VALIDATED', validator_binding_sha256: H('e'), validation_receipt_sha256: H('f'), observed_at: new Date(NOW).toISOString() };
@@ -135,6 +154,8 @@ function authoritySignatures(s, prepared, validation, key) {
     async preflight() { return { environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT', external_receipt_sha256: H('5') }; },
     async submit(request) {
       submitCount += 1;
+      assert.match(request.settlement_operation_binding_sha256, /^[0-9a-f]{64}$/);
+      assert.equal(request.settlement_operation_binding_sha256, request.ha_runtime_challenge_operation_binding_sha256);
       assert.match(request.runtime_promotion_gate_sha256, /^[0-9a-f]{64}$/);
       assert.match(request.promotion_certificate_sha256, /^[0-9a-f]{64}$/);
       assert.equal(request.recovery_audit_sha256, H('5'));
@@ -157,11 +178,13 @@ function authoritySignatures(s, prepared, validation, key) {
   const validation = schemeEvidence(prepared);
   const approval = createSovereignApproval({ prepared, schemeValidationEvidence: validation, idempotencyKey: key, now: NOW }, s.e);
   const signatures = authoritySignatures(s, prepared, validation, key);
+  const runtime = bindRuntimeWitness(s, prepared, key);
   const result = await s.core.execute({ prepared, schemeValidationEvidence: validation, approvalToken: approval, authoritySignatures: signatures, idempotencyKey: key, now: NOW });
   assert.equal(result.state, 'SETTLED');
   assert.equal(result.value_moved, true);
   assert.equal(result.verified_value_flow, true);
   assert.match(result.governance_proof_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(runtime.witness.challenge.operation_binding_sha256, runtime.operation.operation_binding_sha256);
   assert.equal(s.ledger.balance('G:CUSTOMER:001', 'EUR'), 9000);
   assert.equal(s.ledger.balance('G:SUSPENSE:OUTBOUND', 'EUR'), 0);
   assert.equal(s.ledger.balance('G:SETTLEMENT:OUTBOUND', 'EUR'), 1000);
@@ -212,6 +235,7 @@ function authoritySignatures(s, prepared, validation, key) {
   const v2 = schemeEvidence(p2);
   const ap2 = createSovereignApproval({ prepared: p2, schemeValidationEvidence: v2, idempotencyKey: k2, now: NOW }, a.e);
   const sig2 = authoritySignatures(a, p2, v2, k2);
+  bindRuntimeWitness(a, p2, k2);
   await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: v2, approvalToken: ap2, authoritySignatures: sig2, idempotencyKey: k2, now: NOW }), /transport_connection_dropped_after_submit/);
   assert.equal(a.core.executions.read(k2).state, 'UNKNOWN');
   assert.equal(a.ledger.balance('G:CUSTOMER:001', 'EUR'), 9000);
@@ -219,5 +243,5 @@ function authoritySignatures(s, prepared, validation, key) {
   await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: v2, approvalToken: ap2, authoritySignatures: sig2, idempotencyKey: k2, now: NOW }), /execution_exists_unknown_use_reconcile/);
   assert.equal(ambiguousSubmits, 1, 'ambiguous payment must never auto-resubmit');
 
-  console.log('G-BANK sovereign v2 no-network safety tests: PASS');
+  console.log('G-BANK sovereign v2 transaction-bound no-network safety tests: PASS');
 })().catch(err => { console.error(err); process.exit(1); });
