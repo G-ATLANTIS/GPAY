@@ -9,6 +9,19 @@ const {
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T22:30:00.000Z');
 
+const evidence_bindings = {
+  legal_authorization_evidence_sha256: H('d'),
+  scheme_participation_evidence_sha256: H('e'),
+  settlement_access_evidence_sha256: H('f'),
+  production_identity_evidence_sha256: H('1'),
+  transport_preflight_receipt_sha256: H('2'),
+  prudential_audit_sha256: H('3'),
+  operational_resilience_sha256: H('4'),
+  treasury_assessment_sha256: H('5'),
+  customer_monitoring_audit_sha256: H('6'),
+  recovery_audit_sha256: H('8'),
+};
+
 function readiness(overrides = {}) {
   return {
     schema: 'g-bank-sovereign-readiness/v2',
@@ -22,6 +35,7 @@ function readiness(overrides = {}) {
     direct_live_ready: true,
     value_movement_permitted_by_readiness: true,
     checks: { synthetic_test_snapshot: true },
+    evidence_bindings: { ...evidence_bindings },
     ...overrides,
   };
 }
@@ -33,18 +47,6 @@ const checkpoint = {
 const governance = {
   policy_sha256: H('b'),
   authority_set_sha256: H('c'),
-};
-const evidence_bindings = {
-  legal_authorization_evidence_sha256: H('d'),
-  scheme_participation_evidence_sha256: H('e'),
-  settlement_access_evidence_sha256: H('f'),
-  production_identity_evidence_sha256: H('1'),
-  transport_preflight_receipt_sha256: H('2'),
-  prudential_audit_sha256: H('3'),
-  operational_resilience_sha256: H('4'),
-  treasury_assessment_sha256: H('5'),
-  customer_monitoring_audit_sha256: H('6'),
-  recovery_audit_sha256: H('8'),
 };
 
 const ready = readiness();
@@ -112,10 +114,19 @@ assert.throws(() => createTechnicalPromotionCertificate({
   readiness: ready,
   checkpoint,
   governance,
-  evidence_bindings: { ...evidence_bindings, recovery_audit_sha256: null },
+  evidence_bindings: { ...evidence_bindings, recovery_audit_sha256: H('9') },
   trusted_signing_key_binding_sha256: H('7'),
   now: NOW,
-}), /recovery_audit_sha256_invalid/);
+}), /promotion_readiness_evidence_binding_mismatch:recovery_audit_sha256/);
+
+assert.throws(() => createTechnicalPromotionCertificate({
+  readiness: readiness({ evidence_bindings: { ...evidence_bindings, transport_preflight_receipt_sha256: H('9') } }),
+  checkpoint,
+  governance,
+  evidence_bindings,
+  trusted_signing_key_binding_sha256: H('7'),
+  now: NOW,
+}), /promotion_readiness_evidence_binding_mismatch:transport_preflight_receipt_sha256/);
 
 assert.throws(() => verifyTechnicalPromotionCertificate(cert, {
   readiness: readiness({ checks: { synthetic_test_snapshot: true, changed: true } }),
