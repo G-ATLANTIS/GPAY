@@ -18,7 +18,18 @@ function hashDirectory(dir) {
   return sha256(canonicalJson(rows));
 }
 
-function snapshotState({ accountRegistryPath, customerRegistryPath = null, ledgerPath, receiptsPath, executionsDir, velocityDir = null, inboundStatePath = null, now = Date.now() }) {
+function snapshotState({
+  accountRegistryPath,
+  customerRegistryPath = null,
+  ledgerPath,
+  receiptsPath,
+  executionsDir,
+  velocityDir = null,
+  inboundStatePath = null,
+  monitoringCasesPath = null,
+  evidenceRevocationsPath = null,
+  now = Date.now(),
+}) {
   const state = {
     schema: 'g-bank-sovereign-state-checkpoint/v2',
     account_registry_sha256: hashFile(accountRegistryPath),
@@ -28,6 +39,8 @@ function snapshotState({ accountRegistryPath, customerRegistryPath = null, ledge
     executions_root_sha256: hashDirectory(executionsDir),
     velocity_root_sha256: hashDirectory(velocityDir),
     inbound_state_sha256: hashFile(inboundStatePath),
+    monitoring_cases_sha256: hashFile(monitoringCasesPath),
+    evidence_revocations_sha256: hashFile(evidenceRevocationsPath),
     checkpointed_at: new Date(now).toISOString(),
   };
   const rootBody = {
@@ -38,6 +51,8 @@ function snapshotState({ accountRegistryPath, customerRegistryPath = null, ledge
     executions_root_sha256: state.executions_root_sha256,
     velocity_root_sha256: state.velocity_root_sha256,
     inbound_state_sha256: state.inbound_state_sha256,
+    monitoring_cases_sha256: state.monitoring_cases_sha256,
+    evidence_revocations_sha256: state.evidence_revocations_sha256,
   };
   state.state_root_sha256 = sha256(canonicalJson(rootBody));
   return Object.freeze(state);
@@ -66,6 +81,8 @@ function verifyCheckpoint(checkpoint, paths) {
     executions: current.executions_root_sha256 === checkpoint.executions_root_sha256,
     velocity: current.velocity_root_sha256 === checkpoint.velocity_root_sha256,
     inbound_state: current.inbound_state_sha256 === checkpoint.inbound_state_sha256,
+    monitoring_cases: current.monitoring_cases_sha256 === checkpoint.monitoring_cases_sha256,
+    evidence_revocations: current.evidence_revocations_sha256 === checkpoint.evidence_revocations_sha256,
     state_root: current.state_root_sha256 === checkpoint.state_root_sha256,
   };
   return Object.freeze({
