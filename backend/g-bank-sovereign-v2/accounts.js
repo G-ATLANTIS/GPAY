@@ -88,6 +88,17 @@ class AccountRegistry {
     }
   }
 
+  list({ type = null, currency = null, status = null } = {}) {
+    const kind = type ? String(type).toUpperCase() : null;
+    const ccy = currency ? assertCurrency(currency) : null;
+    const st = status ? String(status).toUpperCase() : null;
+    return Object.freeze(this._load().accounts
+      .filter(account => !kind || account.type === kind)
+      .filter(account => !ccy || account.currency === ccy)
+      .filter(account => !st || account.status === st)
+      .map(account => Object.freeze({ ...account })));
+  }
+
   get(accountId) {
     const id = assertAccountId(accountId);
     const account = this._load().accounts.find(a => a.account_id === id);
