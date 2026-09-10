@@ -18,7 +18,7 @@ function hashDirectory(dir) {
   return sha256(canonicalJson(rows));
 }
 
-function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executionsDir, velocityDir = null, now = Date.now() }) {
+function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executionsDir, velocityDir = null, inboundStatePath = null, now = Date.now() }) {
   const state = {
     schema: 'g-bank-sovereign-state-checkpoint/v2',
     account_registry_sha256: hashFile(accountRegistryPath),
@@ -26,6 +26,7 @@ function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executio
     receipts_file_sha256: hashFile(receiptsPath),
     executions_root_sha256: hashDirectory(executionsDir),
     velocity_root_sha256: hashDirectory(velocityDir),
+    inbound_state_sha256: hashFile(inboundStatePath),
     checkpointed_at: new Date(now).toISOString(),
   };
   const rootBody = {
@@ -34,6 +35,7 @@ function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executio
     receipts_file_sha256: state.receipts_file_sha256,
     executions_root_sha256: state.executions_root_sha256,
     velocity_root_sha256: state.velocity_root_sha256,
+    inbound_state_sha256: state.inbound_state_sha256,
   };
   state.state_root_sha256 = sha256(canonicalJson(rootBody));
   return Object.freeze(state);
@@ -60,6 +62,7 @@ function verifyCheckpoint(checkpoint, paths) {
     receipts: current.receipts_file_sha256 === checkpoint.receipts_file_sha256,
     executions: current.executions_root_sha256 === checkpoint.executions_root_sha256,
     velocity: current.velocity_root_sha256 === checkpoint.velocity_root_sha256,
+    inbound_state: current.inbound_state_sha256 === checkpoint.inbound_state_sha256,
     state_root: current.state_root_sha256 === checkpoint.state_root_sha256,
   };
   return Object.freeze({
