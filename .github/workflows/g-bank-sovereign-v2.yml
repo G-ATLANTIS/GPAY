@@ -25,6 +25,8 @@ jobs:
           node-version: '22'
       - name: Syntax checks
         run: |
+          node --check backend/g-bank-sovereign-v2/canonical.js
+          node --check backend/g-bank-sovereign-v2/receipt-ledger.js
           node --check backend/g-bank-sovereign-v2/ledger.js
           node --check backend/g-bank-sovereign-v2/accounts.js
           node --check backend/g-bank-sovereign-v2/compliance.js
@@ -41,3 +43,4 @@ jobs:
         run: |
           node backend/tests/g-bank-sovereign-v2.test.js
           node backend/tests/g-bank-sovereign-v2-readiness.test.js
+          node backend/tests/g-bank-sovereign-v2-integrity.test.js
