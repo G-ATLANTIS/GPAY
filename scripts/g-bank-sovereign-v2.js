@@ -180,26 +180,14 @@ async function main() {
     const store = new HARuntimeChallengeStore(a['challenge-store']);
     const challenge = store.issue({ operation_binding_sha256: operation.operation_binding_sha256, ttl_ms: a['ttl-ms'] === undefined ? 30000 : Number(a['ttl-ms']) });
     const output = writePrivate(a.out, {
-      schema: 'g-bank-ha-runtime-challenge/v2',
-      nonce_sha256: challenge.nonce_sha256,
-      operation_binding_sha256: operation.operation_binding_sha256,
-      message_sha256: operation.message_sha256,
-      instruction_sha256: operation.instruction_sha256,
-      idempotency_key: operation.idempotency_key,
-      promotion_certificate_sha256: operation.promotion_certificate_sha256,
-      issued_at: challenge.issued_at,
-      expires_at: challenge.expires_at,
-      issue_record_sha256: challenge.issue_record_sha256,
-      grants_external_rights: false,
-      permits_value_movement_by_itself: false,
-    });
-    console.log(JSON.stringify({
-      state: 'HA_RUNTIME_CHALLENGE_ISSUED', nonce_sha256: challenge.nonce_sha256,
-      operation_binding_sha256: operation.operation_binding_sha256,
-      issue_record_sha256: challenge.issue_record_sha256, expires_at: challenge.expires_at,
-      challenge_store: path.resolve(a['challenge-store']), output,
+      schema: 'g-bank-ha-runtime-challenge/v2', nonce_sha256: challenge.nonce_sha256,
+      operation_binding_sha256: operation.operation_binding_sha256, message_sha256: operation.message_sha256,
+      instruction_sha256: operation.instruction_sha256, idempotency_key: operation.idempotency_key,
+      promotion_certificate_sha256: operation.promotion_certificate_sha256, issued_at: challenge.issued_at,
+      expires_at: challenge.expires_at, issue_record_sha256: challenge.issue_record_sha256,
       grants_external_rights: false, permits_value_movement_by_itself: false,
-    }, null, 2));
+    });
+    console.log(JSON.stringify({ state: 'HA_RUNTIME_CHALLENGE_ISSUED', nonce_sha256: challenge.nonce_sha256, operation_binding_sha256: operation.operation_binding_sha256, issue_record_sha256: challenge.issue_record_sha256, expires_at: challenge.expires_at, challenge_store: path.resolve(a['challenge-store']), output, grants_external_rights: false, permits_value_movement_by_itself: false }, null, 2));
     return;
   }
 
@@ -222,93 +210,41 @@ async function main() {
   }
 
   if (command === 'readiness') {
-    if (!a.prudential || !a['monitoring-audit'] || !a['recovery-audit'] || !a['ha-audit'] || !a['ha-deployment-audit'] || !a.out) {
-      throw new Error('--prudential --monitoring-audit --recovery-audit --ha-audit --ha-deployment-audit --out_required');
-    }
+    if (!a.prudential || !a['monitoring-audit'] || !a['recovery-audit'] || !a['ha-audit'] || !a['ha-deployment-audit'] || !a.out) throw new Error('--prudential --monitoring-audit --recovery-audit --ha-audit --ha-deployment-audit --out_required');
     const { riskPolicy, authoritySet } = governanceFor(a, { required: true });
     const settlement = loadSettlement(process.env);
     const preflight = await settlement.preflight();
-    const readiness = assessSovereignReadiness({
-      env: process.env,
-      transportPreflight: preflight,
-      governance: governanceSnapshot(riskPolicy, authoritySet),
-      prudential: readJson(a.prudential),
-      monitoringAudit: readJson(a['monitoring-audit']),
-      recoveryAudit: readJson(a['recovery-audit']),
-      haAudit: readJson(a['ha-audit']),
-      haDeploymentAudit: readJson(a['ha-deployment-audit']),
-    });
+    const readiness = assessSovereignReadiness({ env: process.env, transportPreflight: preflight, governance: governanceSnapshot(riskPolicy, authoritySet), prudential: readJson(a.prudential), monitoringAudit: readJson(a['monitoring-audit']), recoveryAudit: readJson(a['recovery-audit']), haAudit: readJson(a['ha-audit']), haDeploymentAudit: readJson(a['ha-deployment-audit']) });
     const output = writePrivate(a.out, readiness);
-    console.log(JSON.stringify({
-      state: readiness.state,
-      direct_live_ready: readiness.direct_live_ready,
-      recovery_controls_verified: readiness.recovery_controls_verified,
-      ha_controls_verified: readiness.ha_controls_verified,
-      ha_deployment_verified: readiness.ha_deployment_verified,
-      customer_monitoring_verified: readiness.customer_monitoring_verified,
-      transport_preflight_receipt_sha256: readiness.evidence_bindings.transport_preflight_receipt_sha256,
-      recovery_checkpoint_state_root_sha256: readiness.recovery_checkpoint_state_root_sha256,
-      ha_checkpoint_state_root_sha256: readiness.ha_checkpoint_state_root_sha256,
-      ha_voter_journal_root_sha256: readiness.ha_voter_journal_root_sha256,
-      ha_cluster_authority_root_sha256: readiness.ha_cluster_authority_root_sha256,
-      ha_fence_valid_until: readiness.ha_fence_valid_until,
-      output,
-    }, null, 2));
+    console.log(JSON.stringify({ state: readiness.state, direct_live_ready: readiness.direct_live_ready, recovery_controls_verified: readiness.recovery_controls_verified, ha_controls_verified: readiness.ha_controls_verified, ha_deployment_verified: readiness.ha_deployment_verified, customer_monitoring_verified: readiness.customer_monitoring_verified, transport_preflight_receipt_sha256: readiness.evidence_bindings.transport_preflight_receipt_sha256, recovery_checkpoint_state_root_sha256: readiness.recovery_checkpoint_state_root_sha256, ha_checkpoint_state_root_sha256: readiness.ha_checkpoint_state_root_sha256, ha_voter_journal_root_sha256: readiness.ha_voter_journal_root_sha256, ha_cluster_authority_root_sha256: readiness.ha_cluster_authority_root_sha256, ha_fence_valid_until: readiness.ha_fence_valid_until, output }, null, 2));
     return;
   }
 
   if (command === 'promote') {
-    if (!a.readiness || !a.checkpoint || !a['trusted-signing-key-binding-sha256'] || !a.out) throw new Error('--readiness --checkpoint --trusted-signing-key-binding-sha256 --out_required');
+    if (!a.readiness || !a.checkpoint || !a['trusted-signing-key-binding-sha256'] || !a['trusted-runtime-ha-observer-sha256'] || !a.out) throw new Error('--readiness --checkpoint --trusted-signing-key-binding-sha256 --trusted-runtime-ha-observer-sha256 --out_required');
     const readiness = readJson(a.readiness);
     const checkpoint = readJson(a.checkpoint);
     const { riskPolicy, authoritySet } = governanceFor(a, { required: true });
     const certificate = createTechnicalPromotionCertificate({
       readiness, checkpoint, governance: governanceSnapshot(riskPolicy, authoritySet), evidence_bindings: readiness.evidence_bindings,
       trusted_signing_key_binding_sha256: sha256Arg('trusted_signing_key_binding_sha256', a['trusted-signing-key-binding-sha256']),
+      trusted_runtime_ha_observer_sha256: sha256Arg('trusted_runtime_ha_observer_sha256', a['trusted-runtime-ha-observer-sha256']),
       ttl_seconds: a['ttl-seconds'] === undefined ? 120 : Number(a['ttl-seconds']),
     });
     const output = writePrivate(a.out, certificate);
-    console.log(JSON.stringify({
-      state: certificate.state, certificate_sha256: certificate.certificate_sha256, state_root_sha256: certificate.state_root_sha256,
-      policy_sha256: certificate.policy_sha256, authority_set_sha256: certificate.authority_set_sha256,
-      recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
-      ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
-      ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256,
-      ha_voter_journal_root_sha256: certificate.ha_voter_journal_root_sha256,
-      ha_cluster_authority_root_sha256: certificate.ha_cluster_authority_root_sha256,
-      customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
-      ha_fence_valid_until: certificate.ha_fence_valid_until,
-      expires_at: certificate.expires_at, output, grants_external_rights: certificate.grants_external_rights,
-      permits_value_movement_by_itself: certificate.permits_value_movement_by_itself,
-    }, null, 2));
+    console.log(JSON.stringify({ state: certificate.state, certificate_sha256: certificate.certificate_sha256, state_root_sha256: certificate.state_root_sha256, policy_sha256: certificate.policy_sha256, authority_set_sha256: certificate.authority_set_sha256, trusted_runtime_ha_observer_sha256: certificate.trusted_runtime_ha_observer_sha256, recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256, ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256, ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256, ha_voter_journal_root_sha256: certificate.ha_voter_journal_root_sha256, ha_cluster_authority_root_sha256: certificate.ha_cluster_authority_root_sha256, customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256, ha_fence_valid_until: certificate.ha_fence_valid_until, expires_at: certificate.expires_at, output, grants_external_rights: certificate.grants_external_rights, permits_value_movement_by_itself: certificate.permits_value_movement_by_itself }, null, 2));
     return;
   }
 
   if (command === 'execute') {
-    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) {
-      throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
-    }
+    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
     configureRuntimePromotionArtifacts(a, process.env);
     const prepared = readJson(a.prepared);
-    const expectedOperation = {
-      message_sha256: prepared?.iso20022?.document_sha256,
-      instruction_sha256: prepared?.instruction?.instruction_sha256,
-      idempotency_key: a['idempotency-key'],
-    };
+    const expectedOperation = { message_sha256: prepared?.iso20022?.document_sha256, instruction_sha256: prepared?.instruction?.instruction_sha256, idempotency_key: a['idempotency-key'] };
     const { core } = coreFor(a, { live: true, governanceRequired: true });
     const runtimeGate = verifyRuntimePromotionGate({ env: process.env, consumeChallenge: false, expectedOperation });
-    const result = await core.execute({
-      prepared, schemeValidationEvidence: readJson(a.validation),
-      approvalToken: fs.readFileSync(path.resolve(a.approval), 'utf8').trim(), authoritySignatures: readJson(a.signatures), idempotencyKey: a['idempotency-key'],
-    });
-    console.log(JSON.stringify({
-      ...result,
-      settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256,
-      runtime_promotion_gate_sha256: runtimeGate.gate_sha256,
-      ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
-      ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
-      ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256,
-    }, null, 2));
+    const result = await core.execute({ prepared, schemeValidationEvidence: readJson(a.validation), approvalToken: fs.readFileSync(path.resolve(a.approval), 'utf8').trim(), authoritySignatures: readJson(a.signatures), idempotencyKey: a['idempotency-key'] });
+    console.log(JSON.stringify({ ...result, settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256, runtime_promotion_gate_sha256: runtimeGate.gate_sha256, trusted_runtime_ha_observer_sha256: runtimeGate.trusted_runtime_ha_observer_sha256, ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256, ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256, ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256 }, null, 2));
     return;
   }
 
