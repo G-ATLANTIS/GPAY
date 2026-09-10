@@ -8,7 +8,7 @@ function storeFor(voteStores, nodeId) {
   return voteStores?.[nodeId] || null;
 }
 
-function assessHAReadiness({ cluster, fenceStore, commitStore, voteStores = null, checkpoint, now = Date.now(), max_commit_age_ms = 120000 } = {}) {
+function assessHAReadiness({ cluster, clusterAuthorityStore = null, fenceStore, commitStore, voteStores = null, checkpoint, now = Date.now(), max_commit_age_ms = 120000 } = {}) {
   const c = normalizeCluster(cluster);
   if (!fenceStore || !commitStore) throw new Error('ha_stores_required');
   if (!checkpoint || checkpoint.schema !== 'g-bank-sovereign-state-checkpoint/v2') throw new Error('ha_checkpoint_required');
@@ -17,6 +17,16 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, voteStores = null
   const fence = fenceProof.latest;
   const commit = commitProof.latest;
   const reasons = [];
+
+  let clusterAuthority = null;
+  if (!clusterAuthorityStore || typeof clusterAuthorityStore.verify !== 'function') {
+    reasons.push('CLUSTER_AUTHORITY_STORE_MISSING');
+  } else {
+    clusterAuthority = clusterAuthorityStore.verify();
+    if (clusterAuthority.current_cluster?.cluster_sha256 !== c.cluster_sha256 || clusterAuthority.current_cluster?.cluster_epoch !== c.cluster_epoch) {
+      reasons.push('CLUSTER_NOT_CANONICAL_AUTHORITY_HEAD');
+    }
+  }
 
   if (!fence) reasons.push('NO_FENCE');
   if (!commit) reasons.push('NO_COMMIT');
@@ -82,6 +92,9 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, voteStores = null
     state: reasons.length ? 'BLOCK' : 'PASS',
     cluster_sha256: c.cluster_sha256,
     cluster_epoch: c.cluster_epoch,
+    cluster_authority_root_sha256: clusterAuthority?.cluster_authority_root_sha256 || null,
+    cluster_transition_count: clusterAuthority?.transition_count ?? null,
+    cluster_transition_head_sha256: clusterAuthority?.transition_head_sha256 || null,
     active_voter_count: c.active_voter_count,
     quorum: c.quorum,
     latest_term: fenceProof.latest_term,
