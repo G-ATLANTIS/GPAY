@@ -3,6 +3,7 @@
 const { canonicalJson, sha256 } = require('./canonical');
 const { assertCurrency, assertMinor } = require('./ledger');
 const { isValidIban, normalizeIban } = require('./accounts');
+const { withAccountOperationLock } = require('./account-operation-lock');
 
 function verifyHashBound(name, value, hashField) {
   if (!value || typeof value !== 'object') throw new Error(`${name}_required`);
@@ -129,97 +130,101 @@ class InboundPaymentProcessor {
   }
 
   ingest(event, { now = Date.now() } = {}) {
-    const verified = verifyInboundSettlementEvidence(event, { now });
-    const customer = this.accounts.findByIban(verified.creditor_iban);
-    if (customer.type !== 'CUSTOMER' || customer.status !== 'ACTIVE') throw new Error('inbound_target_customer_not_active');
-    if (customer.currency !== verified.currency) throw new Error('inbound_target_currency_mismatch');
-    const settlement = this.accounts.requireActive(this.settlementAccountId, verified.currency);
-    const suspense = this.accounts.requireActive(this.suspenseAccountId, verified.currency);
-    if (settlement.type !== 'SETTLEMENT') throw new Error('inbound_settlement_account_type_invalid');
-    if (suspense.type !== 'SUSPENSE') throw new Error('inbound_suspense_account_type_invalid');
+    return withAccountOperationLock(this.accounts, () => {
+      const verified = verifyInboundSettlementEvidence(event, { now });
+      const customer = this.accounts.findByIban(verified.creditor_iban);
+      if (customer.type !== 'CUSTOMER' || customer.status !== 'ACTIVE') throw new Error('inbound_target_customer_not_active');
+      if (customer.currency !== verified.currency) throw new Error('inbound_target_currency_mismatch');
+      const settlement = this.accounts.requireActive(this.settlementAccountId, verified.currency);
+      const suspense = this.accounts.requireActive(this.suspenseAccountId, verified.currency);
+      if (settlement.type !== 'SETTLEMENT') throw new Error('inbound_settlement_account_type_invalid');
+      if (suspense.type !== 'SUSPENSE') throw new Error('inbound_suspense_account_type_invalid');
 
-    const claim = this.store.claim({
-      inbound_id: verified.inbound_id,
-      event_sha256: verified.event_sha256,
-      target_account_id: customer.account_id,
-      amount_minor: verified.amount_minor,
-      currency: verified.currency,
-      settlement_business_date: verified.settlement_business_date,
-      now,
-    });
-    if (!claim.owner && claim.record.state !== 'CLAIMED') return claim.record;
-
-    const transactionId = `INBOUND:PENDING:${sha256(`${verified.inbound_id}:${verified.event_sha256}`).slice(0, 32)}`;
-    const verifyBooking = booking => verifyPendingBooking(booking, verified, {
-      settlementAccountId: this.settlementAccountId,
-      suspenseAccountId: this.suspenseAccountId,
-      targetAccountId: customer.account_id,
-    });
-    const booking = postOrRecover(this.ledger, transactionId, {
-      reference: verified.inbound_id,
-      entries: [
-        { account_id: this.settlementAccountId, side: 'DEBIT', amount_minor: verified.amount_minor, currency: verified.currency },
-        { account_id: this.suspenseAccountId, side: 'CREDIT', amount_minor: verified.amount_minor, currency: verified.currency },
-      ],
-      metadata: {
-        kind: 'INBOUND_SETTLEMENT_PENDING',
+      const claim = this.store.claim({
         inbound_id: verified.inbound_id,
-        inbound_event_sha256: verified.event_sha256,
-        settlement_business_date: verified.settlement_business_date,
+        event_sha256: verified.event_sha256,
         target_account_id: customer.account_id,
-      },
-    }, verifyBooking);
+        amount_minor: verified.amount_minor,
+        currency: verified.currency,
+        settlement_business_date: verified.settlement_business_date,
+        now,
+      });
+      if (!claim.owner && claim.record.state !== 'CLAIMED') return claim.record;
 
-    return transitionOrRead(this.store, {
-      inbound_id: verified.inbound_id,
-      expected_state: 'CLAIMED',
-      to_state: 'PENDING',
-      evidence_sha256: verified.event_sha256,
-      ledger_record_sha256: booking.record_sha256,
-      now,
-    }, 'PENDING');
+      const transactionId = `INBOUND:PENDING:${sha256(`${verified.inbound_id}:${verified.event_sha256}`).slice(0, 32)}`;
+      const verifyBooking = booking => verifyPendingBooking(booking, verified, {
+        settlementAccountId: this.settlementAccountId,
+        suspenseAccountId: this.suspenseAccountId,
+        targetAccountId: customer.account_id,
+      });
+      const booking = postOrRecover(this.ledger, transactionId, {
+        reference: verified.inbound_id,
+        entries: [
+          { account_id: this.settlementAccountId, side: 'DEBIT', amount_minor: verified.amount_minor, currency: verified.currency },
+          { account_id: this.suspenseAccountId, side: 'CREDIT', amount_minor: verified.amount_minor, currency: verified.currency },
+        ],
+        metadata: {
+          kind: 'INBOUND_SETTLEMENT_PENDING',
+          inbound_id: verified.inbound_id,
+          inbound_event_sha256: verified.event_sha256,
+          settlement_business_date: verified.settlement_business_date,
+          target_account_id: customer.account_id,
+        },
+      }, verifyBooking);
+
+      return transitionOrRead(this.store, {
+        inbound_id: verified.inbound_id,
+        expected_state: 'CLAIMED',
+        to_state: 'PENDING',
+        evidence_sha256: verified.event_sha256,
+        ledger_record_sha256: booking.record_sha256,
+        now,
+      }, 'PENDING');
+    });
   }
 
   makeAvailable({ inbound_id, releaseEvidence, now = Date.now() }) {
-    const current = this.store.current(inbound_id);
-    if (!current) throw new Error('inbound_state_missing');
-    if (current.state === 'AVAILABLE') return current;
-    if (current.state !== 'PENDING') throw new Error('inbound_not_pending');
-    verifyReleaseEvidence(releaseEvidence, current, { now });
-    const customer = this.accounts.requireActive(current.target_account_id, current.currency);
-    if (customer.type !== 'CUSTOMER') throw new Error('inbound_target_customer_invalid');
-    const suspense = this.accounts.requireActive(this.suspenseAccountId, current.currency);
-    if (suspense.type !== 'SUSPENSE') throw new Error('inbound_suspense_account_type_invalid');
+    return withAccountOperationLock(this.accounts, () => {
+      const current = this.store.current(inbound_id);
+      if (!current) throw new Error('inbound_state_missing');
+      if (current.state === 'AVAILABLE') return current;
+      if (current.state !== 'PENDING') throw new Error('inbound_not_pending');
+      verifyReleaseEvidence(releaseEvidence, current, { now });
+      const customer = this.accounts.requireActive(current.target_account_id, current.currency);
+      if (customer.type !== 'CUSTOMER') throw new Error('inbound_target_customer_invalid');
+      const suspense = this.accounts.requireActive(this.suspenseAccountId, current.currency);
+      if (suspense.type !== 'SUSPENSE') throw new Error('inbound_suspense_account_type_invalid');
 
-    const transactionId = `INBOUND:AVAILABLE:${sha256(`${current.inbound_id}:${current.event_sha256}`).slice(0, 32)}`;
-    const verifyBooking = booking => verifyAvailableBooking(booking, current, {
-      suspenseAccountId: this.suspenseAccountId,
-      targetAccountId: customer.account_id,
-    });
-    const booking = postOrRecover(this.ledger, transactionId, {
-      reference: current.inbound_id,
-      entries: [
-        { account_id: this.suspenseAccountId, side: 'DEBIT', amount_minor: current.amount_minor, currency: current.currency },
-        { account_id: customer.account_id, side: 'CREDIT', amount_minor: current.amount_minor, currency: current.currency },
-      ],
-      metadata: {
-        kind: 'INBOUND_SETTLEMENT_AVAILABLE',
+      const transactionId = `INBOUND:AVAILABLE:${sha256(`${current.inbound_id}:${current.event_sha256}`).slice(0, 32)}`;
+      const verifyBooking = booking => verifyAvailableBooking(booking, current, {
+        suspenseAccountId: this.suspenseAccountId,
+        targetAccountId: customer.account_id,
+      });
+      const booking = postOrRecover(this.ledger, transactionId, {
+        reference: current.inbound_id,
+        entries: [
+          { account_id: this.suspenseAccountId, side: 'DEBIT', amount_minor: current.amount_minor, currency: current.currency },
+          { account_id: customer.account_id, side: 'CREDIT', amount_minor: current.amount_minor, currency: current.currency },
+        ],
+        metadata: {
+          kind: 'INBOUND_SETTLEMENT_AVAILABLE',
+          inbound_id: current.inbound_id,
+          inbound_event_sha256: current.event_sha256,
+          settlement_business_date: current.settlement_business_date,
+          release_sha256: releaseEvidence.release_sha256,
+          target_account_id: customer.account_id,
+        },
+      }, verifyBooking);
+
+      return transitionOrRead(this.store, {
         inbound_id: current.inbound_id,
-        inbound_event_sha256: current.event_sha256,
-        settlement_business_date: current.settlement_business_date,
-        release_sha256: releaseEvidence.release_sha256,
-        target_account_id: customer.account_id,
-      },
-    }, verifyBooking);
-
-    return transitionOrRead(this.store, {
-      inbound_id: current.inbound_id,
-      expected_state: 'PENDING',
-      to_state: 'AVAILABLE',
-      evidence_sha256: releaseEvidence.release_sha256,
-      ledger_record_sha256: booking.record_sha256,
-      now,
-    }, 'AVAILABLE');
+        expected_state: 'PENDING',
+        to_state: 'AVAILABLE',
+        evidence_sha256: releaseEvidence.release_sha256,
+        ledger_record_sha256: booking.record_sha256,
+        now,
+      }, 'AVAILABLE');
+    });
   }
 }
 
