@@ -1,5 +1,5 @@
 {
-  "version": "1.14.0",
+  "version": "1.15.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -56,6 +56,9 @@
     "postgres_atomic_preparation_rollback_verified_in_ci": true,
     "postgres_atomic_preparation_commit_verified_in_ci": true,
     "webhook_uses_atomic_postgres_preparation_path": true,
+    "postgres_multi_process_effect_prepare_race_verified_in_ci": true,
+    "postgres_multi_process_single_canonical_effect_row_verified_in_ci": true,
+    "postgres_restart_observes_completed_effect_verified_in_ci": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -94,7 +97,11 @@
     "atomic_postgres_preparation_ci": "passed",
     "atomic_postgres_preparation_commit": "37f561776114bd9147236a77d628deea2e87c89d",
     "atomic_postgres_preparation_run_id": 34524290999,
-    "atomic_postgres_preparation_run_number": 159
+    "atomic_postgres_preparation_run_number": 159,
+    "multi_process_postgres_recovery_ci": "passed",
+    "multi_process_postgres_recovery_commit": "35cbe32c896aaa5d695d51c68ae1ca28223af35b",
+    "multi_process_postgres_recovery_run_id": 34524497502,
+    "multi_process_postgres_recovery_run_number": 167
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -106,7 +113,7 @@
   },
   "not_yet_guaranteed": {
     "crash_safe_exactly_once_external_side_effects": true,
-    "multi_process_distributed_locking_for_non_database_local_effects": true,
+    "multi_host_application_deployment_verified": true,
     "external_provider_creation_atomic_with_local_intent_binding": true,
     "email_exactly_once_across_crash_after_provider_acceptance": true,
     "invoice_external_storage_exactly_once": true,
