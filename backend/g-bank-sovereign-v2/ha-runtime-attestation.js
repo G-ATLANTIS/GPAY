@@ -24,7 +24,7 @@ function verifyAssessment(value, schema, hashField) {
   return supplied;
 }
 
-function runtimeHAObservationPayload({ haAudit, haDeploymentAudit, observer, observed_at, nonce_sha256 }) {
+function runtimeHAObservationPayload({ haAudit, haDeploymentAudit, observer, observed_at, nonce_sha256, operation_binding_sha256 }) {
   const o = normalizeObserver(observer);
   const haAuditSha = verifyAssessment(haAudit, 'g-bank-ha-readiness-audit/v2', 'audit_sha256');
   const deploymentAuditSha = verifyAssessment(haDeploymentAudit, 'g-bank-ha-deployment-audit/v2', 'audit_sha256');
@@ -51,6 +51,7 @@ function runtimeHAObservationPayload({ haAudit, haDeploymentAudit, observer, obs
     observer_public_key_binding_sha256: o.public_key_binding_sha256,
     observed_at: new Date(observed).toISOString(),
     nonce_sha256: hash64('ha_runtime_nonce_sha256', nonce_sha256),
+    operation_binding_sha256: hash64('ha_runtime_operation_binding_sha256', operation_binding_sha256),
     grants_external_rights: false,
     permits_value_movement_by_itself: false,
   };
@@ -87,7 +88,7 @@ function verifyHARuntimeObservation({ observation, trustedObserver, expected, no
 
   const fields = [
     'cluster_authority_root_sha256', 'voter_journal_root_sha256', 'state_root_sha256',
-    'ha_audit_sha256', 'ha_deployment_audit_sha256',
+    'ha_audit_sha256', 'ha_deployment_audit_sha256', 'operation_binding_sha256',
   ];
   for (const field of fields) {
     const actual = hash64(`ha_runtime_${field}`, observation[field]);
@@ -112,6 +113,7 @@ function verifyHARuntimeObservation({ observation, trustedObserver, expected, no
     state_root_sha256: observation.state_root_sha256,
     ha_audit_sha256: observation.ha_audit_sha256,
     ha_deployment_audit_sha256: observation.ha_deployment_audit_sha256,
+    operation_binding_sha256: observation.operation_binding_sha256,
     observed_at: observation.observed_at,
     verified_at: new Date(now).toISOString(),
     grants_external_rights: false,
