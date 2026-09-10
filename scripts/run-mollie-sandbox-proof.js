@@ -85,8 +85,8 @@ async function main() {
   };
   proof.proof_hash = sha256(proof);
 
-  const output = process.env.G_MOLLIE_SANDBOX_PROOF_OUT || path.join('evidence', 'mollie-sandbox-proof-v2-5.json');
-  fs.mkdirSync(path.dirname(output), { recursive: true });
+  const output = process.env.G_MOLLIE_SANDBOX_PROOF_OUT || path.join('.secrets', 'evidence', 'mollie-sandbox-proof-v2-5.json');
+  fs.mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 });
   fs.writeFileSync(output, `${JSON.stringify(proof, null, 2)}\n`, { mode: 0o600 });
 
   console.log(JSON.stringify({
