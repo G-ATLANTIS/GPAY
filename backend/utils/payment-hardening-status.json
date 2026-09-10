@@ -1,5 +1,5 @@
 {
-  "version": "1.9.1",
+  "version": "1.10.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -27,6 +27,12 @@
     "postgres_engine_ci_service_isolated_from_unit_suite": true,
     "postgres_ci_driver_ephemeral_only": true,
     "postgres_engine_cas_contention_verified_in_ci": true,
+    "gpay_payment_intent_created_before_provider_payment": true,
+    "gpay_payment_intent_id_bound_into_mollie_metadata": true,
+    "gpay_payment_intent_provider_binding_immutable": true,
+    "gpay_payment_intent_email_stored_as_hash": true,
+    "webhook_requires_valid_gpay_origin_intent": true,
+    "webhook_verifies_provider_amount_against_metadata_and_intent": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -48,12 +54,12 @@
     "webhook_mount_and_lazy_client_ci": "passed",
     "recovery_state_machine_ci": "passed",
     "combined_main_reconciliation_ci": "passed",
-    "v1_8_ci": "failed_only_on_webhook_structured_error_assertion",
-    "v1_8_assertion_fix_commit": "165dfeaf35637edd5fd5b7e97208aef9ab9a47d3",
     "postgres_engine_integration_ci": "passed",
     "postgres_engine_integration_commit": "9e722877293cf60cfa82f45247a26be82c690503",
     "postgres_engine_integration_run_id": 34522149501,
-    "postgres_engine_integration_run_number": 98
+    "postgres_engine_integration_run_number": 98,
+    "payment_intent_binding_ci": "pending",
+    "payment_intent_binding_test_commit": "d51cb38cde6fb7d033d5d82000dc5aefb65e974a"
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -66,6 +72,7 @@
   "not_yet_guaranteed": {
     "crash_safe_exactly_once_external_side_effects": true,
     "multi_process_distributed_locking": true,
+    "payment_intent_store_shared_across_hosts": true,
     "postgres_driver_in_locked_production_dependencies": true,
     "postgres_production_database_provisioned": true,
     "postgres_backend_activated_in_production": true,
