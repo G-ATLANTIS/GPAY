@@ -27,7 +27,7 @@ function extractRequestId(headers = {}) {
   return { requestId: null, sourceHeader: null };
 }
 
-function buildEvidence({ provider, scope, status, headers, payload, idempotencyKey }) {
+function buildEvidence({ provider, scope, status, headers, payload, idempotencyKey = null }) {
   const normalizedHeaders = normalizeHeaders(headers);
   const { requestId, sourceHeader } = extractRequestId(normalizedHeaders);
   const safeHeaders = {};
@@ -36,7 +36,7 @@ function buildEvidence({ provider, scope, status, headers, payload, idempotencyK
   }
   return {
     schema: 'g-provider-http-evidence-v1',
-    version: '2.4.0',
+    version: '2.5.0',
     provider,
     provider_scope: scope,
     http_status: status,
@@ -89,10 +89,41 @@ async function createMolliePaymentWithEvidence(paymentRequest, options = {}) {
   return { payment: response.data, evidence };
 }
 
+async function getMolliePaymentWithEvidence(paymentId, options = {}) {
+  const apiKey = options.apiKey || process.env.MOLLIE_API_KEY;
+  if (!apiKey) throw new Error('MOLLIE_API_KEY missing');
+  if (typeof paymentId !== 'string' || !paymentId.startsWith('tr_')) {
+    throw new Error('invalid Mollie payment id');
+  }
+  const client = options.httpClient || axios;
+  const response = await client.get(
+    `https://api.mollie.com/v2/payments/${encodeURIComponent(paymentId)}`,
+    {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      validateStatus: () => true,
+      timeout: Number(options.timeoutMs || process.env.G_MOLLIE_HTTP_TIMEOUT_MS || 15000)
+    }
+  );
+  const evidence = buildEvidence({
+    provider: 'mollie',
+    scope: 'payments:read',
+    status: response.status,
+    headers: response.headers,
+    payload: response.data
+  });
+  if (!evidence.explicit_success) {
+    const err = new Error(`Mollie payment readback failed with HTTP ${response.status}`);
+    err.providerEvidence = evidence;
+    throw err;
+  }
+  return { payment: response.data, evidence };
+}
+
 module.exports = {
   REQUEST_ID_HEADERS,
   normalizeHeaders,
   extractRequestId,
   buildEvidence,
-  createMolliePaymentWithEvidence
+  createMolliePaymentWithEvidence,
+  getMolliePaymentWithEvidence
 };
