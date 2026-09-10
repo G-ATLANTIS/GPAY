@@ -55,7 +55,15 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, voteStores = null
     let count = 0;
     for (const signerId of record.quorum_certificate.signer_node_ids) {
       const proof = journalProofs.get(signerId);
-      const durable = proof?.rows?.some(row => row.proposal_sha256 === record.proposal_sha256 && row.cluster_sha256 === c.cluster_sha256 && row.cluster_epoch === c.cluster_epoch);
+      const signature = record.quorum_certificate.signatures?.find(sig => sig.node_id === signerId);
+      const durable = proof?.rows?.some(row =>
+        row.proposal_sha256 === record.proposal_sha256 &&
+        row.cluster_sha256 === c.cluster_sha256 &&
+        row.cluster_epoch === c.cluster_epoch &&
+        row.record_sha256 === signature?.vote_reservation_sha256 &&
+        row.signer_key_binding_sha256 === signature?.signer_key_binding_sha256 &&
+        row.signed_at === signature?.signed_at
+      );
       if (!durable) reasons.push(`${label}_SIGNER_VOTE_NOT_DURABLE:${signerId}`);
       else count += 1;
     }
