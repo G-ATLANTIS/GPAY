@@ -10,7 +10,7 @@ const { normalizePromotionSignerAuthority } = require('../g-bank-sovereign-v2/pr
 const { settlementOperationBinding } = require('../g-bank-sovereign-v2/settlement-operation-binding');
 const { HARuntimeChallengeStore } = require('../g-bank-sovereign-v2/ha-runtime-challenge-store');
 const { createSyntheticRuntimeObserver, configureSyntheticHAState, issueSyntheticRuntimeHAWitness } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
-const { createSyntheticPromotionSigner, configureSyntheticPromotionSignature } = require('./g-bank-sovereign-v2-promotion-signing-fixture');
+const { createSyntheticPromotionSigner, configureSyntheticPromotionSignature, configureSyntheticPromotionQuorum } = require('./g-bank-sovereign-v2-promotion-signing-fixture');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T12:00:00.000Z');
@@ -21,10 +21,11 @@ function fixture() {
   const promotionSigner = createSyntheticPromotionSigner('SIGNER:PROMOTION:A');
   const promotionSignerB = createSyntheticPromotionSigner('SIGNER:PROMOTION:B');
   const promotionSignerC = createSyntheticPromotionSigner('SIGNER:PROMOTION:C');
+  const promotionSigners = [promotionSigner, promotionSignerB, promotionSignerC];
   const promotionSignerAuthority = normalizePromotionSignerAuthority({
     authority_epoch: 1,
     quorum: 2,
-    signers: [promotionSigner, promotionSignerB, promotionSignerC].map(s => ({ signer_id: s.signer_id, status: 'ACTIVE', public_key_pem: s.public_key_pem })),
+    signers: promotionSigners.map(s => ({ signer_id: s.signer_id, status: 'ACTIVE', public_key_pem: s.public_key_pem })),
   });
   const env = {
     G_BANK_ENABLE_LIVE: 'true', G_BANK_EXTERNAL_ACTIONS_ENABLED: 'true', G_BANK_DIRECT_SETTLEMENT_ENABLED: 'true',
@@ -71,7 +72,11 @@ function fixture() {
   env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = promotionPath;
   env.G_BANK_PROMOTION_CERTIFICATE_SHA256 = certificate.certificate_sha256;
   const promotionSignature = configureSyntheticPromotionSignature({ root, env, certificate, promotionSigner, now: NOW });
-  return { root, env, haState, certificate, runtimeObserver, promotionSigner, promotionSignerAuthority, promotionSignature };
+  const promotionQuorum = configureSyntheticPromotionQuorum({
+    root, env, certificate, authority: promotionSignerAuthority, promotionSigners,
+    request: promotionSignature.request, now: NOW,
+  });
+  return { root, env, haState, certificate, runtimeObserver, promotionSigner, promotionSigners, promotionSignerAuthority, promotionSignature, promotionQuorum };
 }
 
 (async () => {
@@ -102,6 +107,7 @@ function fixture() {
   assert.equal(receipt.trusted_runtime_ha_observer_sha256, f.runtimeObserver.observer_public_key_binding_sha256);
   assert.equal(f.certificate.promotion_signer_authority_root_sha256, f.promotionSignerAuthority.authority_root_sha256);
   assert.equal(f.certificate.promotion_signature_quorum, 2);
+  assert.equal(f.promotionQuorum.bundle.signatures.length, 2);
   assert.equal(new HARuntimeChallengeStore(witness.challenge_store_path).verify().consumed_count, 1);
-  console.log('G-BANK sovereign v2 quorum-bound externally-signed promotion settlement boundary tests: PASS');
+  console.log('G-BANK sovereign v2 promotion signer quorum settlement boundary tests: PASS');
 })().catch(err => { console.error(err); process.exit(1); });
