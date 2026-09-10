@@ -16,7 +16,9 @@ CANONICAL STATE
   -> RECOVERY READINESS AUDIT
   -> SOVEREIGN READINESS
   -> SHORT-LIVED TECHNICAL PROMOTION
+  -> ACTIVE GOVERNANCE BINDING
   -> RUNTIME PROMOTION REVERIFICATION
+  -> FRESH SETTLEMENT PREFLIGHT
   -> EXTERNAL SETTLEMENT SUBMIT
 ```
 
@@ -97,7 +99,7 @@ The resulting `g-bank-recovery-readiness-audit/v2` is itself hash-bound.
 
 `readiness.js` requires a configured `G_BANK_RECOVERY_AUDIT_SHA256` and a valid `PASS` recovery audit. The audit hash must match the configured binding. The readiness snapshot records the exact recovery checkpoint state root and all non-secret evidence hashes used for readiness.
 
-Therefore `DIRECT_LIVE_READY` is false when recovery evidence is missing, invalid, stale at audit creation, tampered, unsafe, or bound to a different configured hash.
+Therefore `DIRECT_LIVE_READY` is false when recovery evidence is missing, invalid, tampered, unsafe, or bound to a different configured hash.
 
 ## Technical promotion binding
 
@@ -116,9 +118,9 @@ The certificate is short-lived and explicitly states:
 
 ## Runtime submit gate
 
-`runtime-promotion-gate.js` re-verifies the readiness file and promotion certificate immediately in the live runtime. It compares the certificate against active runtime bindings for legal authorization evidence, scheme participation, settlement access, production identity, prudential controls, resilience, treasury, customer monitoring and recovery.
+`runtime-promotion-gate.js` re-verifies the readiness file and promotion certificate in the live runtime. It compares the certificate against active runtime bindings for legal authorization evidence, scheme participation, settlement access, production identity, prudential controls, resilience, treasury, customer monitoring and recovery.
 
-The core publishes its normalized active policy hash and authority-set hash into the shared runtime context. The runtime gate requires those hashes to equal the promotion certificate governance bindings.
+The `GBankSovereignCore` publishes the **normalized policy SHA-256 and normalized authority-set SHA-256 actually used by the execution** into the shared runtime context. The runtime gate requires both hashes to exactly equal the promotion certificate. A certificate issued under governance A therefore cannot authorize a submit evaluated under governance B.
 
 `direct-settlement.js` then requires:
 
@@ -128,7 +130,7 @@ The core publishes its normalized active policy hash and authority-set hash into
 - a valid runtime promotion gate;
 - the independent configured promotion-certificate SHA-256 binding.
 
-Only after those checks may `transport.submit()` be called.
+Only after those checks may `transport.submit()` be called. The runtime promotion gate is re-evaluated at that boundary, so expiry or binding changes between command start and network submit fail closed.
 
 Reconciliation/readback remains available for an already submitted ambiguous transaction even after the original promotion expires. This avoids turning an expired submit authorization into an inability to determine the state of funds already in flight.
 
@@ -167,7 +169,7 @@ node scripts/g-bank-sovereign-v2.js promote \
   --out <promotion.json>
 ```
 
-Record the emitted `certificate_sha256` through an independent trusted configuration path. Do not derive or silently trust it inside `execute`.
+The checkpoint must equal the recovery checkpoint root carried by readiness. Record the emitted `certificate_sha256` through an independent trusted configuration path. Do not derive or silently trust it inside `execute`.
 
 ### 3. Execute
 
@@ -185,7 +187,7 @@ node scripts/g-bank-sovereign-v2.js execute \
   --authority-set <authority-set.json>
 ```
 
-The runtime gate is checked before execution and again at the external settlement submission boundary. A missing/expired/tampered/mismatched promotion prevents `transport.submit()`.
+`execute` first loads the real normalized policy and authority set, then verifies the promotion against those active governance hashes. The external settlement adapter verifies the promotion again immediately before `transport.submit()`.
 
 ## Tested attacks and failure cases
 
@@ -205,6 +207,7 @@ The no-network sovereign safety suite covers:
 - promotion certificate tamper and expiry;
 - promotion SHA mismatch;
 - recovery evidence binding mismatch;
+- recovery checkpoint mismatch;
 - active policy mismatch;
 - active authority-set mismatch;
 - symlinked runtime evidence files;
