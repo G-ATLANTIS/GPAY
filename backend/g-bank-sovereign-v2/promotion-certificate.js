@@ -20,6 +20,8 @@ function verifyReadiness(readiness, { now = Date.now() } = {}) {
   if (Object.values(readiness.checks).some(value => value !== true)) throw new Error('readiness_checks_not_satisfied');
   const recoveryRoot = hash64('readiness_recovery_checkpoint_state_root_sha256', readiness.recovery_checkpoint_state_root_sha256);
   const haRoot = hash64('readiness_ha_checkpoint_state_root_sha256', readiness.ha_checkpoint_state_root_sha256);
+  hash64('readiness_ha_voter_journal_root_sha256', readiness.ha_voter_journal_root_sha256);
+  hash64('readiness_ha_cluster_authority_root_sha256', readiness.ha_cluster_authority_root_sha256);
   if (haRoot !== recoveryRoot) throw new Error('readiness_ha_recovery_checkpoint_mismatch');
   const fenceExpiry = Date.parse(readiness.ha_fence_valid_until);
   if (!Number.isFinite(fenceExpiry) || fenceExpiry <= now) throw new Error('readiness_ha_fence_expired_or_invalid');
@@ -35,6 +37,8 @@ function createTechnicalPromotionCertificate({ readiness, checkpoint, governance
   const policyHash = hash64('policy_sha256', governance?.policy_sha256);
   const authorityHash = hash64('authority_set_sha256', governance?.authority_set_sha256);
   const signingKeyHash = hash64('trusted_signing_key_binding_sha256', trusted_signing_key_binding_sha256);
+  const haJournalRoot = hash64('ha_voter_journal_root_sha256', readiness.ha_voter_journal_root_sha256);
+  const haClusterAuthorityRoot = hash64('ha_cluster_authority_root_sha256', readiness.ha_cluster_authority_root_sha256);
   const evidence = evidence_bindings || {};
   const bindings = {
     legal_authorization_evidence_sha256: hash64('legal_authorization_evidence_sha256', evidence.legal_authorization_evidence_sha256),
@@ -69,6 +73,8 @@ function createTechnicalPromotionCertificate({ readiness, checkpoint, governance
     policy_sha256: policyHash,
     authority_set_sha256: authorityHash,
     trusted_signing_key_binding_sha256: signingKeyHash,
+    ha_voter_journal_root_sha256: haJournalRoot,
+    ha_cluster_authority_root_sha256: haClusterAuthorityRoot,
     evidence_bindings: bindings,
     ha_fence_valid_until: new Date(fenceExpiry).toISOString(),
     issued_at: new Date(now).toISOString(),
@@ -87,6 +93,8 @@ function verifyTechnicalPromotionCertificate(certificate, { readiness, now = Dat
   if (sha256(canonicalJson(body)) !== supplied) throw new Error('promotion_certificate_hash_mismatch');
   if (certificate.state !== 'TECHNICAL_GATES_SATISFIED') throw new Error('promotion_certificate_state_invalid');
   if (certificate.grants_external_rights !== false || certificate.permits_value_movement_by_itself !== false || certificate.requires_runtime_reverification !== true) throw new Error('promotion_certificate_boundary_invalid');
+  hash64('promotion_ha_voter_journal_root_sha256', certificate.ha_voter_journal_root_sha256);
+  hash64('promotion_ha_cluster_authority_root_sha256', certificate.ha_cluster_authority_root_sha256);
   const issued = Date.parse(certificate.issued_at);
   const expires = Date.parse(certificate.expires_at);
   const fenceExpiry = Date.parse(certificate.ha_fence_valid_until);
@@ -94,6 +102,8 @@ function verifyTechnicalPromotionCertificate(certificate, { readiness, now = Dat
   if (readiness) {
     verifyReadiness(readiness, { now });
     if (certificate.ha_fence_valid_until !== readiness.ha_fence_valid_until) throw new Error('promotion_ha_fence_binding_mismatch');
+    if (certificate.ha_voter_journal_root_sha256 !== String(readiness.ha_voter_journal_root_sha256).toLowerCase()) throw new Error('promotion_ha_voter_journal_root_mismatch');
+    if (certificate.ha_cluster_authority_root_sha256 !== String(readiness.ha_cluster_authority_root_sha256).toLowerCase()) throw new Error('promotion_ha_cluster_authority_root_mismatch');
     if (certificate.state_root_sha256 !== String(readiness.recovery_checkpoint_state_root_sha256).toLowerCase()) throw new Error('promotion_recovery_checkpoint_state_root_mismatch');
     if (certificate.state_root_sha256 !== String(readiness.ha_checkpoint_state_root_sha256).toLowerCase()) throw new Error('promotion_ha_checkpoint_state_root_mismatch');
     if (certificate.readiness_snapshot_sha256 !== sha256(canonicalJson(readiness))) throw new Error('promotion_certificate_readiness_mismatch');
