@@ -7,12 +7,14 @@ const path = require('node:path');
 const { canonicalJson, sha256 } = require('../g-bank-sovereign-v2/canonical');
 const { AccountRegistry } = require('../g-bank-sovereign-v2/accounts');
 const { SovereignLedger } = require('../g-bank-sovereign-v2/ledger');
+const { InboundStore } = require('../g-bank-sovereign-v2/inbound-store');
 const { assessSafeguarding } = require('../g-bank-sovereign-v2/safeguarding');
 const { assessLiquidity } = require('../g-bank-sovereign-v2/liquidity');
 const { auditSovereignInvariants } = require('../g-bank-sovereign-v2/invariant-auditor');
 const { assessOperationalResilience } = require('../g-bank-sovereign-v2/operational-resilience');
 const { assessTreasuryPosition, verifySettlementLiquidityEvidence } = require('../g-bank-sovereign-v2/treasury-position');
 const { reconcileSettlementStatement } = require('../g-bank-sovereign-v2/settlement-statement-reconciliation');
+const { reconcileInboundStatement } = require('../g-bank-sovereign-v2/inbound-statement-reconciliation');
 const { snapshotState } = require('../g-bank-sovereign-v2/checkpoint');
 const { createEndOfDayClose } = require('../g-bank-sovereign-v2/eod-close');
 const { EndOfDayStore } = require('../g-bank-sovereign-v2/eod-store');
@@ -48,11 +50,26 @@ function emptySettlementReconciliation() {
   return reconcileSettlementStatement({ receiptRows: [], statement, now: NOW });
 }
 
+function emptyInboundReconciliation(inboundPath) {
+  const inboundStore = new InboundStore(inboundPath);
+  const body = {
+    schema: 'g-bank-inbound-settlement-statement/v2',
+    source: 'VERIFIED_EXTERNAL_STATEMENT',
+    business_date: '2026-09-10',
+    currency: 'EUR',
+    entries: [],
+    observed_at: new Date(NOW - 1000).toISOString(),
+  };
+  const statement = { ...body, statement_sha256: sha256(canonicalJson(body)) };
+  return reconcileInboundStatement({ inboundStore, statement, now: NOW });
+}
+
 function setup() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-treasury-v2-'));
   const accountsPath = path.join(root, 'accounts.json');
   const ledgerPath = path.join(root, 'ledger.jsonl');
   const receiptsPath = path.join(root, 'receipts.jsonl');
+  const inboundPath = path.join(root, 'inbound.jsonl');
   const executionsDir = path.join(root, 'executions');
   const accounts = new AccountRegistry(accountsPath);
   const ledger = new SovereignLedger(ledgerPath);
@@ -77,7 +94,7 @@ function setup() {
     ],
   });
 
-  return { root, accountsPath, ledgerPath, receiptsPath, executionsDir, accounts, ledger };
+  return { root, accountsPath, ledgerPath, receiptsPath, inboundPath, executionsDir, accounts, ledger };
 }
 
 (() => {
@@ -127,6 +144,7 @@ function setup() {
     ledgerPath: s.ledgerPath,
     receiptsPath: s.receiptsPath,
     executionsDir: s.executionsDir,
+    inboundStatePath: s.inboundPath,
     now: NOW,
   });
   const resilience = assessOperationalResilience({
@@ -142,7 +160,9 @@ function setup() {
   });
   assert.equal(resilience.state, 'PASS');
   const settlementReconciliation = emptySettlementReconciliation();
+  const inboundSettlementReconciliation = emptyInboundReconciliation(s.inboundPath);
   assert.equal(settlementReconciliation.state, 'PASS');
+  assert.equal(inboundSettlementReconciliation.state, 'PASS');
 
   const close = createEndOfDayClose({
     business_date: '2026-09-10',
@@ -153,6 +173,7 @@ function setup() {
     treasuryAssessment: treasury,
     resilienceAssessment: resilience,
     settlementReconciliation,
+    inboundSettlementReconciliation,
     now: NOW,
   });
   assert.equal(close.state, 'CLOSED');
@@ -192,6 +213,7 @@ function setup() {
     treasuryAssessment: constrained,
     resilienceAssessment: resilience,
     settlementReconciliation,
+    inboundSettlementReconciliation,
     now: NOW,
   });
   assert.equal(blockedClose.state, 'BLOCK');
@@ -213,10 +235,32 @@ function setup() {
     treasuryAssessment: treasury,
     resilienceAssessment: resilience,
     settlementReconciliation: blockedReconciliation,
+    inboundSettlementReconciliation,
     now: NOW,
   });
   assert.equal(reconBlockedClose.state, 'BLOCK');
   assert(reconBlockedClose.reasons.includes('SETTLEMENT_RECONCILIATION_BLOCKED'));
+
+  const blockedInboundBody = { ...inboundSettlementReconciliation, state: 'BLOCK', reasons: ['TEST_INBOUND_MISMATCH'] };
+  delete blockedInboundBody.reconciliation_sha256;
+  const blockedInbound = {
+    ...blockedInboundBody,
+    reconciliation_sha256: sha256(canonicalJson(blockedInboundBody)),
+  };
+  const inboundBlockedClose = createEndOfDayClose({
+    business_date: '2026-09-10',
+    checkpoint,
+    invariantAudit: invariant,
+    safeguardingAssessment: safeguarding,
+    liquidityAssessment: liquidity,
+    treasuryAssessment: treasury,
+    resilienceAssessment: resilience,
+    settlementReconciliation,
+    inboundSettlementReconciliation: blockedInbound,
+    now: NOW,
+  });
+  assert.equal(inboundBlockedClose.state, 'BLOCK');
+  assert(inboundBlockedClose.reasons.includes('INBOUND_SETTLEMENT_RECONCILIATION_BLOCKED'));
 
   const tamperedEvidence = { ...evidence, available_minor: 999999 };
   assert.throws(() => verifySettlementLiquidityEvidence(tamperedEvidence, { currency: 'EUR', now: NOW }), /hash_mismatch/);
@@ -237,6 +281,7 @@ function setup() {
     treasuryAssessment: treasury,
     resilienceAssessment: frozen,
     settlementReconciliation,
+    inboundSettlementReconciliation,
     now: NOW,
   });
   assert.equal(frozenClose.state, 'BLOCK');
