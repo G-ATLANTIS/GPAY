@@ -12,19 +12,35 @@ const { createSovereignApproval } = require('../backend/g-bank-sovereign-v2/appr
 const { normalizePolicy } = require('../backend/g-bank-sovereign-v2/risk-policy');
 const { normalizeAuthoritySet } = require('../backend/g-bank-sovereign-v2/authority');
 const { assessSovereignReadiness } = require('../backend/g-bank-sovereign-v2/readiness');
+const { createTechnicalPromotionCertificate } = require('../backend/g-bank-sovereign-v2/promotion-certificate');
+const { verifyRuntimePromotionGate } = require('../backend/g-bank-sovereign-v2/runtime-promotion-gate');
 
 function args(argv = process.argv.slice(2)) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const v = argv[i];
-    if (v.startsWith('--')) out[v.slice(2)] = argv[++i];
-    else out._.push(v);
+    if (v.startsWith('--')) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('--')) throw new Error(`${v}_value_required`);
+      out[v.slice(2)] = next;
+      i += 1;
+    } else out._.push(v);
   }
   return out;
 }
 
+function sha256Arg(name, value) {
+  const hash = String(value || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`${name}_invalid`);
+  return hash;
+}
+
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
+  const resolved = path.resolve(String(file || ''));
+  if (!file || !fs.existsSync(resolved)) throw new Error('json_file_required');
+  const stat = fs.lstatSync(resolved);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('json_file_invalid');
+  return JSON.parse(fs.readFileSync(resolved, 'utf8'));
 }
 
 function writePrivate(file, value) {
@@ -54,6 +70,8 @@ function loadSettlement(env = process.env) {
   const modulePath = String(env.G_BANK_SETTLEMENT_TRANSPORT_MODULE || '');
   if (!modulePath) throw new Error('G_BANK_SETTLEMENT_TRANSPORT_MODULE_required');
   const resolved = path.resolve(modulePath);
+  const stat = fs.lstatSync(resolved);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('G_BANK_SETTLEMENT_TRANSPORT_MODULE_invalid');
   const mod = require(resolved);
   const transport = typeof mod.createTransport === 'function' ? mod.createTransport({ env }) : mod.transport || mod;
   return new DirectSettlementAdapter({ transport, env, name: env.G_BANK_SETTLEMENT_ADAPTER_NAME || 'g-direct-settlement' });
@@ -86,6 +104,27 @@ function governanceFor(a, { required = true } = {}) {
     riskPolicy: normalizePolicy(readJson(p.riskPolicy)),
     authoritySet: normalizeAuthoritySet(readJson(p.authoritySet)),
   };
+}
+
+function governanceSnapshot(riskPolicy, authoritySet) {
+  return Object.freeze({
+    policy_sha256: riskPolicy.policy_sha256,
+    authority_set_sha256: authoritySet.authority_set_sha256,
+    policy_epoch: riskPolicy.policy_epoch,
+    authority_epoch: authoritySet.authority_epoch,
+    normal_quorum: riskPolicy.normal_quorum,
+    high_value_quorum: riskPolicy.high_value_quorum,
+  });
+}
+
+function configureRuntimePromotion(a, env = process.env) {
+  if (!a.readiness || !a.promotion || !a['promotion-sha256']) {
+    throw new Error('--readiness --promotion --promotion-sha256_required');
+  }
+  env.G_BANK_RUNTIME_READINESS_FILE = path.resolve(a.readiness);
+  env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = path.resolve(a.promotion);
+  env.G_BANK_PROMOTION_CERTIFICATE_SHA256 = sha256Arg('promotion_sha256', a['promotion-sha256']);
+  return verifyRuntimePromotionGate({ env });
 }
 
 function coreFor(a, { live = false, governanceRequired = false } = {}) {
@@ -143,10 +182,69 @@ async function main() {
     return;
   }
 
-  if (command === 'execute') {
-    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key']) {
-      throw new Error('--prepared --validation --approval --signatures --idempotency-key_required');
+  if (command === 'readiness') {
+    if (!a.prudential || !a['monitoring-audit'] || !a['recovery-audit'] || !a.out) {
+      throw new Error('--prudential --monitoring-audit --recovery-audit --out_required');
     }
+    const { riskPolicy, authoritySet } = governanceFor(a, { required: true });
+    const settlement = loadSettlement(process.env);
+    const preflight = await settlement.preflight();
+    const readiness = assessSovereignReadiness({
+      env: process.env,
+      transportPreflight: preflight,
+      governance: governanceSnapshot(riskPolicy, authoritySet),
+      prudential: readJson(a.prudential),
+      monitoringAudit: readJson(a['monitoring-audit']),
+      recoveryAudit: readJson(a['recovery-audit']),
+    });
+    const output = writePrivate(a.out, readiness);
+    console.log(JSON.stringify({
+      state: readiness.state,
+      direct_live_ready: readiness.direct_live_ready,
+      recovery_controls_verified: readiness.recovery_controls_verified,
+      customer_monitoring_verified: readiness.customer_monitoring_verified,
+      transport_preflight_receipt_sha256: readiness.evidence_bindings.transport_preflight_receipt_sha256,
+      recovery_checkpoint_state_root_sha256: readiness.recovery_checkpoint_state_root_sha256,
+      output,
+    }, null, 2));
+    return;
+  }
+
+  if (command === 'promote') {
+    if (!a.readiness || !a.checkpoint || !a['trusted-signing-key-binding-sha256'] || !a.out) {
+      throw new Error('--readiness --checkpoint --trusted-signing-key-binding-sha256 --out_required');
+    }
+    const readiness = readJson(a.readiness);
+    const checkpoint = readJson(a.checkpoint);
+    const { riskPolicy, authoritySet } = governanceFor(a, { required: true });
+    const certificate = createTechnicalPromotionCertificate({
+      readiness,
+      checkpoint,
+      governance: governanceSnapshot(riskPolicy, authoritySet),
+      evidence_bindings: readiness.evidence_bindings,
+      trusted_signing_key_binding_sha256: sha256Arg('trusted_signing_key_binding_sha256', a['trusted-signing-key-binding-sha256']),
+      ttl_seconds: a['ttl-seconds'] === undefined ? 120 : Number(a['ttl-seconds']),
+    });
+    const output = writePrivate(a.out, certificate);
+    console.log(JSON.stringify({
+      state: certificate.state,
+      certificate_sha256: certificate.certificate_sha256,
+      state_root_sha256: certificate.state_root_sha256,
+      recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
+      customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
+      expires_at: certificate.expires_at,
+      output,
+      grants_external_rights: certificate.grants_external_rights,
+      permits_value_movement_by_itself: certificate.permits_value_movement_by_itself,
+    }, null, 2));
+    return;
+  }
+
+  if (command === 'execute') {
+    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256']) {
+      throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256_required');
+    }
+    const runtimeGate = configureRuntimePromotion(a, process.env);
     const { core } = coreFor(a, { live: true, governanceRequired: true });
     const result = await core.execute({
       prepared: readJson(a.prepared),
@@ -155,7 +253,7 @@ async function main() {
       authoritySignatures: readJson(a.signatures),
       idempotencyKey: a['idempotency-key'],
     });
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, runtime_promotion_gate_sha256: runtimeGate.gate_sha256 }, null, 2));
     return;
   }
 
@@ -164,22 +262,6 @@ async function main() {
     const { core } = coreFor(a, { live: true, governanceRequired: false });
     const result = await core.reconcile({ idempotencyKey: a['idempotency-key'] });
     console.log(JSON.stringify(result, null, 2));
-    return;
-  }
-
-  if (command === 'readiness') {
-    const { riskPolicy, authoritySet } = governanceFor(a, { required: true });
-    const settlement = loadSettlement(process.env);
-    const preflight = await settlement.preflight();
-    const governance = {
-      policy_sha256: riskPolicy.policy_sha256,
-      authority_set_sha256: authoritySet.authority_set_sha256,
-      policy_epoch: riskPolicy.policy_epoch,
-      authority_epoch: authoritySet.authority_epoch,
-      normal_quorum: riskPolicy.normal_quorum,
-      high_value_quorum: riskPolicy.high_value_quorum,
-    };
-    console.log(JSON.stringify(assessSovereignReadiness({ env: process.env, transportPreflight: preflight, governance }), null, 2));
     return;
   }
 
