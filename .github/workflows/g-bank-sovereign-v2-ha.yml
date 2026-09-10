@@ -7,7 +7,7 @@ on:
   pull_request:
     paths:
       - 'backend/g-bank-sovereign-v2/ha-*.js'
-      - 'backend/tests/g-bank-sovereign-v2-ha.test.js'
+      - 'backend/tests/g-bank-sovereign-v2-ha*.test.js'
       - '.github/workflows/g-bank-sovereign-v2-ha.yml'
 
 permissions:
@@ -27,6 +27,10 @@ jobs:
           node --check backend/g-bank-sovereign-v2/ha-quorum.js
           node --check backend/g-bank-sovereign-v2/ha-replication-store.js
           node --check backend/g-bank-sovereign-v2/ha-readiness-audit.js
+          node --check backend/g-bank-sovereign-v2/ha-deployment-attestation.js
           node --check backend/tests/g-bank-sovereign-v2-ha.test.js
+          node --check backend/tests/g-bank-sovereign-v2-ha-deployment.test.js
       - name: No-network HA safety tests
-        run: node backend/tests/g-bank-sovereign-v2-ha.test.js
+        run: |
+          node backend/tests/g-bank-sovereign-v2-ha.test.js
+          node backend/tests/g-bank-sovereign-v2-ha-deployment.test.js
