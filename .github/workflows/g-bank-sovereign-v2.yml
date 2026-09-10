@@ -8,6 +8,7 @@ on:
     paths:
       - 'backend/g-bank-sovereign-v2/**'
       - 'backend/tests/g-bank-sovereign-v2.test.js'
+      - 'scripts/g-bank-sovereign-v2.js'
       - '.github/workflows/g-bank-sovereign-v2.yml'
 
 permissions:
@@ -33,6 +34,8 @@ jobs:
           node --check backend/g-bank-sovereign-v2/approval.js
           node --check backend/g-bank-sovereign-v2/execution-store.js
           node --check backend/g-bank-sovereign-v2/direct-settlement.js
+          node --check backend/g-bank-sovereign-v2/readiness.js
           node --check backend/g-bank-sovereign-v2/sovereign-core.js
+          node --check scripts/g-bank-sovereign-v2.js
       - name: No-network sovereign safety tests
         run: node backend/tests/g-bank-sovereign-v2.test.js
