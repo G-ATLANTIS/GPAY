@@ -2,7 +2,7 @@
 
 ## Purpose
 
-G-BANK Sovereign Core v2 makes the G-BANK ledger, payment state machine, approval policy, ISO 20022 message generation, idempotency, receipts and reconciliation independent of payment aggregators.
+G-BANK Sovereign Core v2 makes the G-BANK ledger, payment state machine, approval policy, ISO 20022 message generation, idempotency, receipts, prudential controls and reconciliation independent of payment aggregators.
 
 Mollie and TrueLayer are compatibility rails only. They are not the G-BANK source of truth.
 
@@ -21,7 +21,13 @@ ISO 20022 pacs.008
         |
 EXTERNAL SCHEME VALIDATION RECEIPT
         |
+RISK POLICY + AUTHORITY QUORUM
+        |
 EXPLICIT CRYPTOGRAPHIC APPROVAL
+        |
+SAFEGUARDING + LIQUIDITY + INVARIANT AUDIT
+        |
+OPERATIONAL RESILIENCE / EMERGENCY FREEZE
         |
 ATOMIC IDEMPOTENCY CLAIM
         |
@@ -40,8 +46,8 @@ HASH-CHAIN RECEIPTS + LEDGER
 
 ## Implemented in v2
 
-- sovereign account registry with IBAN checksum validation
-- append-only balanced value ledger with SHA-256 chain verification and fsync
+- sovereign account registry with IBAN checksum validation, write locking and read-only listings
+- append-only balanced value ledger with SHA-256 chain verification, fsync and trial-balance snapshots
 - canonical payment-instruction hashing
 - structured address support for the November 2026 EPC address transition
 - ISO 20022 2019 message generation:
@@ -50,6 +56,8 @@ HASH-CHAIN RECEIPTS + LEDGER
 - SCT and SCT Inst message modes
 - sanctions, AML and Verification-of-Payee evidence gates
 - external scheme-validation evidence binding
+- deterministic risk policy with per-payment limits, daily velocity, beneficiary blocks and quorum requirements
+- authority-set and governance proof binding
 - approval bound to:
   - exact prepared payment
   - instruction hash
@@ -61,6 +69,10 @@ HASH-CHAIN RECEIPTS + LEDGER
   - beneficiary binding
   - scheme
   - exact idempotency key
+- safeguarding coverage assessment
+- intraday/stressed liquidity headroom assessment
+- bank-wide invariant auditor
+- operational resilience assessment and emergency freeze
 - direct settlement adapter contract
 - required live connectivity/authentication preflight
 - outbound ledger hold before external submission
@@ -72,18 +84,73 @@ HASH-CHAIN RECEIPTS + LEDGER
 - no-network safety test suite
 - operator CLI with pluggable settlement transport module
 
+## Prudential layer
+
+The safeguarding assessment uses:
+
+```text
+required_safeguarded
+  = customer_liabilities
+  + pending_outbound_holds
+  + required_buffer
+```
+
+If safeguarded assets are below that requirement, the assessment returns `BLOCK`.
+
+The liquidity assessment uses:
+
+```text
+required_liquidity
+  = pending_outbound
+  + stressed_outflow
+  + minimum_buffer
+```
+
+If immediately available liquidity is below the requirement, the assessment returns `BLOCK`.
+
+The invariant auditor then requires, at minimum:
+
+- verified ledger hash chain and sequence;
+- zero trial-balance total for the currency;
+- active safeguarding, suspense and settlement accounts;
+- no negative customer balance;
+- safeguarding assessment = `PASS`;
+- liquidity assessment = `PASS`.
+
+Its resulting audit hash is independently bound into the live-readiness configuration. Environment flags alone cannot manufacture this proof.
+
+## Operational resilience layer
+
+Operational readiness blocks on any of the following:
+
+- ledger integrity not verified;
+- receipt-chain integrity not verified;
+- checkpoint not verified;
+- unresolved settlement uncertainty above the configured policy;
+- clock drift above the configured limit;
+- emergency freeze active.
+
+The assessment hash is separately bound into live readiness. `UNKNOWN` settlement state is never interpreted as permission to retry or fail over automatically.
+
 ## Fail-closed live requirements
 
-All of these must be true before the direct settlement adapter can submit:
+All of these must be true before the software readiness gate can report direct-live ready:
 
 ```text
 G_BANK_ENABLE_LIVE=true
 G_BANK_EXTERNAL_ACTIONS_ENABLED=true
 G_BANK_DIRECT_SETTLEMENT_ENABLED=true
 G_BANK_SIMULATED_LIVE_SUCCESS!=true
+G_BANK_GOVERNANCE_REQUIRED=true
 G_BANK_SETTLEMENT_AUTHORIZATION_SHA256=<verified external authorization binding>
 G_BANK_SOVEREIGN_APPROVAL_SECRET=<minimum 32-byte secret>
 G_BANK_SETTLEMENT_TRANSPORT_MODULE=<authorized transport implementation>
+G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256=<verified evidence binding>
+G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256=<verified evidence binding>
+G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256=<verified evidence binding>
+G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256=<verified evidence binding>
+G_BANK_PRUDENTIAL_AUDIT_SHA256=<current PASS invariant-audit hash>
+G_BANK_OPERATIONAL_RESILIENCE_SHA256=<current PASS resilience-assessment hash>
 ```
 
 The transport's preflight must independently report:
@@ -96,7 +163,7 @@ scheme=SCT or SCT_INST
 external_receipt_sha256=<verified receipt>
 ```
 
-A local environment variable alone therefore cannot make an unverified transport appear live.
+The technical readiness result also requires valid governance, prudential and operational PASS evidence. A local environment variable alone therefore cannot make an unverified transport appear live.
 
 ## Critical ambiguity rule
 
@@ -184,6 +251,11 @@ G_BANK_OWN_ACCOUNT_REGISTRY = IMPLEMENTED
 G_BANK_OWN_PAYMENT_STATE_MACHINE = IMPLEMENTED
 G_BANK_OWN_ISO20022_GENERATION = IMPLEMENTED
 G_BANK_OWN_APPROVAL_AND_IDEMPOTENCY = IMPLEMENTED
+G_BANK_OWN_RISK_GOVERNANCE = IMPLEMENTED
+G_BANK_OWN_SAFEGUARDING_ASSESSMENT = IMPLEMENTED
+G_BANK_OWN_LIQUIDITY_ASSESSMENT = IMPLEMENTED
+G_BANK_OWN_INVARIANT_AUDITOR = IMPLEMENTED
+G_BANK_OWN_OPERATIONAL_FREEZE = IMPLEMENTED
 G_BANK_OWN_RECONCILIATION = IMPLEMENTED
 G_BANK_DIRECT_SETTLEMENT_INTERFACE = IMPLEMENTED
 G_BANK_DIRECT_TARGET_TIPS_TRANSPORT = NOT_YET_EXTERNALLY_CONNECTED
@@ -225,6 +297,10 @@ Do not label direct settlement `LIVE` until all of the following have real evide
 - production network path
 - authenticated preflight
 - scheme-validation path
+- current safeguarding PASS evidence
+- current liquidity PASS evidence
+- current invariant-audit PASS evidence
+- current operational-resilience PASS evidence
 - bounded submission
 - provider/CSM readback
 - reconciliation receipt
