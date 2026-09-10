@@ -39,10 +39,26 @@ const prudential = {
   treasury: hashed('g-bank-treasury-position/v2', 'assessment_sha256'),
 };
 
+const monitoringAudit = hashed('g-bank-monitoring-fleet-audit/v2', 'audit_sha256', {
+  policy_sha256: H('4'),
+  policy_epoch: 2,
+  monitorable_customer_count: 3,
+  assessment_count: 3,
+  clear_customer_count: 2,
+  review_required_customer_count: 1,
+  suspended_customer_count: 0,
+  reasons: [],
+  audited_at: '2026-09-10T08:50:00.000Z',
+  regulatory_determination_made: false,
+  external_report_submitted: false,
+  permits_value_movement_by_itself: false,
+});
+
 const blocked = assessSovereignReadiness({
   env: base,
   governance,
   prudential,
+  monitoringAudit,
   transportPreflight: {
     environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
     settlement_system: 'TIPS', external_receipt_sha256: H('b'),
@@ -61,24 +77,43 @@ const completeEnv = {
   G_BANK_PRUDENTIAL_AUDIT_SHA256: prudential.invariant_audit.audit_sha256,
   G_BANK_OPERATIONAL_RESILIENCE_SHA256: prudential.operational_resilience.assessment_sha256,
   G_BANK_TREASURY_ASSESSMENT_SHA256: prudential.treasury.assessment_sha256,
+  G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256: monitoringAudit.audit_sha256,
 };
 const transportPreflight = {
   environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
   settlement_system: 'TIPS', external_receipt_sha256: H('1'),
 };
 
-const ready = assessSovereignReadiness({ env: completeEnv, governance, prudential, transportPreflight });
+const ready = assessSovereignReadiness({ env: completeEnv, governance, prudential, monitoringAudit, transportPreflight });
 assert.equal(ready.direct_live_ready, true);
 assert.equal(ready.external_transport_verified, true);
 assert.equal(ready.prudential_controls_verified, true);
 assert.equal(ready.operational_controls_verified, true);
+assert.equal(ready.customer_monitoring_verified, true);
 assert.equal(ready.checks.high_value_quorum_dual_control, true);
 assert.equal(ready.checks.prudential_audit_binding_matches, true);
 assert.equal(ready.checks.operational_resilience_binding_matches, true);
 assert.equal(ready.checks.treasury_binding_matches, true);
 assert.equal(ready.checks.treasury_pass, true);
+assert.equal(ready.checks.customer_monitoring_binding_matches, true);
+assert.equal(ready.checks.customer_monitoring_pass, true);
 
-const noPrudential = assessSovereignReadiness({ env: completeEnv, governance, prudential: null, transportPreflight });
+const noMonitoring = assessSovereignReadiness({ env: completeEnv, governance, prudential, monitoringAudit: null, transportPreflight });
+assert.equal(noMonitoring.direct_live_ready, false);
+assert.equal(noMonitoring.customer_monitoring_verified, false);
+assert.equal(noMonitoring.checks.customer_monitoring_pass, false);
+
+const tamperedMonitoring = assessSovereignReadiness({
+  env: completeEnv,
+  governance,
+  prudential,
+  monitoringAudit: { ...monitoringAudit, assessment_count: 999 },
+  transportPreflight,
+});
+assert.equal(tamperedMonitoring.direct_live_ready, false);
+assert.equal(tamperedMonitoring.checks.customer_monitoring_pass, false);
+
+const noPrudential = assessSovereignReadiness({ env: completeEnv, governance, prudential: null, monitoringAudit, transportPreflight });
 assert.equal(noPrudential.direct_live_ready, false);
 assert.equal(noPrudential.prudential_controls_verified, false);
 assert.equal(noPrudential.operational_controls_verified, false);
@@ -89,6 +124,7 @@ const failedSafeguarding = assessSovereignReadiness({
   env: completeEnv,
   governance,
   prudential: { ...prudential, safeguarding: { ...prudential.safeguarding, state: 'BLOCK' } },
+  monitoringAudit,
   transportPreflight,
 });
 assert.equal(failedSafeguarding.direct_live_ready, false);
@@ -98,6 +134,7 @@ const failedTreasury = assessSovereignReadiness({
   env: completeEnv,
   governance,
   prudential: { ...prudential, treasury: { ...prudential.treasury, state: 'BLOCK' } },
+  monitoringAudit,
   transportPreflight,
 });
 assert.equal(failedTreasury.direct_live_ready, false);
@@ -107,6 +144,7 @@ const tamperedTreasury = assessSovereignReadiness({
   env: completeEnv,
   governance,
   prudential: { ...prudential, treasury: { ...prudential.treasury, settlement_headroom_minor: 999999 } },
+  monitoringAudit,
   transportPreflight,
 });
 assert.equal(tamperedTreasury.direct_live_ready, false);
@@ -116,13 +154,14 @@ const frozen = assessSovereignReadiness({
   env: completeEnv,
   governance,
   prudential: { ...prudential, operational_resilience: { ...prudential.operational_resilience, state: 'BLOCK' } },
+  monitoringAudit,
   transportPreflight,
 });
 assert.equal(frozen.direct_live_ready, false);
 assert.equal(frozen.operational_controls_verified, false);
 assert.equal(frozen.checks.operational_resilience_pass, false);
 
-const noGovernance = assessSovereignReadiness({ env: completeEnv, governance: null, prudential, transportPreflight });
+const noGovernance = assessSovereignReadiness({ env: completeEnv, governance: null, prudential, monitoringAudit, transportPreflight });
 assert.equal(noGovernance.direct_live_ready, false);
 assert.equal(noGovernance.checks.risk_policy_binding_present, false);
 
@@ -130,6 +169,7 @@ const weakQuorum = assessSovereignReadiness({
   env: completeEnv,
   governance: { ...governance, high_value_quorum: 1 },
   prudential,
+  monitoringAudit,
   transportPreflight,
 });
 assert.equal(weakQuorum.direct_live_ready, false);
@@ -139,6 +179,7 @@ const fake = assessSovereignReadiness({
   env: { ...completeEnv, G_BANK_SIMULATED_LIVE_SUCCESS: 'true' },
   governance,
   prudential,
+  monitoringAudit,
   transportPreflight,
 });
 assert.equal(fake.direct_live_ready, false);
