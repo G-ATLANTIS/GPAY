@@ -9,7 +9,7 @@ const { getProcessed, recordProcessed } = require('../utils/payment-idempotency-
 const { acquirePaymentLock } = require('../utils/payment-lock');
 const { createGcoinSettlementIntent } = require('../utils/gcoin-settlement-intent');
 const { createPaymentStateRuntime } = require('../utils/payment-state-runtime');
-const { verifyPaymentIntent } = require('../utils/payment-intent-store');
+const { createPaymentIntentRuntime } = require('../utils/payment-intent-runtime');
 const router = express.Router();
 
 function requireMollieConfig() {
@@ -35,7 +35,8 @@ router.post('/mollie/webhook', async (req, res) => {
   try {
     const mollieClient = getMollieClient();
     const stateRuntime = createPaymentStateRuntime();
-    await stateRuntime.ensureReady();
+    const intentRuntime = createPaymentIntentRuntime();
+    await Promise.all([stateRuntime.ensureReady(), intentRuntime.ensureReady()]);
 
     lock = acquirePaymentLock('mollie', id);
     if (!lock.acquired) return res.status(202).json({ status: 'processing', providerPaymentId: id });
@@ -63,7 +64,7 @@ router.post('/mollie/webhook', async (req, res) => {
       return res.status(422).json({ error: 'Provider amount does not match payment metadata', code: 'PAYMENT_AMOUNT_MISMATCH' });
     }
 
-    const intentVerification = verifyPaymentIntent({
+    const intentVerification = await intentRuntime.verify({
       intentId: gpayIntentId,
       providerPaymentId: id,
       orderId,
@@ -156,7 +157,7 @@ router.post('/mollie/webhook', async (req, res) => {
     if (err.code === 'CONFIG_ERROR' || err.code === 'PAYMENT_STATE_CONFIG_MISSING' || err.code === 'PAYMENT_STATE_DRIVER_MISSING') {
       return res.status(503).json({ error: err.message, code: err.code });
     }
-    if (err.code === 'PAYMENT_STATE_CAS_CONFLICT') {
+    if (err.code === 'PAYMENT_STATE_CAS_CONFLICT' || err.code === 'PAYMENT_INTENT_BIND_CONFLICT') {
       return res.status(409).json({ error: 'Payment state contention', code: err.code });
     }
     if (err.code === 'GCOIN_BROADCAST_DENIED') return res.status(403).json({ error: err.message });
