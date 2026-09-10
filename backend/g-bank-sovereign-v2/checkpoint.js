@@ -5,12 +5,12 @@ const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
 
 function hashFile(file) {
-  if (!fs.existsSync(file)) return null;
+  if (!file || !fs.existsSync(file)) return null;
   return sha256(fs.readFileSync(file));
 }
 
 function hashDirectory(dir) {
-  if (!fs.existsSync(dir)) return sha256('EMPTY');
+  if (!dir || !fs.existsSync(dir)) return sha256('EMPTY');
   const rows = fs.readdirSync(dir, { withFileTypes: true })
     .filter(e => e.isFile() && e.name.endsWith('.json'))
     .map(e => ({ name: e.name, sha256: hashFile(path.join(dir, e.name)) }))
@@ -18,13 +18,14 @@ function hashDirectory(dir) {
   return sha256(canonicalJson(rows));
 }
 
-function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executionsDir, now = Date.now() }) {
+function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executionsDir, velocityDir = null, now = Date.now() }) {
   const state = {
     schema: 'g-bank-sovereign-state-checkpoint/v2',
     account_registry_sha256: hashFile(accountRegistryPath),
     ledger_file_sha256: hashFile(ledgerPath),
     receipts_file_sha256: hashFile(receiptsPath),
     executions_root_sha256: hashDirectory(executionsDir),
+    velocity_root_sha256: hashDirectory(velocityDir),
     checkpointed_at: new Date(now).toISOString(),
   };
   const rootBody = {
@@ -32,6 +33,7 @@ function snapshotState({ accountRegistryPath, ledgerPath, receiptsPath, executio
     ledger_file_sha256: state.ledger_file_sha256,
     receipts_file_sha256: state.receipts_file_sha256,
     executions_root_sha256: state.executions_root_sha256,
+    velocity_root_sha256: state.velocity_root_sha256,
   };
   state.state_root_sha256 = sha256(canonicalJson(rootBody));
   return Object.freeze(state);
@@ -57,6 +59,7 @@ function verifyCheckpoint(checkpoint, paths) {
     ledger: current.ledger_file_sha256 === checkpoint.ledger_file_sha256,
     receipts: current.receipts_file_sha256 === checkpoint.receipts_file_sha256,
     executions: current.executions_root_sha256 === checkpoint.executions_root_sha256,
+    velocity: current.velocity_root_sha256 === checkpoint.velocity_root_sha256,
     state_root: current.state_root_sha256 === checkpoint.state_root_sha256,
   };
   return Object.freeze({
