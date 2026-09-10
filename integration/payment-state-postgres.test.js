@@ -7,8 +7,23 @@ const { PostgresPaymentIntentAdapter } = require('../backend/utils/payment-inten
 const { SharedPaymentIntentRuntime } = require('../backend/utils/payment-intent-runtime');
 const { normalizeEmailHash } = require('../backend/utils/payment-intent-store');
 const { PostgresPaymentEffectLedger } = require('../backend/utils/payment-effect-ledger');
+const { prepareVerifiedPaymentTransaction } = require('../backend/utils/payment-postgres-transaction');
 
 const connectionString = process.env.GPAY_POSTGRES_URL;
+
+async function createBoundIntent(pool, { intentId, paymentId, orderId, amount, email }) {
+  const adapter = new PostgresPaymentIntentAdapter(pool);
+  await adapter.ensureSchema();
+  await adapter.create({
+    intentId,
+    provider: 'mollie',
+    orderId,
+    amount,
+    currency: 'EUR',
+    emailHash: normalizeEmailHash(email),
+  });
+  await adapter.bindProviderPayment(intentId, paymentId);
+}
 
 if (!connectionString) {
   test('postgres integration requires GPAY_POSTGRES_URL', { skip: true }, () => {});
@@ -145,6 +160,97 @@ if (!connectionString) {
       assert.equal(completionReplay.record.data.invoicePath, '/tmp/ci.pdf');
     } finally {
       await pool.query('DELETE FROM gpay_payment_effect WHERE provider=$1 AND provider_payment_id=$2', ['mollie', paymentId]).catch(() => {});
+      await pool.end();
+    }
+  });
+
+  test('atomic postgres preparation commits state advancement and effect reservations together', async () => {
+    const pool = new Pool({ connectionString, max: 4 });
+    const state = new PostgresPaymentStateAdapter(pool);
+    const effects = new PostgresPaymentEffectLedger(pool);
+    const intentId = `gpi_tx_${crypto.randomUUID()}`;
+    const paymentId = `tr_tx_${crypto.randomUUID().replace(/-/g, '')}`;
+    const orderId = 'ci-order-tx-commit';
+    const email = 'ci-tx-commit@example.invalid';
+
+    try {
+      await Promise.all([state.ensureSchema(), effects.ensureReady()]);
+      await createBoundIntent(pool, { intentId, paymentId, orderId, amount: '3.25', email });
+
+      const result = await prepareVerifiedPaymentTransaction({
+        pool,
+        provider: 'mollie',
+        providerPaymentId: paymentId,
+        intentId,
+        orderId,
+        amount: '3.25',
+        currency: 'EUR',
+        email,
+        effectData: { reward: { event: 'r' }, invoice: { event: 'i' }, 'gcoin-intent': { event: 'g' } },
+      });
+
+      assert.equal(result.intentVerified, true);
+      assert.equal(result.effectsReserved, true);
+      assert.equal(result.state.stage, 'PROVIDER_VERIFIED');
+
+      const savedState = await state.get('mollie', paymentId);
+      assert.equal(savedState.stage, 'PROVIDER_VERIFIED');
+      assert.equal(Number(savedState.version), 1);
+
+      for (const effectType of ['reward', 'invoice', 'gcoin-intent']) {
+        const effect = await effects.get('mollie', paymentId, effectType);
+        assert.equal(effect.status, 'PREPARED');
+      }
+    } finally {
+      await pool.query('DELETE FROM gpay_payment_effect WHERE provider=$1 AND provider_payment_id=$2', ['mollie', paymentId]).catch(() => {});
+      await pool.query('DELETE FROM gpay_payment_state WHERE provider=$1 AND provider_payment_id=$2', ['mollie', paymentId]).catch(() => {});
+      await pool.query('DELETE FROM gpay_payment_intent WHERE intent_id=$1', [intentId]).catch(() => {});
+      await pool.end();
+    }
+  });
+
+  test('atomic postgres preparation rolls back state and effects on failure', async () => {
+    const pool = new Pool({ connectionString, max: 4 });
+    const state = new PostgresPaymentStateAdapter(pool);
+    const effects = new PostgresPaymentEffectLedger(pool);
+    const intentId = `gpi_tx_${crypto.randomUUID()}`;
+    const paymentId = `tr_tx_${crypto.randomUUID().replace(/-/g, '')}`;
+    const orderId = 'ci-order-tx-rollback';
+    const email = 'ci-tx-rollback@example.invalid';
+
+    try {
+      await Promise.all([state.ensureSchema(), effects.ensureReady()]);
+      await createBoundIntent(pool, { intentId, paymentId, orderId, amount: '4.50', email });
+
+      await assert.rejects(
+        () => prepareVerifiedPaymentTransaction({
+          pool,
+          provider: 'mollie',
+          providerPaymentId: paymentId,
+          intentId,
+          orderId,
+          amount: '4.50',
+          currency: 'EUR',
+          email,
+          injectFailureAfterEffects: true,
+        }),
+        (error) => error?.code === 'PAYMENT_TX_INJECTED_FAILURE'
+      );
+
+      const savedState = await state.get('mollie', paymentId);
+      assert.equal(savedState, null);
+
+      for (const effectType of ['reward', 'invoice', 'gcoin-intent']) {
+        const effect = await effects.get('mollie', paymentId, effectType);
+        assert.equal(effect, null);
+      }
+
+      const { rows } = await pool.query('SELECT provider_payment_id FROM gpay_payment_intent WHERE intent_id=$1', [intentId]);
+      assert.equal(rows[0].provider_payment_id, paymentId);
+    } finally {
+      await pool.query('DELETE FROM gpay_payment_effect WHERE provider=$1 AND provider_payment_id=$2', ['mollie', paymentId]).catch(() => {});
+      await pool.query('DELETE FROM gpay_payment_state WHERE provider=$1 AND provider_payment_id=$2', ['mollie', paymentId]).catch(() => {});
+      await pool.query('DELETE FROM gpay_payment_intent WHERE intent_id=$1', [intentId]).catch(() => {});
       await pool.end();
     }
   });
