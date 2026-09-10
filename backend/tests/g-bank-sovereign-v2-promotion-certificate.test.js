@@ -36,6 +36,7 @@ function readiness(overrides = {}) {
     value_movement_permitted_by_readiness: true,
     checks: { synthetic_test_snapshot: true },
     evidence_bindings: { ...evidence_bindings },
+    recovery_checkpoint_state_root_sha256: H('a'),
     ...overrides,
   };
 }
@@ -100,6 +101,15 @@ assert.throws(() => createTechnicalPromotionCertificate({
   trusted_signing_key_binding_sha256: H('7'),
   now: NOW,
 }), /direct_live_readiness_not_satisfied/);
+
+assert.throws(() => createTechnicalPromotionCertificate({
+  readiness: ready,
+  checkpoint: { ...checkpoint, state_root_sha256: H('9') },
+  governance,
+  evidence_bindings,
+  trusted_signing_key_binding_sha256: H('7'),
+  now: NOW,
+}), /promotion_recovery_checkpoint_state_root_mismatch/);
 
 assert.throws(() => createTechnicalPromotionCertificate({
   readiness: ready,
