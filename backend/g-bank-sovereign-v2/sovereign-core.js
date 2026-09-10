@@ -181,10 +181,24 @@ class GBankSovereignCore {
     return { ...body, result_sha256: sha256(canonicalJson(body)) };
   }
 
+  _existingExecution(idempotencyKey, prepared) {
+    const existing = this.executions.read(idempotencyKey);
+    if (!existing) return null;
+    if (!existing.request || existing.request.preparation_sha256 !== prepared.preparation_sha256) {
+      throw new Error('idempotency_key_reused_for_different_preparation');
+    }
+    if (['SETTLED', 'REJECTED', 'FAILED_FINAL'].includes(existing.state)) return existing.result;
+    throw new Error(`execution_exists_${existing.state.toLowerCase()}_use_reconcile`);
+  }
+
   async execute({ prepared, schemeValidationEvidence, approvalToken, authoritySignatures, idempotencyKey, now = Date.now() }) {
     requireSovereignLive(this.env);
     verifyPrepared(prepared);
     if (!idempotencyKey) throw new Error('idempotency_key_required');
+
+    const replay = this._existingExecution(idempotencyKey, prepared);
+    if (replay) return replay;
+
     const schemeProof = verifySchemeValidationEvidence(schemeValidationEvidence, prepared.iso20022, {
       require_external: true,
       now,
@@ -209,6 +223,9 @@ class GBankSovereignCore {
 
     const claim = this.executions.claim({ key: idempotencyKey, request });
     if (!claim.owner) {
+      if (!claim.record.request || claim.record.request.preparation_sha256 !== prepared.preparation_sha256) {
+        throw new Error('idempotency_key_reused_for_different_preparation');
+      }
       if (['SETTLED', 'REJECTED', 'FAILED_FINAL'].includes(claim.record.state)) return claim.record.result;
       throw new Error(`execution_exists_${claim.record.state.toLowerCase()}_use_reconcile`);
     }
