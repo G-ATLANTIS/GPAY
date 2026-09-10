@@ -48,6 +48,7 @@ class MonitoringCaseStore {
       if (sha256(canonicalJson(copy)) !== supplied) throw new Error('monitoring_case_record_hash_mismatch');
       const prev = latest.get(row.case_id);
       if (row.case_sequence !== (prev ? prev.case_sequence + 1 : 1)) throw new Error('monitoring_case_local_sequence_invalid');
+      if (prev && row.opened_at !== prev.opened_at) throw new Error('monitoring_case_opened_at_changed');
       latest.set(row.case_id, row);
       previous = supplied;
     }
@@ -98,6 +99,7 @@ class MonitoringCaseStore {
     const reason = String(reason_code || '').toUpperCase();
     if (!/^[A-Z0-9_:-]{3,128}$/.test(reason)) throw new Error('monitoring_case_reason_invalid');
     const id = case_id ? String(case_id) : `GCASE:${crypto.randomUUID()}`;
+    const openedAt = new Date(now).toISOString();
 
     return this._withLock(() => {
       const rows = this._rows();
@@ -113,7 +115,8 @@ class MonitoringCaseStore {
         decision_evidence_sha256: null,
         regulatory_suspicion_determined: false,
         external_report_submitted: false,
-        observed_at: new Date(now).toISOString(),
+        opened_at: openedAt,
+        observed_at: openedAt,
       });
     });
   }
@@ -142,6 +145,7 @@ class MonitoringCaseStore {
         decision_evidence_sha256: evidence,
         regulatory_suspicion_determined: false,
         external_report_submitted: false,
+        opened_at: current.opened_at,
         observed_at: new Date(now).toISOString(),
       });
     });
