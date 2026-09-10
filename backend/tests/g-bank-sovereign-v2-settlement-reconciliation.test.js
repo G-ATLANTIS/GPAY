@@ -95,4 +95,8 @@ assert.throws(() => verifyStatement(statement([
   { submission_id: 'SUB-001', amount_minor: 1000, currency: 'EUR', status: 'PENDING' },
 ]), { now: NOW }), /non_settled_entry/);
 
+assert.throws(() => verifyStatement(statement([
+  { submission_id: 'SUB-001', amount_minor: 1000, currency: 'USD', status: 'SETTLED' },
+]), { now: NOW }), /entry_currency_mismatch/);
+
 console.log('G-BANK sovereign v2 settlement reconciliation tests: PASS');
