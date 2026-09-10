@@ -8,6 +8,11 @@ const { createReceipt } = require('../utils/payment-receipt');
 const { getProcessed, recordProcessed } = require('../utils/payment-idempotency-store');
 const { acquirePaymentLock } = require('../utils/payment-lock');
 const { createGcoinSettlementIntent } = require('../utils/gcoin-settlement-intent');
+const {
+  getPaymentState,
+  beginPayment,
+  advancePayment,
+} = require('../utils/payment-processing-state');
 const router = express.Router();
 
 function requireMollieConfig() {
@@ -40,6 +45,13 @@ router.post('/mollie/webhook', async (req, res) => {
 
     const alreadyProcessed = getProcessed('mollie', id);
     if (alreadyProcessed) {
+      const recovery = getPaymentState('mollie', id);
+      if (recovery && recovery.stage !== 'COMMITTED') {
+        advancePayment('mollie', id, 'COMMITTED', {
+          receiptHash: alreadyProcessed.receiptHash,
+          settlementEventId: alreadyProcessed.settlementEventId || null,
+        });
+      }
       return res.status(200).json({
         status: 'already_processed',
         providerPaymentId: id,
@@ -48,6 +60,8 @@ router.post('/mollie/webhook', async (req, res) => {
         settlementExecutionStatus: alreadyProcessed.settlementExecutionStatus || null,
       });
     }
+
+    const processing = beginPayment('mollie', id).state;
 
     // Never trust callback body for canonical payment state; re-read it from Mollie.
     const payment = await mollieClient.payments.get(id);
@@ -65,8 +79,16 @@ router.post('/mollie/webhook', async (req, res) => {
       });
     }
 
-    const processedAt = new Date().toISOString();
+    const processedAt = processing.processedAt;
     const currency = payment.amount?.currency || 'EUR';
+
+    advancePayment('mollie', id, 'PROVIDER_VERIFIED', {
+      providerStatus: payment.status,
+      orderId,
+      amount: String(amount),
+      currency,
+    });
+
     const rewardEventId = crypto
       .createHash('sha256')
       .update(`mollie:${id}:${orderId}:reward`)
@@ -87,7 +109,8 @@ router.post('/mollie/webhook', async (req, res) => {
       broadcast: false,
     });
 
-    // Invoice resolves only after the PDF is durably written.
+    // Invoice path is deterministic and resolves only after the PDF write completes.
+    // Re-running this step after a crash is safe for the current local-file implementation.
     const invoicePath = await generateInvoice(orderId, amount, email);
 
     const receipt = createReceipt({
@@ -107,9 +130,20 @@ router.post('/mollie/webhook', async (req, res) => {
       settlementChainId: settlementIntent.chainId,
     });
 
+    advancePayment('mollie', id, 'EFFECTS_PREPARED', {
+      rewardEventId,
+      settlementEventId: settlementIntent.settlementEventId,
+      receiptHash: receipt.receiptHash,
+      invoicePath,
+    });
+
     // Commit local processing before best-effort notification. No blockchain execution occurs here.
     const result = recordProcessed('mollie', id, receipt);
     if (!result.created) {
+      advancePayment('mollie', id, 'COMMITTED', {
+        receiptHash: result.record.receiptHash,
+        settlementEventId: result.record.settlementEventId || null,
+      });
       return res.status(200).json({
         status: 'already_processed',
         providerPaymentId: id,
@@ -118,6 +152,11 @@ router.post('/mollie/webhook', async (req, res) => {
         settlementExecutionStatus: result.record.settlementExecutionStatus || null,
       });
     }
+
+    advancePayment('mollie', id, 'COMMITTED', {
+      receiptHash: receipt.receiptHash,
+      settlementEventId: settlementIntent.settlementEventId,
+    });
 
     fs.mkdirSync('logs', { recursive: true });
     fs.appendFileSync(
@@ -140,6 +179,7 @@ router.post('/mollie/webhook', async (req, res) => {
       settlementEventId: settlementIntent.settlementEventId,
       settlementMode: settlementIntent.mode,
       settlementExecutionStatus: settlementIntent.executionStatus,
+      processingStage: 'COMMITTED',
       notification,
     });
   } catch (err) {
