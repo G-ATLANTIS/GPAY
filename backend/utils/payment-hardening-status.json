@@ -1,5 +1,5 @@
 {
-  "version": "1.9.0",
+  "version": "1.9.1",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -26,6 +26,7 @@
     "postgres_engine_integration_test_implemented": true,
     "postgres_engine_ci_service_isolated_from_unit_suite": true,
     "postgres_ci_driver_ephemeral_only": true,
+    "postgres_engine_cas_contention_verified_in_ci": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -49,8 +50,10 @@
     "combined_main_reconciliation_ci": "passed",
     "v1_8_ci": "failed_only_on_webhook_structured_error_assertion",
     "v1_8_assertion_fix_commit": "165dfeaf35637edd5fd5b7e97208aef9ab9a47d3",
-    "postgres_engine_integration_ci": "pending",
-    "v1_9_ci_head": "9e722877293cf60cfa82f45247a26be82c690503"
+    "postgres_engine_integration_ci": "passed",
+    "postgres_engine_integration_commit": "9e722877293cf60cfa82f45247a26be82c690503",
+    "postgres_engine_integration_run_id": 34522149501,
+    "postgres_engine_integration_run_number": 98
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
