@@ -8,6 +8,12 @@ function hash64(name, value) {
   return v;
 }
 
+function positiveInt(name, value, min = 1) {
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n < min) throw new Error(`${name}_invalid`);
+  return n;
+}
+
 function verifyReadiness(readiness, { now = Date.now() } = {}) {
   if (!readiness || readiness.schema !== 'g-bank-sovereign-readiness/v2') throw new Error('readiness_required');
   const required = [
@@ -28,7 +34,19 @@ function verifyReadiness(readiness, { now = Date.now() } = {}) {
   return readiness;
 }
 
-function createTechnicalPromotionCertificate({ readiness, checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256, trusted_runtime_ha_observer_sha256, ttl_seconds = 120, now = Date.now() }) {
+function createTechnicalPromotionCertificate({
+  readiness,
+  checkpoint,
+  governance,
+  evidence_bindings,
+  trusted_signing_key_binding_sha256,
+  trusted_runtime_ha_observer_sha256,
+  promotion_signer_authority_root_sha256,
+  promotion_signer_authority_epoch,
+  promotion_signature_quorum,
+  ttl_seconds = 120,
+  now = Date.now(),
+}) {
   verifyReadiness(readiness, { now });
   if (!checkpoint || checkpoint.schema !== 'g-bank-sovereign-state-checkpoint/v2') throw new Error('checkpoint_required');
   const stateRoot = hash64('state_root_sha256', checkpoint.state_root_sha256);
@@ -38,6 +56,9 @@ function createTechnicalPromotionCertificate({ readiness, checkpoint, governance
   const authorityHash = hash64('authority_set_sha256', governance?.authority_set_sha256);
   const signingKeyHash = hash64('trusted_signing_key_binding_sha256', trusted_signing_key_binding_sha256);
   const runtimeObserverHash = hash64('trusted_runtime_ha_observer_sha256', trusted_runtime_ha_observer_sha256);
+  const promotionSignerAuthorityRoot = hash64('promotion_signer_authority_root_sha256', promotion_signer_authority_root_sha256);
+  const promotionSignerAuthorityEpoch = positiveInt('promotion_signer_authority_epoch', promotion_signer_authority_epoch);
+  const promotionSignatureQuorum = positiveInt('promotion_signature_quorum', promotion_signature_quorum, 2);
   const haJournalRoot = hash64('ha_voter_journal_root_sha256', readiness.ha_voter_journal_root_sha256);
   const haClusterAuthorityRoot = hash64('ha_cluster_authority_root_sha256', readiness.ha_cluster_authority_root_sha256);
   const evidence = evidence_bindings || {};
@@ -75,6 +96,9 @@ function createTechnicalPromotionCertificate({ readiness, checkpoint, governance
     authority_set_sha256: authorityHash,
     trusted_signing_key_binding_sha256: signingKeyHash,
     trusted_runtime_ha_observer_sha256: runtimeObserverHash,
+    promotion_signer_authority_root_sha256: promotionSignerAuthorityRoot,
+    promotion_signer_authority_epoch: promotionSignerAuthorityEpoch,
+    promotion_signature_quorum: promotionSignatureQuorum,
     ha_voter_journal_root_sha256: haJournalRoot,
     ha_cluster_authority_root_sha256: haClusterAuthorityRoot,
     evidence_bindings: bindings,
@@ -97,6 +121,9 @@ function verifyTechnicalPromotionCertificate(certificate, { readiness, now = Dat
   if (certificate.grants_external_rights !== false || certificate.permits_value_movement_by_itself !== false || certificate.requires_runtime_reverification !== true) throw new Error('promotion_certificate_boundary_invalid');
   hash64('promotion_trusted_signing_key_binding_sha256', certificate.trusted_signing_key_binding_sha256);
   hash64('promotion_trusted_runtime_ha_observer_sha256', certificate.trusted_runtime_ha_observer_sha256);
+  hash64('promotion_signer_authority_root_sha256', certificate.promotion_signer_authority_root_sha256);
+  positiveInt('promotion_signer_authority_epoch', certificate.promotion_signer_authority_epoch);
+  positiveInt('promotion_signature_quorum', certificate.promotion_signature_quorum, 2);
   hash64('promotion_ha_voter_journal_root_sha256', certificate.ha_voter_journal_root_sha256);
   hash64('promotion_ha_cluster_authority_root_sha256', certificate.ha_cluster_authority_root_sha256);
   const issued = Date.parse(certificate.issued_at);
