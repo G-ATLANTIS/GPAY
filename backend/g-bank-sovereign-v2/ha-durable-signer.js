@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { sha256 } = require('./canonical');
 const { normalizeCluster, signProposal } = require('./ha-quorum');
+const { proposalSlot } = require('./ha-vote-store');
 
 function publicBindingFromPrivate(privateKey) {
   let publicKey;
@@ -31,7 +32,15 @@ class HADurableSigner {
   sign(proposal, { signed_at = null } = {}) {
     if (!proposal || !proposal.proposal_sha256) throw new Error('ha_signer_proposal_required');
     if (proposal.cluster_sha256 !== this.cluster.cluster_sha256 || proposal.cluster_epoch !== this.cluster.cluster_epoch) throw new Error('ha_signer_proposal_cluster_mismatch');
-    const timestamp = signed_at || new Date(this.clock()).toISOString();
+
+    let timestamp = signed_at;
+    if (timestamp === null) {
+      const slot = proposalSlot(proposal);
+      const existing = this.voteStore.verify().rows.find(row => row.slot_key === slot);
+      if (existing && existing.proposal_sha256 === proposal.proposal_sha256) timestamp = existing.signed_at;
+      else timestamp = new Date(this.clock()).toISOString();
+    }
+
     return signProposal({
       proposal,
       node_id: this.nodeId,
