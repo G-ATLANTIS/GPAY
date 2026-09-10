@@ -164,7 +164,9 @@ async function main() {
   }
 
   if (command === 'readiness') {
-    if (!a.prudential || !a['monitoring-audit'] || !a['recovery-audit'] || !a['ha-audit'] || !a.out) throw new Error('--prudential --monitoring-audit --recovery-audit --ha-audit --out_required');
+    if (!a.prudential || !a['monitoring-audit'] || !a['recovery-audit'] || !a['ha-audit'] || !a['ha-deployment-audit'] || !a.out) {
+      throw new Error('--prudential --monitoring-audit --recovery-audit --ha-audit --ha-deployment-audit --out_required');
+    }
     const { riskPolicy, authoritySet } = governanceFor(a, { required: true });
     const settlement = loadSettlement(process.env);
     const preflight = await settlement.preflight();
@@ -176,6 +178,7 @@ async function main() {
       monitoringAudit: readJson(a['monitoring-audit']),
       recoveryAudit: readJson(a['recovery-audit']),
       haAudit: readJson(a['ha-audit']),
+      haDeploymentAudit: readJson(a['ha-deployment-audit']),
     });
     const output = writePrivate(a.out, readiness);
     console.log(JSON.stringify({
@@ -183,10 +186,12 @@ async function main() {
       direct_live_ready: readiness.direct_live_ready,
       recovery_controls_verified: readiness.recovery_controls_verified,
       ha_controls_verified: readiness.ha_controls_verified,
+      ha_deployment_verified: readiness.ha_deployment_verified,
       customer_monitoring_verified: readiness.customer_monitoring_verified,
       transport_preflight_receipt_sha256: readiness.evidence_bindings.transport_preflight_receipt_sha256,
       recovery_checkpoint_state_root_sha256: readiness.recovery_checkpoint_state_root_sha256,
       ha_checkpoint_state_root_sha256: readiness.ha_checkpoint_state_root_sha256,
+      ha_fence_valid_until: readiness.ha_fence_valid_until,
       output,
     }, null, 2));
     return;
@@ -208,7 +213,9 @@ async function main() {
       policy_sha256: certificate.policy_sha256, authority_set_sha256: certificate.authority_set_sha256,
       recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
       ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
+      ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256,
       customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
+      ha_fence_valid_until: certificate.ha_fence_valid_until,
       expires_at: certificate.expires_at, output, grants_external_rights: certificate.grants_external_rights,
       permits_value_movement_by_itself: certificate.permits_value_movement_by_itself,
     }, null, 2));
