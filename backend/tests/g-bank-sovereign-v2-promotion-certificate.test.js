@@ -17,6 +17,7 @@ function readiness(overrides = {}) {
     external_transport_verified: true,
     prudential_controls_verified: true,
     operational_controls_verified: true,
+    customer_monitoring_verified: true,
     direct_live_ready: true,
     value_movement_permitted_by_readiness: true,
     checks: { synthetic_test_snapshot: true },
@@ -41,6 +42,7 @@ const evidence_bindings = {
   prudential_audit_sha256: H('3'),
   operational_resilience_sha256: H('4'),
   treasury_assessment_sha256: H('5'),
+  customer_monitoring_audit_sha256: H('6'),
 };
 
 const ready = readiness();
@@ -49,7 +51,7 @@ const cert = createTechnicalPromotionCertificate({
   checkpoint,
   governance,
   evidence_bindings,
-  trusted_signing_key_binding_sha256: H('6'),
+  trusted_signing_key_binding_sha256: H('7'),
   ttl_seconds: 120,
   now: NOW,
 });
@@ -58,10 +60,11 @@ assert.equal(cert.state, 'TECHNICAL_GATES_SATISFIED');
 assert.equal(cert.grants_external_rights, false);
 assert.equal(cert.permits_value_movement_by_itself, false);
 assert.equal(cert.requires_runtime_reverification, true);
+assert.equal(cert.evidence_bindings.customer_monitoring_audit_sha256, H('6'));
 assert.match(cert.certificate_sha256, /^[0-9a-f]{64}$/);
 assert.equal(verifyTechnicalPromotionCertificate(cert, { readiness: ready, now: NOW + 1000 }), true);
 
-const tampered = { ...cert, state_root_sha256: H('7') };
+const tampered = { ...cert, state_root_sha256: H('8') };
 assert.throws(() => verifyTechnicalPromotionCertificate(tampered, { readiness: ready, now: NOW + 1000 }), /hash_mismatch/);
 
 assert.throws(() => verifyTechnicalPromotionCertificate(cert, { readiness: ready, now: NOW + 121000 }), /expired_or_invalid/);
@@ -71,9 +74,27 @@ assert.throws(() => createTechnicalPromotionCertificate({
   checkpoint,
   governance,
   evidence_bindings,
-  trusted_signing_key_binding_sha256: H('6'),
+  trusted_signing_key_binding_sha256: H('7'),
   now: NOW,
 }), /direct_live_readiness_not_satisfied/);
+
+assert.throws(() => createTechnicalPromotionCertificate({
+  readiness: readiness({ customer_monitoring_verified: false }),
+  checkpoint,
+  governance,
+  evidence_bindings,
+  trusted_signing_key_binding_sha256: H('7'),
+  now: NOW,
+}), /direct_live_readiness_not_satisfied/);
+
+assert.throws(() => createTechnicalPromotionCertificate({
+  readiness: ready,
+  checkpoint,
+  governance,
+  evidence_bindings: { ...evidence_bindings, customer_monitoring_audit_sha256: null },
+  trusted_signing_key_binding_sha256: H('7'),
+  now: NOW,
+}), /customer_monitoring_audit_sha256_invalid/);
 
 assert.throws(() => verifyTechnicalPromotionCertificate(cert, {
   readiness: readiness({ checks: { synthetic_test_snapshot: true, changed: true } }),
