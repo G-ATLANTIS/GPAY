@@ -10,6 +10,7 @@ const { acquirePaymentLock } = require('../utils/payment-lock');
 const { createGcoinSettlementIntent } = require('../utils/gcoin-settlement-intent');
 const { createPaymentStateRuntime } = require('../utils/payment-state-runtime');
 const { createPaymentIntentRuntime } = require('../utils/payment-intent-runtime');
+const { createPaymentEffectLedger } = require('../utils/payment-effect-ledger');
 const router = express.Router();
 
 function requireMollieConfig() {
@@ -27,6 +28,10 @@ function getMollieClient() {
   return require('@mollie/api-client').default({ apiKey });
 }
 
+function effectData(record) {
+  return record?.data || {};
+}
+
 router.post('/mollie/webhook', async (req, res) => {
   const id = typeof req.body?.id === 'string' ? req.body.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'Missing payment id' });
@@ -36,7 +41,12 @@ router.post('/mollie/webhook', async (req, res) => {
     const mollieClient = getMollieClient();
     const stateRuntime = createPaymentStateRuntime();
     const intentRuntime = createPaymentIntentRuntime();
-    await Promise.all([stateRuntime.ensureReady(), intentRuntime.ensureReady()]);
+    const effectLedger = createPaymentEffectLedger();
+    await Promise.all([
+      stateRuntime.ensureReady(),
+      intentRuntime.ensureReady(),
+      effectLedger.ensureReady(),
+    ]);
 
     lock = acquirePaymentLock('mollie', id);
     if (!lock.acquired) return res.status(202).json({ status: 'processing', providerPaymentId: id });
@@ -94,14 +104,44 @@ router.post('/mollie/webhook', async (req, res) => {
     });
 
     const rewardEventId = crypto.createHash('sha256').update(`mollie:${id}:${orderId}:reward`).digest('hex');
-    const tokens = rewardTokens(providerAmount, email, { eventId: rewardEventId });
+    const rewardPrepared = await effectLedger.prepare('mollie', id, 'reward', {
+      gpayIntentId,
+      orderId,
+      rewardEventId,
+    });
+    let tokens = effectData(rewardPrepared.record).tokens;
+    if (rewardPrepared.record.status !== 'COMPLETED' || tokens == null) {
+      tokens = rewardTokens(providerAmount, email, { eventId: rewardEventId });
+      await effectLedger.complete('mollie', id, 'reward', { tokens: String(tokens), rewardEventId });
+    }
+
     const settlementIntent = createGcoinSettlementIntent({
       provider: 'mollie', providerPaymentId: id, orderId,
       amount: String(providerAmount), currency, rewardEventId,
       gcoinAmount: String(tokens), broadcast: false,
     });
+    const gcoinPrepared = await effectLedger.prepare('mollie', id, 'gcoin-intent', {
+      gpayIntentId,
+      settlementEventId: settlementIntent.settlementEventId,
+    });
+    if (gcoinPrepared.record.status !== 'COMPLETED') {
+      await effectLedger.complete('mollie', id, 'gcoin-intent', {
+        settlementEventId: settlementIntent.settlementEventId,
+        executionStatus: settlementIntent.executionStatus,
+        broadcast: false,
+      });
+    }
 
-    const invoicePath = await generateInvoice(orderId, providerAmount, email);
+    const invoicePrepared = await effectLedger.prepare('mollie', id, 'invoice', {
+      gpayIntentId,
+      orderId,
+    });
+    let invoicePath = effectData(invoicePrepared.record).invoicePath;
+    if (invoicePrepared.record.status !== 'COMPLETED' || !invoicePath) {
+      invoicePath = await generateInvoice(orderId, providerAmount, email);
+      await effectLedger.complete('mollie', id, 'invoice', { invoicePath });
+    }
+
     const receipt = createReceipt({
       provider: 'mollie', providerPaymentId: id, orderId,
       amount: String(providerAmount), currency, status: payment.status, processedAt,
@@ -137,11 +177,19 @@ router.post('/mollie/webhook', async (req, res) => {
     fs.mkdirSync('logs', { recursive: true });
     fs.appendFileSync('logs/payments.log', `[OK] ${orderId} provider=mollie payment=${id} intent=${gpayIntentId} status=paid receipt=${receipt.receiptHash} gcoin_intent=${settlementIntent.settlementEventId} execution=not_attempted\n`);
 
-    let notification = 'sent';
-    try { await sendMail(email, invoicePath); }
-    catch (mailErr) {
-      notification = 'failed';
-      console.error('Payment confirmation email failed:', mailErr.message);
+    const emailPrepared = await effectLedger.prepare('mollie', id, 'email', {
+      gpayIntentId,
+      invoicePath,
+    });
+    let notification = emailPrepared.record.status === 'COMPLETED' ? 'already_sent' : 'sent';
+    if (emailPrepared.record.status !== 'COMPLETED') {
+      try {
+        await sendMail(email, invoicePath);
+        await effectLedger.complete('mollie', id, 'email', { sentAt: new Date().toISOString() });
+      } catch (mailErr) {
+        notification = 'failed';
+        console.error('Payment confirmation email failed:', mailErr.message);
+      }
     }
 
     return res.status(200).json({
@@ -154,10 +202,20 @@ router.post('/mollie/webhook', async (req, res) => {
       notification,
     });
   } catch (err) {
-    if (err.code === 'CONFIG_ERROR' || err.code === 'PAYMENT_STATE_CONFIG_MISSING' || err.code === 'PAYMENT_STATE_DRIVER_MISSING') {
+    if (
+      err.code === 'CONFIG_ERROR' ||
+      err.code === 'PAYMENT_STATE_CONFIG_MISSING' ||
+      err.code === 'PAYMENT_STATE_DRIVER_MISSING' ||
+      err.code === 'PAYMENT_EFFECT_CONFIG_MISSING' ||
+      err.code === 'PAYMENT_EFFECT_DRIVER_MISSING'
+    ) {
       return res.status(503).json({ error: err.message, code: err.code });
     }
-    if (err.code === 'PAYMENT_STATE_CAS_CONFLICT' || err.code === 'PAYMENT_INTENT_BIND_CONFLICT') {
+    if (
+      err.code === 'PAYMENT_STATE_CAS_CONFLICT' ||
+      err.code === 'PAYMENT_INTENT_BIND_CONFLICT' ||
+      err.code === 'PAYMENT_EFFECT_CONFLICT'
+    ) {
       return res.status(409).json({ error: 'Payment state contention', code: err.code });
     }
     if (err.code === 'GCOIN_BROADCAST_DENIED') return res.status(403).json({ error: err.message });
