@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
-const { normalizeCluster, verifyQuorumCertificate } = require('./ha-quorum');
+const { normalizeCluster, verifyQuorumCertificate, verifyStoredQuorumCertificate } = require('./ha-quorum');
 
 function appendLocked(filePath, lockPath, record) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -27,6 +27,12 @@ function rows(filePath) {
   return text.split('\n').map((line, i) => { try { return JSON.parse(line); } catch { throw new Error(`ha_store_corrupt_line_${i + 1}`); } });
 }
 
+function verifyRecordHash(row, errorName) {
+  const supplied = row.record_sha256;
+  const copy = { ...row }; delete copy.record_sha256;
+  if (sha256(canonicalJson(copy)) !== supplied) throw new Error(errorName);
+}
+
 class HAFenceStore {
   constructor(filePath, cluster) {
     this.filePath = path.resolve(filePath);
@@ -43,10 +49,13 @@ class HAFenceStore {
       if (row.schema !== 'g-bank-ha-fence-record/v2' || row.sequence !== i + 1) throw new Error('ha_fence_record_invalid');
       if (row.term !== term + 1) throw new Error('ha_fence_term_not_monotonic');
       if (row.previous_fence_sha256 !== prior) throw new Error('ha_fence_chain_broken');
-      const supplied = row.record_sha256;
-      const copy = { ...row }; delete copy.record_sha256;
-      if (sha256(canonicalJson(copy)) !== supplied) throw new Error('ha_fence_record_hash_mismatch');
-      prior = supplied; term = row.term;
+      verifyRecordHash(row, 'ha_fence_record_hash_mismatch');
+      if (!row.proposal || row.proposal.schema !== 'g-bank-ha-fence-proposal/v2') throw new Error('ha_fence_stored_proposal_missing');
+      if (row.proposal.proposal_sha256 !== row.proposal_sha256 || row.proposal.term !== row.term || row.proposal.leader_node_id !== row.leader_node_id || row.proposal.previous_fence_sha256 !== row.previous_fence_sha256) throw new Error('ha_fence_stored_proposal_mismatch');
+      if (!row.quorum_certificate || row.quorum_certificate.certificate_sha256 !== row.quorum_certificate_sha256) throw new Error('ha_fence_stored_certificate_mismatch');
+      verifyStoredQuorumCertificate({ cluster: this.cluster, proposal: row.proposal, certificate: row.quorum_certificate });
+      prior = row.record_sha256;
+      term = row.term;
     }
     return Object.freeze({ verified: true, count: list.length, latest_term: term, latest_fence_sha256: prior, latest: list.length ? Object.freeze({ ...list[list.length - 1] }) : null });
   }
@@ -59,19 +68,10 @@ class HAFenceStore {
     if (Date.parse(proposal.valid_from) > now + 30000 || Date.parse(proposal.valid_until) <= now) throw new Error('ha_fence_not_current');
     const certificate = verifyQuorumCertificate({ cluster: this.cluster, proposal, signatures, now });
     const record = {
-      schema: 'g-bank-ha-fence-record/v2',
-      sequence: proof.count + 1,
-      term: proposal.term,
-      leader_node_id: proposal.leader_node_id,
-      cluster_sha256: this.cluster.cluster_sha256,
-      proposal_sha256: proposal.proposal_sha256,
-      quorum_certificate_sha256: certificate.certificate_sha256,
-      valid_from: proposal.valid_from,
-      valid_until: proposal.valid_until,
-      previous_fence_sha256: proof.latest_fence_sha256,
-      committed_at: new Date(now).toISOString(),
-      grants_external_rights: false,
-      permits_value_movement_by_itself: false,
+      schema: 'g-bank-ha-fence-record/v2', sequence: proof.count + 1, term: proposal.term, leader_node_id: proposal.leader_node_id,
+      cluster_sha256: this.cluster.cluster_sha256, proposal_sha256: proposal.proposal_sha256, quorum_certificate_sha256: certificate.certificate_sha256,
+      proposal, quorum_certificate: certificate, valid_from: proposal.valid_from, valid_until: proposal.valid_until,
+      previous_fence_sha256: proof.latest_fence_sha256, committed_at: new Date(now).toISOString(), grants_external_rights: false, permits_value_movement_by_itself: false,
     };
     record.record_sha256 = sha256(canonicalJson(record));
     appendLocked(this.filePath, this.lockPath, record);
@@ -95,10 +95,13 @@ class HACommitStore {
       const row = list[i];
       if (row.schema !== 'g-bank-ha-commit-record/v2' || row.commit_index !== index + 1) throw new Error('ha_commit_index_invalid');
       if (row.previous_commit_sha256 !== prior) throw new Error('ha_commit_chain_broken');
-      const supplied = row.record_sha256;
-      const copy = { ...row }; delete copy.record_sha256;
-      if (sha256(canonicalJson(copy)) !== supplied) throw new Error('ha_commit_record_hash_mismatch');
-      prior = supplied; index = row.commit_index;
+      verifyRecordHash(row, 'ha_commit_record_hash_mismatch');
+      if (!row.proposal || row.proposal.schema !== 'g-bank-ha-commit-proposal/v2') throw new Error('ha_commit_stored_proposal_missing');
+      if (row.proposal.proposal_sha256 !== row.proposal_sha256 || row.proposal.commit_index !== row.commit_index || row.proposal.state_root_sha256 !== row.state_root_sha256 || row.proposal.previous_commit_sha256 !== row.previous_commit_sha256) throw new Error('ha_commit_stored_proposal_mismatch');
+      if (!row.quorum_certificate || row.quorum_certificate.certificate_sha256 !== row.quorum_certificate_sha256) throw new Error('ha_commit_stored_certificate_mismatch');
+      verifyStoredQuorumCertificate({ cluster: this.cluster, proposal: row.proposal, certificate: row.quorum_certificate });
+      prior = row.record_sha256;
+      index = row.commit_index;
     }
     return Object.freeze({ verified: true, count: list.length, latest_commit_index: index, latest_commit_sha256: prior, latest: list.length ? Object.freeze({ ...list[list.length - 1] }) : null });
   }
@@ -113,19 +116,10 @@ class HACommitStore {
     if (proposal.commit_index !== commits.latest_commit_index + 1 || proposal.previous_commit_sha256 !== commits.latest_commit_sha256) throw new Error('ha_commit_next_index_required');
     const certificate = verifyQuorumCertificate({ cluster: this.cluster, proposal, signatures, now });
     const record = {
-      schema: 'g-bank-ha-commit-record/v2',
-      commit_index: proposal.commit_index,
-      term: proposal.term,
-      leader_node_id: proposal.leader_node_id,
-      cluster_sha256: this.cluster.cluster_sha256,
-      state_root_sha256: proposal.state_root_sha256,
-      fence_record_sha256: proposal.fence_record_sha256,
-      proposal_sha256: proposal.proposal_sha256,
-      quorum_certificate_sha256: certificate.certificate_sha256,
-      previous_commit_sha256: commits.latest_commit_sha256,
-      committed_at: new Date(now).toISOString(),
-      grants_external_rights: false,
-      permits_value_movement_by_itself: false,
+      schema: 'g-bank-ha-commit-record/v2', commit_index: proposal.commit_index, term: proposal.term, leader_node_id: proposal.leader_node_id,
+      cluster_sha256: this.cluster.cluster_sha256, state_root_sha256: proposal.state_root_sha256, fence_record_sha256: proposal.fence_record_sha256,
+      proposal_sha256: proposal.proposal_sha256, quorum_certificate_sha256: certificate.certificate_sha256, proposal, quorum_certificate: certificate,
+      previous_commit_sha256: commits.latest_commit_sha256, committed_at: new Date(now).toISOString(), grants_external_rights: false, permits_value_movement_by_itself: false,
     };
     record.record_sha256 = sha256(canonicalJson(record));
     appendLocked(this.filePath, this.lockPath, record);
