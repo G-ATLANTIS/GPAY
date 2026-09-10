@@ -106,14 +106,7 @@ The invariant auditor requires ledger integrity, zero trial-balance total, manda
 
 At end of day, externally settled entries are reconciled against G-BANK's own `SOVEREIGN_SETTLEMENT_VERIFIED` receipts using the settlement `submission_id`, amount and currency.
 
-The external statement must be hash-verified and must use one currency consistently. Reconciliation blocks on:
-
-- duplicate internal settlement receipts;
-- an internal settlement missing externally;
-- an unexpected external settlement;
-- amount mismatch;
-- statement tampering;
-- statement-entry currency mismatch.
+The external statement must be hash-verified and must use one currency consistently. Reconciliation blocks on duplicate internal settlement receipts, missing external settlements, unexpected external settlements, amount mismatches, statement tampering or statement-entry currency mismatch.
 
 No mismatch is auto-corrected and no compensating payment is generated automatically.
 
@@ -161,7 +154,7 @@ G_BANK_TREASURY_ASSESSMENT_SHA256=<current PASS treasury-assessment hash>
 
 The transport preflight must independently report LIVE, authenticated and connected status, supported SCT/SCT Inst scheme and an external receipt hash.
 
-Environment variables alone cannot manufacture a valid readiness state because the supplied prudential/operational/treasury assessments are themselves hash-recomputed and bound.
+Environment variables alone cannot manufacture a valid readiness state because the supplied prudential, operational and treasury assessments are themselves hash-recomputed and bound.
 
 ## Critical ambiguity rule
 
