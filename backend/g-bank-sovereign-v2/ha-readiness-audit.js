@@ -8,6 +8,23 @@ function storeFor(voteStores, nodeId) {
   return voteStores?.[nodeId] || null;
 }
 
+function genesisAuthority(cluster) {
+  const rootBody = {
+    schema: 'g-bank-ha-cluster-authority-root/v2',
+    genesis_cluster_sha256: cluster.cluster_sha256,
+    transition_head_sha256: null,
+    current_cluster_sha256: cluster.cluster_sha256,
+    current_cluster_epoch: cluster.cluster_epoch,
+  };
+  return Object.freeze({
+    verified: true,
+    transition_count: 0,
+    transition_head_sha256: null,
+    current_cluster: cluster,
+    cluster_authority_root_sha256: sha256(canonicalJson(rootBody)),
+  });
+}
+
 function assessHAReadiness({ cluster, clusterAuthorityStore = null, fenceStore, commitStore, voteStores = null, checkpoint, now = Date.now(), max_commit_age_ms = 120000 } = {}) {
   const c = normalizeCluster(cluster);
   if (!fenceStore || !commitStore) throw new Error('ha_stores_required');
@@ -18,14 +35,15 @@ function assessHAReadiness({ cluster, clusterAuthorityStore = null, fenceStore, 
   const commit = commitProof.latest;
   const reasons = [];
 
-  let clusterAuthority = null;
-  if (!clusterAuthorityStore || typeof clusterAuthorityStore.verify !== 'function') {
-    reasons.push('CLUSTER_AUTHORITY_STORE_MISSING');
-  } else {
+  let clusterAuthority;
+  if (clusterAuthorityStore && typeof clusterAuthorityStore.verify === 'function') {
     clusterAuthority = clusterAuthorityStore.verify();
-    if (clusterAuthority.current_cluster?.cluster_sha256 !== c.cluster_sha256 || clusterAuthority.current_cluster?.cluster_epoch !== c.cluster_epoch) {
-      reasons.push('CLUSTER_NOT_CANONICAL_AUTHORITY_HEAD');
-    }
+    if (clusterAuthority.current_cluster?.cluster_sha256 !== c.cluster_sha256 || clusterAuthority.current_cluster?.cluster_epoch !== c.cluster_epoch) reasons.push('CLUSTER_NOT_CANONICAL_AUTHORITY_HEAD');
+  } else if (c.cluster_epoch === 1) {
+    clusterAuthority = genesisAuthority(c);
+  } else {
+    clusterAuthority = null;
+    reasons.push('CLUSTER_AUTHORITY_STORE_REQUIRED_AFTER_GENESIS');
   }
 
   if (!fence) reasons.push('NO_FENCE');
@@ -119,4 +137,4 @@ function assessHAReadiness({ cluster, clusterAuthorityStore = null, fenceStore, 
   return Object.freeze({ ...body, audit_sha256: sha256(canonicalJson(body)) });
 }
 
-module.exports = { assessHAReadiness, storeFor };
+module.exports = { assessHAReadiness, storeFor, genesisAuthority };
