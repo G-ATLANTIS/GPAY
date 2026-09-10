@@ -3,6 +3,8 @@
 const { canonicalJson, sha256 } = require('./canonical');
 const { verifyMonitoringEvidence } = require('./monitoring-evidence');
 const { verifyTransactionAssessment } = require('./transaction-monitoring');
+const { verifyMonitoringPolicy } = require('./monitoring-policy');
+const { assessMonitoringCaseSla } = require('./monitoring-case-sla');
 
 function rank(state) {
   return { CLEAR: 0, REVIEW_REQUIRED: 1, SUSPEND_REQUIRED: 2 }[state] ?? -1;
@@ -13,18 +15,21 @@ function raise(current, next) {
 }
 
 class ContinuousCustomerMonitoringService {
-  constructor({ customers, customerControls, revocations, cases }) {
+  constructor({ customers, customerControls, revocations, cases, monitoringPolicy }) {
     if (!customers || typeof customers.get !== 'function') throw new Error('customer_registry_required');
     if (!customerControls || typeof customerControls.suspend !== 'function') throw new Error('customer_control_service_required');
     if (!revocations || typeof revocations.isRevoked !== 'function') throw new Error('evidence_revocation_store_required');
     if (!cases || typeof cases.open !== 'function' || typeof cases.list !== 'function') throw new Error('monitoring_case_store_required');
+    if (!monitoringPolicy) throw new Error('monitoring_policy_required');
     this.customers = customers;
     this.controls = customerControls;
     this.revocations = revocations;
     this.cases = cases;
+    this.monitoringPolicy = monitoringPolicy;
   }
 
   assess({ customer_id, monitoringEvidence, transactionAssessment = null, now = Date.now() }) {
+    const policy = verifyMonitoringPolicy(this.monitoringPolicy, { now });
     const customer = this.customers.get(customer_id);
     if (!['ACTIVE', 'SUSPENDED'].includes(customer.status)) throw new Error('customer_not_monitorable');
 
@@ -36,6 +41,8 @@ class ContinuousCustomerMonitoringService {
       monitoringProof = verifyMonitoringEvidence(monitoringEvidence, {
         subject_binding_sha256: customer.subject_binding_sha256,
         now,
+        max_kyc_age_ms: policy.max_kyc_age_ms,
+        max_screen_age_ms: policy.max_screen_age_ms,
       });
       const evidenceHashes = [
         monitoringProof.kyc_evidence_sha256,
@@ -65,8 +72,8 @@ class ContinuousCustomerMonitoringService {
       }
     }
 
-    const openCases = this.cases.list({ customer_id: customer.customer_id })
-      .filter(item => ['OPEN', 'UNDER_REVIEW', 'ESCALATED'].includes(item.status));
+    const allCases = this.cases.list({ customer_id: customer.customer_id });
+    const openCases = allCases.filter(item => ['OPEN', 'UNDER_REVIEW', 'ESCALATED'].includes(item.status));
     if (openCases.some(item => item.severity === 'CRITICAL')) {
       state = raise(state, 'SUSPEND_REQUIRED');
       reasons.push('CRITICAL_MONITORING_CASE_OPEN');
@@ -75,14 +82,26 @@ class ContinuousCustomerMonitoringService {
       reasons.push('MONITORING_CASE_OPEN');
     }
 
+    const caseSla = assessMonitoringCaseSla({ cases: allCases, policy, now });
+    if (caseSla.state === 'SUSPEND_REQUIRED') {
+      state = raise(state, 'SUSPEND_REQUIRED');
+      reasons.push('MONITORING_CASE_SLA_SUSPEND_REQUIRED');
+    } else if (caseSla.state === 'REVIEW_REQUIRED') {
+      state = raise(state, 'REVIEW_REQUIRED');
+      reasons.push('MONITORING_CASE_SLA_REVIEW_REQUIRED');
+    }
+
     const body = {
       schema: 'g-bank-continuous-customer-monitoring-assessment/v2',
       state,
       customer_id: customer.customer_id,
       customer_status: customer.status,
       customer_record_sha256: customer.record_sha256,
+      policy_sha256: policy.policy_sha256,
+      policy_epoch: policy.epoch,
       monitoring_proof_sha256: monitoringProof?.proof_sha256 || null,
       transaction_assessment_sha256: txHash,
+      case_sla_assessment_sha256: caseSla.assessment_sha256,
       open_case_ids: openCases.map(item => item.case_id).sort(),
       reasons: [...new Set(reasons)].sort(),
       assessed_at: new Date(now).toISOString(),
@@ -100,6 +119,11 @@ class ContinuousCustomerMonitoringService {
     if (!/^[0-9a-f]{64}$/.test(supplied)) throw new Error('continuous_monitoring_assessment_hash_invalid');
     const { assessment_sha256, ...body } = assessment;
     if (sha256(canonicalJson(body)) !== supplied) throw new Error('continuous_monitoring_assessment_hash_mismatch');
+
+    const policy = verifyMonitoringPolicy(this.monitoringPolicy, { now });
+    if (assessment.policy_sha256 !== policy.policy_sha256 || assessment.policy_epoch !== policy.epoch) {
+      throw new Error('continuous_monitoring_policy_changed_reassess_required');
+    }
 
     const customer = this.customers.get(assessment.customer_id);
     if (customer.record_sha256 !== assessment.customer_record_sha256) throw new Error('continuous_monitoring_customer_state_changed_reassess_required');
@@ -138,6 +162,8 @@ class ContinuousCustomerMonitoringService {
       schema: 'g-bank-continuous-monitoring-enforcement/v2',
       customer_id: customer.customer_id,
       assessment_sha256: assessment.assessment_sha256,
+      policy_sha256: policy.policy_sha256,
+      policy_epoch: policy.epoch,
       assessment_state: assessment.state,
       monitoring_case_id: caseRecord?.case_id || null,
       customer_suspension_performed: Boolean(suspension),
