@@ -2,18 +2,30 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { canonicalJson, sha256 } = require('../g-bank-sovereign-v2/canonical');
+const { canonicalJson } = require('../g-bank-sovereign-v2/canonical');
 const { publicKeyBinding } = require('../g-bank-sovereign-v2/external-signing');
 const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/promotion-certificate');
+const { normalizePromotionSignerAuthority } = require('../g-bank-sovereign-v2/promotion-signer-authority');
 const { createPromotionSigningRequest, verifyPromotionSigningRequest, verifyExternalPromotionSignatureEvidence } = require('../g-bank-sovereign-v2/promotion-signing');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T12:15:00.000Z');
 
-function fixture() {
+function makeSigner(signerId) {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const publicKeyPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
-  const keyBinding = publicKeyBinding(publicKeyPem);
+  return { signer_id: signerId, publicKey, privateKey, publicKeyPem, keyBinding: publicKeyBinding(publicKeyPem) };
+}
+
+function fixture() {
+  const primary = makeSigner('SIGNER:PROMOTION:A');
+  const secondary = makeSigner('SIGNER:PROMOTION:B');
+  const tertiary = makeSigner('SIGNER:PROMOTION:C');
+  const promotionSignerAuthority = normalizePromotionSignerAuthority({
+    authority_epoch: 1,
+    quorum: 2,
+    signers: [primary, secondary, tertiary].map(s => ({ signer_id: s.signer_id, status: 'ACTIVE', public_key_pem: s.publicKeyPem })),
+  });
   const evidence_bindings = {
     legal_authorization_evidence_sha256: H('1'), scheme_participation_evidence_sha256: H('2'), settlement_access_evidence_sha256: H('3'),
     production_identity_evidence_sha256: H('4'), transport_preflight_receipt_sha256: H('5'), prudential_audit_sha256: H('6'),
@@ -31,25 +43,33 @@ function fixture() {
   const certificate = createTechnicalPromotionCertificate({
     readiness, checkpoint: { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('d') },
     governance: { policy_sha256: H('1'), authority_set_sha256: H('2') }, evidence_bindings,
-    trusted_signing_key_binding_sha256: keyBinding, trusted_runtime_ha_observer_sha256: H('3'), ttl_seconds: 120, now: NOW,
+    trusted_signing_key_binding_sha256: primary.keyBinding,
+    trusted_runtime_ha_observer_sha256: H('3'),
+    promotion_signer_authority_root_sha256: promotionSignerAuthority.authority_root_sha256,
+    promotion_signer_authority_epoch: promotionSignerAuthority.authority_epoch,
+    promotion_signature_quorum: promotionSignerAuthority.quorum,
+    ttl_seconds: 120, now: NOW,
   });
   const request = createPromotionSigningRequest({ certificate, now: NOW + 1000 });
-  const signature = crypto.sign(null, Buffer.from(canonicalJson(request)), privateKey).toString('base64');
+  const signature = crypto.sign(null, Buffer.from(canonicalJson(request)), primary.privateKey).toString('base64');
   const evidence = {
     schema: 'g-bank-external-promotion-signature-evidence/v2', source: 'VERIFIED_EXTERNAL_SIGNER',
     signing_request_sha256: request.signing_request_sha256, certificate_sha256: certificate.certificate_sha256,
-    algorithm: 'ED25519', public_key_pem: publicKeyPem, key_binding_sha256: keyBinding,
+    algorithm: 'ED25519', public_key_pem: primary.publicKeyPem, key_binding_sha256: primary.keyBinding,
     signed_at: new Date(NOW + 2000).toISOString(), signer_receipt_sha256: H('4'), signature_base64: signature,
   };
-  return { publicKey, privateKey, publicKeyPem, keyBinding, readiness, certificate, request, evidence };
+  return { primary, secondary, tertiary, promotionSignerAuthority, readiness, certificate, request, evidence };
 }
 
 (() => {
   const f = fixture();
   assert.equal(verifyPromotionSigningRequest(f.request, f.certificate), f.request);
+  assert.equal(f.request.promotion_signer_authority_root_sha256, f.promotionSignerAuthority.authority_root_sha256);
+  assert.equal(f.request.promotion_signer_authority_epoch, 1);
+  assert.equal(f.request.promotion_signature_quorum, 2);
   const proof = verifyExternalPromotionSignatureEvidence({ request: f.request, certificate: f.certificate, evidence: f.evidence, now: NOW + 3000 });
   assert.equal(proof.certificate_sha256, f.certificate.certificate_sha256);
-  assert.equal(proof.key_binding_sha256, f.keyBinding);
+  assert.equal(proof.key_binding_sha256, f.primary.keyBinding);
   assert.equal(proof.grants_external_rights, false);
   assert.equal(proof.permits_value_movement_by_itself, false);
   assert.match(proof.proof_sha256, /^[0-9a-f]{64}$/);
@@ -57,13 +77,11 @@ function fixture() {
 
 (() => {
   const f = fixture();
-  const attacker = crypto.generateKeyPairSync('ed25519');
-  const attackerPem = attacker.publicKey.export({ type: 'spki', format: 'pem' }).toString();
-  const attackerBinding = publicKeyBinding(attackerPem);
+  const attacker = makeSigner('SIGNER:PROMOTION:ATTACKER');
   const attackerEvidence = {
     ...f.evidence,
-    public_key_pem: attackerPem,
-    key_binding_sha256: attackerBinding,
+    public_key_pem: attacker.publicKeyPem,
+    key_binding_sha256: attacker.keyBinding,
     signature_base64: crypto.sign(null, Buffer.from(canonicalJson(f.request)), attacker.privateKey).toString('base64'),
   };
   assert.throws(() => verifyExternalPromotionSignatureEvidence({ request: f.request, certificate: f.certificate, evidence: attackerEvidence, now: NOW + 3000 }), /promotion_signature_key_not_certificate_trusted/);
@@ -71,7 +89,7 @@ function fixture() {
 
 (() => {
   const f = fixture();
-  const tamperedRequest = { ...f.request, state_root_sha256: H('0') };
+  const tamperedRequest = { ...f.request, promotion_signature_quorum: 3 };
   assert.throws(() => verifyPromotionSigningRequest(tamperedRequest, f.certificate), /promotion_signing_request_hash_mismatch/);
   assert.throws(() => verifyExternalPromotionSignatureEvidence({ request: f.request, certificate: f.certificate, evidence: { ...f.evidence, signature_base64: Buffer.from('forged').toString('base64') }, now: NOW + 3000 }), /promotion_signature_invalid/);
 })();
@@ -81,4 +99,4 @@ function fixture() {
   assert.throws(() => verifyExternalPromotionSignatureEvidence({ request: f.request, certificate: f.certificate, evidence: f.evidence, now: NOW + 6 * 60 * 1000 }), /promotion_signature_stale_or_invalid_time|promotion_certificate_expired_or_invalid/);
 })();
 
-console.log('G-BANK sovereign v2 detached external promotion signing tests: PASS');
+console.log('G-BANK sovereign v2 detached external promotion signing quorum-bound tests: PASS');
