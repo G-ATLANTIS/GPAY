@@ -21,6 +21,7 @@ function createEndOfDayClose({
   resilienceAssessment,
   settlementReconciliation,
   inboundSettlementReconciliation,
+  monitoringFleetAudit,
   now = Date.now(),
 }) {
   const date = String(business_date || '');
@@ -36,8 +37,10 @@ function createEndOfDayClose({
   const resilience = verifyHashed('resilience', resilienceAssessment, 'assessment_sha256');
   const reconciliation = verifyHashed('settlement_reconciliation', settlementReconciliation, 'reconciliation_sha256');
   const inboundReconciliation = verifyHashed('inbound_settlement_reconciliation', inboundSettlementReconciliation, 'reconciliation_sha256');
+  const monitoring = verifyHashed('monitoring_fleet_audit', monitoringFleetAudit, 'audit_sha256');
   if (reconciliation.schema !== 'g-bank-settlement-reconciliation/v2') throw new Error('settlement_reconciliation_schema_invalid');
   if (inboundReconciliation.schema !== 'g-bank-inbound-settlement-reconciliation/v2') throw new Error('inbound_settlement_reconciliation_schema_invalid');
+  if (monitoring.schema !== 'g-bank-monitoring-fleet-audit/v2') throw new Error('monitoring_fleet_audit_schema_invalid');
   if (reconciliation.business_date !== date) throw new Error('settlement_reconciliation_business_date_mismatch');
   if (inboundReconciliation.business_date !== date) throw new Error('inbound_settlement_reconciliation_business_date_mismatch');
 
@@ -49,10 +52,15 @@ function createEndOfDayClose({
   if (resilience.state !== 'PASS') reasons.push('RESILIENCE_BLOCKED');
   if (reconciliation.state !== 'PASS') reasons.push('SETTLEMENT_RECONCILIATION_BLOCKED');
   if (inboundReconciliation.state !== 'PASS') reasons.push('INBOUND_SETTLEMENT_RECONCILIATION_BLOCKED');
+  if (monitoring.state !== 'PASS') reasons.push('CUSTOMER_MONITORING_BLOCKED');
 
   const checkpointTime = Date.parse(checkpoint.checkpointed_at);
   if (!Number.isFinite(checkpointTime)) reasons.push('CHECKPOINT_TIME_INVALID');
   else if (new Date(checkpointTime).toISOString().slice(0, 10) !== date) reasons.push('CHECKPOINT_BUSINESS_DATE_MISMATCH');
+
+  if (!/^[0-9a-f]{64}$/i.test(String(checkpoint.monitoring_policy_root_sha256 || ''))) {
+    reasons.push('MONITORING_POLICY_ROOT_MISSING');
+  }
 
   const body = {
     schema: 'g-bank-end-of-day-close/v2',
@@ -61,6 +69,9 @@ function createEndOfDayClose({
     reasons,
     state_root_sha256: checkpoint.state_root_sha256,
     inbound_state_sha256: checkpoint.inbound_state_sha256 || null,
+    monitoring_cases_sha256: checkpoint.monitoring_cases_sha256 || null,
+    evidence_revocations_sha256: checkpoint.evidence_revocations_sha256 || null,
+    monitoring_policy_root_sha256: checkpoint.monitoring_policy_root_sha256 || null,
     invariant_audit_sha256: invariant.audit_sha256,
     safeguarding_assessment_sha256: safeguarding.assessment_sha256,
     liquidity_assessment_sha256: liquidity.assessment_sha256,
@@ -70,6 +81,9 @@ function createEndOfDayClose({
     settlement_statement_sha256: reconciliation.statement_sha256,
     inbound_settlement_reconciliation_sha256: inboundReconciliation.reconciliation_sha256,
     inbound_settlement_statement_sha256: inboundReconciliation.statement_sha256,
+    monitoring_fleet_audit_sha256: monitoring.audit_sha256,
+    monitoring_policy_sha256: monitoring.policy_sha256,
+    monitoring_policy_epoch: monitoring.policy_epoch,
     closed_at: new Date(now).toISOString(),
   };
   return Object.freeze({ ...body, close_sha256: sha256(canonicalJson(body)) });
