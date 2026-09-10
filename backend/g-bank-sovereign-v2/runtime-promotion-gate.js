@@ -88,6 +88,7 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
       ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256,
       fence_valid_until: certificate.ha_fence_valid_until,
       operation_binding_sha256: operationBinding.operation_binding_sha256,
+      observer_public_key_binding_sha256: certificate.trusted_runtime_ha_observer_sha256,
     },
     now,
   });
@@ -109,6 +110,7 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
     state: 'PASS',
     readiness_snapshot_sha256: sha256(canonicalJson(readiness)),
     promotion_certificate_sha256: certificate.certificate_sha256,
+    trusted_runtime_ha_observer_sha256: certificate.trusted_runtime_ha_observer_sha256,
     settlement_operation_binding_sha256: operationBinding.operation_binding_sha256,
     settlement_message_sha256: operationBinding.message_sha256,
     settlement_instruction_sha256: operationBinding.instruction_sha256,
