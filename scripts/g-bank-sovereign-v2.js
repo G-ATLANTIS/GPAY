@@ -15,6 +15,7 @@ const { assessSovereignReadiness } = require('../backend/g-bank-sovereign-v2/rea
 const { createTechnicalPromotionCertificate } = require('../backend/g-bank-sovereign-v2/promotion-certificate');
 const { verifyRuntimePromotionGate } = require('../backend/g-bank-sovereign-v2/runtime-promotion-gate');
 const { HARuntimeChallengeStore } = require('../backend/g-bank-sovereign-v2/ha-runtime-challenge-store');
+const { settlementOperationBinding } = require('../backend/g-bank-sovereign-v2/settlement-operation-binding');
 
 function args(argv = process.argv.slice(2)) {
   const out = { _: [] };
@@ -110,6 +111,16 @@ function governanceSnapshot(riskPolicy, authoritySet) {
   });
 }
 
+function operationFromPrepared(prepared, idempotencyKey, promotionCertificateSha256) {
+  if (!prepared?.iso20022?.document_sha256 || !prepared?.instruction?.instruction_sha256) throw new Error('prepared_settlement_binding_required');
+  return settlementOperationBinding({
+    message_sha256: prepared.iso20022.document_sha256,
+    instruction_sha256: prepared.instruction.instruction_sha256,
+    idempotency_key: idempotencyKey,
+    promotion_certificate_sha256: promotionCertificateSha256,
+  });
+}
+
 function configureRuntimePromotionArtifacts(a, env = process.env) {
   if (!a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) {
     throw new Error('--readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
@@ -159,12 +170,23 @@ async function main() {
   }
 
   if (command === 'issue-ha-challenge') {
-    if (!a['challenge-store'] || !a.out) throw new Error('--challenge-store --out_required');
+    if (!a['challenge-store'] || !a.prepared || !a.promotion || !a['idempotency-key'] || !a.out) {
+      throw new Error('--challenge-store --prepared --promotion --idempotency-key --out_required');
+    }
+    const prepared = readJson(a.prepared);
+    const promotion = readJson(a.promotion);
+    const promotionSha256 = sha256Arg('promotion_certificate_sha256', promotion.certificate_sha256);
+    const operation = operationFromPrepared(prepared, a['idempotency-key'], promotionSha256);
     const store = new HARuntimeChallengeStore(a['challenge-store']);
-    const challenge = store.issue({ ttl_ms: a['ttl-ms'] === undefined ? 30000 : Number(a['ttl-ms']) });
+    const challenge = store.issue({ operation_binding_sha256: operation.operation_binding_sha256, ttl_ms: a['ttl-ms'] === undefined ? 30000 : Number(a['ttl-ms']) });
     const output = writePrivate(a.out, {
       schema: 'g-bank-ha-runtime-challenge/v2',
       nonce_sha256: challenge.nonce_sha256,
+      operation_binding_sha256: operation.operation_binding_sha256,
+      message_sha256: operation.message_sha256,
+      instruction_sha256: operation.instruction_sha256,
+      idempotency_key: operation.idempotency_key,
+      promotion_certificate_sha256: operation.promotion_certificate_sha256,
       issued_at: challenge.issued_at,
       expires_at: challenge.expires_at,
       issue_record_sha256: challenge.issue_record_sha256,
@@ -173,6 +195,7 @@ async function main() {
     });
     console.log(JSON.stringify({
       state: 'HA_RUNTIME_CHALLENGE_ISSUED', nonce_sha256: challenge.nonce_sha256,
+      operation_binding_sha256: operation.operation_binding_sha256,
       issue_record_sha256: challenge.issue_record_sha256, expires_at: challenge.expires_at,
       challenge_store: path.resolve(a['challenge-store']), output,
       grants_external_rights: false, permits_value_movement_by_itself: false,
@@ -266,14 +289,21 @@ async function main() {
       throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
     }
     configureRuntimePromotionArtifacts(a, process.env);
+    const prepared = readJson(a.prepared);
+    const expectedOperation = {
+      message_sha256: prepared?.iso20022?.document_sha256,
+      instruction_sha256: prepared?.instruction?.instruction_sha256,
+      idempotency_key: a['idempotency-key'],
+    };
     const { core } = coreFor(a, { live: true, governanceRequired: true });
-    const runtimeGate = verifyRuntimePromotionGate({ env: process.env, consumeChallenge: false });
+    const runtimeGate = verifyRuntimePromotionGate({ env: process.env, consumeChallenge: false, expectedOperation });
     const result = await core.execute({
-      prepared: readJson(a.prepared), schemeValidationEvidence: readJson(a.validation),
+      prepared, schemeValidationEvidence: readJson(a.validation),
       approvalToken: fs.readFileSync(path.resolve(a.approval), 'utf8').trim(), authoritySignatures: readJson(a.signatures), idempotencyKey: a['idempotency-key'],
     });
     console.log(JSON.stringify({
       ...result,
+      settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256,
       runtime_promotion_gate_sha256: runtimeGate.gate_sha256,
       ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
       ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
