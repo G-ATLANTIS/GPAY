@@ -42,6 +42,7 @@ jobs:
           node --check backend/g-bank-sovereign-v2/transaction-monitoring.js
           node --check backend/g-bank-sovereign-v2/transaction-activity-source.js
           node --check backend/g-bank-sovereign-v2/continuous-customer-monitoring.js
+          node --check backend/g-bank-sovereign-v2/monitoring-cycle.js
           node --check backend/g-bank-sovereign-v2/accounts.js
           node --check backend/g-bank-sovereign-v2/account-operation-lock.js
           node --check backend/g-bank-sovereign-v2/account-lifecycle.js
@@ -97,3 +98,4 @@ jobs:
           node backend/tests/g-bank-sovereign-v2-monitoring-source.test.js
           node backend/tests/g-bank-sovereign-v2-monitoring-fleet.test.js
           node backend/tests/g-bank-sovereign-v2-monitoring-policy-store.test.js
+          node backend/tests/g-bank-sovereign-v2-monitoring-cycle.test.js
