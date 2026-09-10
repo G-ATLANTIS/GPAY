@@ -1,5 +1,5 @@
 {
-  "version": "1.6.2",
+  "version": "1.7.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -14,6 +14,13 @@
     "payment_stage_rollback_denied": true,
     "local_state_atomic_replace_and_fsync": true,
     "local_crash_recovery_state_machine_only": true,
+    "payment_state_adapter_contract_implemented": true,
+    "postgres_payment_state_schema_implemented": true,
+    "postgres_unique_provider_payment_identity": true,
+    "postgres_versioned_compare_and_set_stage_transition": true,
+    "postgres_backend_missing_config_fails_closed": true,
+    "postgres_backend_missing_driver_fails_closed": true,
+    "no_silent_postgres_to_local_fallback": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -33,7 +40,8 @@
   },
   "verification": {
     "webhook_mount_and_lazy_client_ci": "passed",
-    "recovery_state_machine_ci": "pending"
+    "recovery_state_machine_ci": "passed",
+    "postgres_adapter_contract_ci": "pending"
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -46,7 +54,10 @@
   "not_yet_guaranteed": {
     "crash_safe_exactly_once_external_side_effects": true,
     "multi_process_distributed_locking": true,
-    "multi_host_transactional_state_store": true,
+    "postgres_driver_installed": true,
+    "postgres_production_database_provisioned": true,
+    "postgres_backend_activated": true,
+    "multi_host_transactional_state_store_verified_live": true,
     "production_deployment": true,
     "actual_live_transaction_evidence_captured": true,
     "receipt_signature": true,
