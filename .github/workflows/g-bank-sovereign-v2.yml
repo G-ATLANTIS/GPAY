@@ -1,0 +1,38 @@
+name: G-BANK sovereign v2 safety
+
+on:
+  push:
+    branches:
+      - feature/g-bank-sovereign-core-v2
+  pull_request:
+    paths:
+      - 'backend/g-bank-sovereign-v2/**'
+      - 'backend/tests/g-bank-sovereign-v2.test.js'
+      - '.github/workflows/g-bank-sovereign-v2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sovereign-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks
+        run: |
+          node --check backend/g-bank-sovereign-v2/ledger.js
+          node --check backend/g-bank-sovereign-v2/accounts.js
+          node --check backend/g-bank-sovereign-v2/compliance.js
+          node --check backend/g-bank-sovereign-v2/instruction.js
+          node --check backend/g-bank-sovereign-v2/iso20022.js
+          node --check backend/g-bank-sovereign-v2/scheme-validation.js
+          node --check backend/g-bank-sovereign-v2/approval.js
+          node --check backend/g-bank-sovereign-v2/execution-store.js
+          node --check backend/g-bank-sovereign-v2/direct-settlement.js
+          node --check backend/g-bank-sovereign-v2/sovereign-core.js
+      - name: No-network sovereign safety tests
+        run: node backend/tests/g-bank-sovereign-v2.test.js
