@@ -59,6 +59,9 @@ function assessSovereignReadiness({
   });
   const recoveryCheckpointRoot = normalizedHash(recoveryAudit?.checkpoint_state_root_sha256);
   const haCheckpointRoot = normalizedHash(haAudit?.checkpoint_state_root_sha256);
+  const haFenceValidUntil = Number.isFinite(Date.parse(haAudit?.fence_valid_until))
+    ? new Date(Date.parse(haAudit.fence_valid_until)).toISOString()
+    : null;
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -100,7 +103,7 @@ function assessSovereignReadiness({
     ha_checkpoint_root_present: sha256Present(haCheckpointRoot),
     ha_checkpoint_matches_recovery: sha256Present(haCheckpointRoot) && sha256Present(recoveryCheckpointRoot) && haCheckpointRoot === recoveryCheckpointRoot,
     ha_quorum_present: positiveInt(haAudit?.quorum) && Number(haAudit?.active_voter_count) >= Number(haAudit?.quorum),
-    ha_fence_current: Boolean(haAudit?.fence_valid_until) && Number.isFinite(Date.parse(haAudit.fence_valid_until)) && Date.parse(haAudit.fence_valid_until) > now,
+    ha_fence_current: Boolean(haFenceValidUntil) && Date.parse(haFenceValidUntil) > now,
     ha_no_external_rights: haAudit?.grants_external_rights === false,
     ha_no_value_movement: haAudit?.permits_value_movement_by_itself === false,
     ha_network_not_faked: haAudit?.distributed_network_verified === false,
@@ -148,6 +151,7 @@ function assessSovereignReadiness({
     evidence_bindings,
     recovery_checkpoint_state_root_sha256: recoveryCheckpointRoot,
     ha_checkpoint_state_root_sha256: haCheckpointRoot,
+    ha_fence_valid_until: haFenceValidUntil,
     transport_scheme: transportPreflight?.scheme || null,
     settlement_system: transportPreflight?.settlement_system || null,
     value_movement_permitted_by_readiness: direct_live_ready,
