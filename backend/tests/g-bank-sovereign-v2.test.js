@@ -16,7 +16,7 @@ const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/
 const { normalizePromotionSignerAuthority } = require('../g-bank-sovereign-v2/promotion-signer-authority');
 const { settlementOperationBinding } = require('../g-bank-sovereign-v2/settlement-operation-binding');
 const { createSyntheticRuntimeObserver, configureSyntheticHAState, issueSyntheticRuntimeHAWitness } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
-const { createSyntheticPromotionSigner, configureSyntheticPromotionSignature } = require('./g-bank-sovereign-v2-promotion-signing-fixture');
+const { createSyntheticPromotionSigner, configureSyntheticPromotionSignature, configureSyntheticPromotionQuorum } = require('./g-bank-sovereign-v2-promotion-signing-fixture');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T06:30:00.000Z');
@@ -54,7 +54,8 @@ function instruction(id = 'PAY0000000000001') {
   };
 }
 
-function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, runtimeObserver, promotionSigner, promotionSignerAuthority) {
+function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, runtimeObserver, promotionSigners, promotionSignerAuthority) {
+  const promotionSigner = promotionSigners[0];
   const fenceValidUntil = new Date(NOW + 240000).toISOString();
   const haState = configureSyntheticHAState({ env: e, state_root_sha256: H('6'), cluster_authority_root_sha256: H('8'), voter_journal_root_sha256: H('7'), fence_valid_until: fenceValidUntil, now: NOW });
   const evidenceBindings = {
@@ -95,7 +96,11 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, ru
   e.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = promotionPath;
   e.G_BANK_PROMOTION_CERTIFICATE_SHA256 = certificate.certificate_sha256;
   const promotionSignature = configureSyntheticPromotionSignature({ root, env: e, certificate, promotionSigner, now: NOW });
-  return { readiness, certificate, haState, runtimeObserver, promotionSigner, promotionSignerAuthority, promotionSignature };
+  const promotionQuorum = configureSyntheticPromotionQuorum({
+    root, env: e, certificate, authority: promotionSignerAuthority, promotionSigners,
+    request: promotionSignature.request, now: NOW,
+  });
+  return { readiness, certificate, haState, runtimeObserver, promotionSigner, promotionSigners, promotionSignerAuthority, promotionSignature, promotionQuorum };
 }
 
 function setup(transport, { promotion = true } = {}) {
@@ -123,13 +128,14 @@ function setup(transport, { promotion = true } = {}) {
   const promotionSigner = createSyntheticPromotionSigner('SIGNER:PROMOTION:A');
   const promotionSignerB = createSyntheticPromotionSigner('SIGNER:PROMOTION:B');
   const promotionSignerC = createSyntheticPromotionSigner('SIGNER:PROMOTION:C');
+  const promotionSigners = [promotionSigner, promotionSignerB, promotionSignerC];
   const promotionSignerAuthority = normalizePromotionSignerAuthority({
     authority_epoch: 1,
     quorum: 2,
-    signers: [promotionSigner, promotionSignerB, promotionSignerC].map(s => ({ signer_id: s.signer_id, status: 'ACTIVE', public_key_pem: s.public_key_pem })),
+    signers: promotionSigners.map(s => ({ signer_id: s.signer_id, status: 'ACTIVE', public_key_pem: s.public_key_pem })),
   });
-  const runtimePromotion = promotion ? configureRuntimePromotion(root, e, core.riskPolicy.policy_sha256, core.authoritySet.authority_set_sha256, runtimeObserver, promotionSigner, promotionSignerAuthority) : null;
-  return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimeObserver, promotionSigner, promotionSignerAuthority, runtimePromotion };
+  const runtimePromotion = promotion ? configureRuntimePromotion(root, e, core.riskPolicy.policy_sha256, core.authoritySet.authority_set_sha256, runtimeObserver, promotionSigners, promotionSignerAuthority) : null;
+  return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimeObserver, promotionSigner, promotionSigners, promotionSignerAuthority, runtimePromotion };
 }
 
 function bindRuntimeWitness(s, prepared, idempotencyKey) {
@@ -187,6 +193,7 @@ function authoritySignatures(s, prepared, validation, key) {
   assert.equal(s.runtimePromotion.certificate.trusted_signing_key_binding_sha256, s.promotionSigner.key_binding_sha256);
   assert.equal(s.runtimePromotion.certificate.promotion_signer_authority_root_sha256, s.promotionSignerAuthority.authority_root_sha256);
   assert.equal(s.runtimePromotion.certificate.promotion_signature_quorum, 2);
+  assert.equal(s.runtimePromotion.promotionQuorum.bundle.signatures.length, 2);
   assert.equal(s.ledger.balance('G:CUSTOMER:001', 'EUR'), 9000);
   assert.equal(s.ledger.balance('G:SUSPENSE:OUTBOUND', 'EUR'), 0);
   assert.equal(s.ledger.balance('G:SETTLEMENT:OUTBOUND', 'EUR'), 1000);
@@ -232,5 +239,5 @@ function authoritySignatures(s, prepared, validation, key) {
   await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: v2, approvalToken: ap2, authoritySignatures: sig2, idempotencyKey: k2, now: NOW }), /execution_exists_unknown_use_reconcile/);
   assert.equal(ambiguousSubmits, 1);
 
-  console.log('G-BANK sovereign v2 quorum-bound externally-signed promotion no-network safety tests: PASS');
+  console.log('G-BANK sovereign v2 runtime promotion quorum no-network safety tests: PASS');
 })().catch(err => { console.error(err); process.exit(1); });
