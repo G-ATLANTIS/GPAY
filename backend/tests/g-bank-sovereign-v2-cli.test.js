@@ -19,6 +19,7 @@ const challengeStore = path.join(root, 'runtime-ha-challenges.jsonl');
 const challengeOut = path.join(root, 'runtime-ha-challenge.json');
 const preparedPath = path.join(root, 'prepared.json');
 const promotionPath = path.join(root, 'promotion.json');
+const promotionSigningRequestPath = path.join(root, 'promotion-signing-request.json');
 const idempotencyKey = '00000000-0000-4000-8000-000000000001';
 const prepared = { iso20022: { document_sha256: H('1') }, instruction: { instruction_sha256: H('2') } };
 const promotion = { certificate_sha256: H('3') };
@@ -39,10 +40,7 @@ const baseArgs = [
   '--promotion', dummy,
   '--promotion-sha256', 'a'.repeat(64),
 ];
-const baseEnv = {
-  ...process.env,
-  G_BANK_SETTLEMENT_TRANSPORT_MODULE: transport,
-};
+const baseEnv = { ...process.env, G_BANK_SETTLEMENT_TRANSPORT_MODULE: transport };
 
 (() => {
   const result = spawnSync(process.execPath, [
@@ -78,15 +76,35 @@ const baseEnv = {
 (() => {
   const result = spawnSync(process.execPath, baseArgs, { env: baseEnv, encoding: 'utf8' });
   assert.equal(result.status, 2);
+  assert.match(result.stderr, /--promotion-signing-request --promotion-signature-evidence --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required/);
+  assert.equal(fs.existsSync(marker), false, 'transport module must not load when detached promotion-signature inputs are absent');
+})();
+
+(() => {
+  const argsWithPromotionEvidence = [
+    ...baseArgs,
+    '--promotion-signing-request', dummy,
+    '--promotion-signature-evidence', dummy,
+  ];
+  const result = spawnSync(process.execPath, argsWithPromotionEvidence, { env: baseEnv, encoding: 'utf8' });
+  assert.equal(result.status, 2);
   assert.match(result.stderr, /--runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required/);
   assert.equal(fs.existsSync(marker), false, 'transport module must not load when runtime HA arguments are absent');
 })();
 
 (() => {
-  const result = spawnSync(process.execPath, [...baseArgs, '--runtime-ha-attestation', dummy, '--runtime-ha-observer', dummy], { env: baseEnv, encoding: 'utf8' });
+  const argsAlmostComplete = [
+    ...baseArgs,
+    '--promotion-signing-request', dummy,
+    '--promotion-signature-evidence', dummy,
+    '--runtime-ha-attestation', dummy,
+    '--runtime-ha-observer', dummy,
+  ];
+  const result = spawnSync(process.execPath, argsAlmostComplete, { env: baseEnv, encoding: 'utf8' });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /--runtime-ha-challenge-store_required/);
   assert.equal(fs.existsSync(marker), false, 'transport module must not load when runtime HA challenge store is absent');
 })();
 
-console.log('G-BANK sovereign v2 transaction-bound CLI runtime-HA contract tests: PASS');
+assert.equal(fs.existsSync(promotionSigningRequestPath), false);
+console.log('G-BANK sovereign v2 detached-promotion-signature CLI contract tests: PASS');
