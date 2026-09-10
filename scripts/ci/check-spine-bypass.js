@@ -38,6 +38,9 @@ const ALLOWLIST = new Set(
     'backend/g-bank-live-v1/providers/truelayer-live.js',
     // sanctioned operator CLI (imports adapter only to hand it to the spine)
     'scripts/g-bank-live-v1.js',
+    // sanctioned sandbox E2E verifier: creates payments ONLY via executeVerified();
+    // uses the adapter/connector for read-only discover()/getPayment() readback.
+    'scripts/verify-truelayer-sandbox-e2e.js',
     // sanctioned HTTP routes (route through executeVerified). openbanking.js is
     // intentionally NOT allowlisted — its legit OAuth / test-signature /
     // GET-status calls do not trip the precise rules below, so a future direct

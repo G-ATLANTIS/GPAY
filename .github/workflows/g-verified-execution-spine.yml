@@ -12,12 +12,14 @@ on:
       - 'backend/tests/g-verified-execution-spine.test.js'
       - 'backend/tests/g-bank-canonical-live-routing.test.js'
       - 'backend/tests/g-truelayer-canonical-spine-routing.test.js'
+      - 'backend/tests/g-truelayer-sandbox-e2e.test.js'
       - 'backend/tests/g-bank-live-v1.test.js'
       - 'backend/tests/openbanking-policy.test.js'
       - 'backend/tests/banking-g-finance.test.js'
       - 'backend/tests/helpers/**'
       - 'scripts/g-verified-execution-spine.js'
       - 'scripts/g-bank-live-v1.js'
+      - 'scripts/verify-truelayer-sandbox-e2e.js'
       - 'scripts/ci/check-spine-bypass.js'
       - '.github/workflows/g-verified-execution-spine.yml'
   push:
@@ -50,6 +52,8 @@ jobs:
         run: npm run test:spine
       - name: Canonical live-routing test suites (Mollie + TrueLayer)
         run: npm run test:routing
+      - name: TrueLayer sandbox E2E harness guards (opt-in test stays skipped)
+        run: npm run test:truelayer-e2e:preflight
       - name: Regression - openbanking policy suite
         run: npm run test:banking
       - name: Regression - g-finance status contract (hermetic)

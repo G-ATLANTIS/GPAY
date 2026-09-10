@@ -394,3 +394,47 @@ diagnostic evidence producer that does not determine execution truth.
 Physically folding each `g-payment-*` script into the connector remains a
 follow-up cleanup; their load-bearing semantics are already enforced by the
 spine.
+
+---
+
+## TrueLayer sandbox execution lane + E2E verification (TRUELAYER-SANDBOX-E2E-VERIFICATION-P0)
+
+### Sandbox execution lane
+
+`TrueLayerSpineConnector._assertExecutable()`:
+
+* `TRUELAYER_ENV=live` → unchanged strict `requireLiveExecution()` gate.
+* `TRUELAYER_ENV=sandbox` (hits `*.truelayer-sandbox.com`, no real money) → a
+  **separate, off-by-default** permission: `G_BANK_ENABLE_SANDBOX_EXTERNAL=true`
+  (the legacy `G_BANK_ENABLE_LIVE=true` + `G_BANK_EXTERNAL_ACTIONS_ENABLED=true`
+  combo is still accepted for back-compat). This lets a sandbox proof run with
+  `G_BANK_ENABLE_LIVE=false`. The sandbox flag never enables production —
+  `TRUELAYER_ENV=live` still requires the full live gate.
+
+### E2E harness
+
+`scripts/verify-truelayer-sandbox-e2e.js` (`npm run verify:truelayer-sandbox-e2e`)
+and `backend/tests/g-truelayer-sandbox-e2e.test.js`:
+
+* **Phase 0 hard boundary** — aborts with **no provider call** unless
+  `TRUELAYER_ENV=sandbox`, resolved hosts are `*.truelayer-sandbox.com`, and
+  `G_BANK_ENABLE_LIVE!=true`. No silent correction / fallback.
+* **Phase 1** — redacted config preflight (presence booleans + sha256 of
+  kid/client_id, P-521 key parse check, return-URI shape). No secret values.
+* **Phase 2** — real `connector.discover()` (OAuth `client_credentials` scope
+  `payments` + signed `POST /test-signature`).
+* **Phase 4** — exactly one sandbox payment via `executeVerified()` (never the
+  adapter directly).
+* **Phase 3/5/8** — independent `GET /v3/payments/:id` readback + a schema
+  probe of the actual response key paths; binding classified STRONG / WEAK /
+  MISMATCH; the previously-unverified assumptions (A–E) resolved to
+  VERIFIED / NOT_EXPOSED / UNVERIFIED from the real response.
+* **Phase 6** — replay the same request → asserts no second provider effect.
+* **Phase 7** — `reconcile()` → EFFECT_CONFIRMED; a nonexistent-id reconcile
+  records the classification TrueLayer actually permits.
+* **Phase 11** — one `g-truelayer-sandbox-e2e-evidence-v1` receipt under
+  `.secrets/evidence/` (git-ignored, 0600, no secrets/PII).
+
+The opt-in integration test is **skipped** unless
+`G_TRUELAYER_RUN_SANDBOX_E2E=true`; normal CI runs only the always-on guard unit
+tests and never needs provider credentials.

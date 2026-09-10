@@ -515,3 +515,48 @@ test('webhook receipt cannot forge canonical success: execution truth ignores we
   assert.equal(truth.provider_accepted, false);
   assert.equal(truth.externally_verified, false);
 });
+
+// -------------------------------------------------------------------------
+// Sandbox execution lane (G_BANK_ENABLE_SANDBOX_EXTERNAL) — added for
+// TRUELAYER-SANDBOX-E2E-VERIFICATION-P0. Lets a sandbox proof run with
+// G_BANK_ENABLE_LIVE=false; production stays strictly gated.
+// -------------------------------------------------------------------------
+test('sandbox lane: G_BANK_ENABLE_LIVE=false + G_BANK_ENABLE_SANDBOX_EXTERNAL=true executes', async () => {
+  const dir = tmpDir();
+  const env = {
+    G_SPINE_AUTHORIZATION_SECRET: SECRET,
+    TRUELAYER_ENV: 'sandbox',
+    G_BANK_ENABLE_LIVE: 'false',
+    G_BANK_ENABLE_SANDBOX_EXTERNAL: 'true',
+  };
+  const adapter = new FakeTrueLayerAdapter({ env });
+  const { request } = buildAuthorized({ env });
+  const r = await executeVerified(request, ctxFor(dir, adapter, env));
+  assert.equal(r.state, RESULT_STATE.VERIFIED_SUCCESS);
+  assert.equal(adapter.createCount, 1);
+});
+
+test('sandbox lane does NOT enable production: TRUELAYER_ENV=live + only sandbox flag => NO_VERIFIED_PATH', async () => {
+  const dir = tmpDir();
+  const env = {
+    G_SPINE_AUTHORIZATION_SECRET: SECRET,
+    TRUELAYER_ENV: 'live',
+    G_BANK_ENABLE_LIVE: 'false',
+    G_BANK_ENABLE_SANDBOX_EXTERNAL: 'true',
+  };
+  const adapter = new FakeTrueLayerAdapter({ env });
+  const { request } = buildAuthorized({ env, environment: 'live' });
+  const r = await executeVerified(request, ctxFor(dir, adapter, env));
+  assert.equal(r.state, RESULT_STATE.NO_VERIFIED_PATH);
+  assert.equal(adapter.createCount, 0);
+});
+
+test('sandbox lane refuses when neither the dedicated flag nor the legacy combo is set', async () => {
+  const dir = tmpDir();
+  const env = { G_SPINE_AUTHORIZATION_SECRET: SECRET, TRUELAYER_ENV: 'sandbox', G_BANK_ENABLE_LIVE: 'false' };
+  const adapter = new FakeTrueLayerAdapter({ env });
+  const { request } = buildAuthorized({ env });
+  const r = await executeVerified(request, ctxFor(dir, adapter, env));
+  assert.equal(r.state, RESULT_STATE.NO_VERIFIED_PATH);
+  assert.equal(adapter.createCount, 0);
+});

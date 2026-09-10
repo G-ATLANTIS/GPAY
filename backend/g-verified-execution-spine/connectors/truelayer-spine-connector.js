@@ -81,9 +81,30 @@ class TrueLayerSpineConnector {
     this.adapter = adapter || new TrueLayerLiveAdapter({ env });
   }
 
-  _assertLive(allowExternalEffects) {
+  // Fail-closed execution gate. Production (`TRUELAYER_ENV=live`) keeps the
+  // strict requireLiveExecution() gate unchanged. Sandbox
+  // (`TRUELAYER_ENV=sandbox`, hits *.truelayer-sandbox.com, no real money) has
+  // its own OFF-BY-DEFAULT permission so a sandbox proof can run with
+  // G_BANK_ENABLE_LIVE=false: set G_BANK_ENABLE_SANDBOX_EXTERNAL=true. The
+  // legacy live-flags combo is still accepted for back-compat.
+  _assertExecutable(allowExternalEffects) {
     if (allowExternalEffects !== true) throw new Error('external_effects_not_enabled_for_process');
-    requireLiveExecution(this.env);
+    const env = this.env;
+    if (env.G_BANK_SIMULATED_LIVE_SUCCESS === 'true') throw new Error('simulated_live_success_forbidden');
+    if (this._expectedEnvironment() === 'LIVE') {
+      requireLiveExecution(env);
+      return 'LIVE';
+    }
+    const sandboxOk =
+      env.G_BANK_ENABLE_SANDBOX_EXTERNAL === 'true' ||
+      (env.G_BANK_ENABLE_LIVE === 'true' && env.G_BANK_EXTERNAL_ACTIONS_ENABLED === 'true');
+    if (!sandboxOk) throw new Error('sandbox_external_effects_not_enabled');
+    return 'SANDBOX';
+  }
+
+  // Back-compat alias.
+  _assertLive(allowExternalEffects) {
+    return this._assertExecutable(allowExternalEffects);
   }
 
   _expectedEnvironment() {
@@ -92,7 +113,7 @@ class TrueLayerSpineConnector {
 
   async discover({ allowExternalEffects } = {}) {
     try {
-      this._assertLive(allowExternalEffects);
+      this._assertExecutable(allowExternalEffects);
     } catch (err) {
       return { ok: false, observed_assurance: 'L0', detail: err.message };
     }
@@ -113,7 +134,7 @@ class TrueLayerSpineConnector {
   }
 
   async execute({ params, idempotency_key, binding_sha256, allowExternalEffects }) {
-    this._assertLive(allowExternalEffects);
+    this._assertExecutable(allowExternalEffects);
     const iban = String((params && params.beneficiary && params.beneficiary.iban) || '').replace(/\s+/g, '').toUpperCase();
     const allow = allowedBeneficiaryIbans(this.env);
     if (this._expectedEnvironment() === 'LIVE' && allow.length > 0 && !allow.includes(iban)) {
