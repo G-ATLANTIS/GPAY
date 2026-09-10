@@ -41,6 +41,7 @@ function fixture() {
       customer_monitoring_pass: true,
     },
     evidence_bindings,
+    recovery_checkpoint_state_root_sha256: H('b'),
     transport_scheme: 'SCT_INST',
     settlement_system: 'TEST-DIRECT',
     value_movement_permitted_by_readiness: true,
