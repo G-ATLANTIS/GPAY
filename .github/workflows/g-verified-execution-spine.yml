@@ -1,0 +1,38 @@
+name: G_VERIFIED_EXECUTION_SPINE safety
+
+on:
+  pull_request:
+    paths:
+      - 'backend/g-verified-execution-spine/**'
+      - 'backend/tests/g-verified-execution-spine.test.js'
+      - 'scripts/g-verified-execution-spine.js'
+      - '.github/workflows/g-verified-execution-spine.yml'
+  push:
+    branches:
+      - 'feature/g-verified-execution-spine-p0'
+    paths:
+      - 'backend/g-verified-execution-spine/**'
+      - 'backend/tests/g-verified-execution-spine.test.js'
+      - 'scripts/g-verified-execution-spine.js'
+      - '.github/workflows/g-verified-execution-spine.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  spine-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks
+        run: npm run check:spine
+      - name: Runtime invariant self-check
+        run: npm run selfcheck:spine
+      - name: Fail-closed adversarial test suite (no network, no value movement)
+        run: npm run test:spine
+      - name: Regression - existing g-bank-live-v1 core
+        run: node backend/tests/g-bank-live-v1.test.js
