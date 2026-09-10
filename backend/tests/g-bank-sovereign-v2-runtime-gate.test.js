@@ -9,6 +9,7 @@ const { canonicalJson, sha256 } = require('../g-bank-sovereign-v2/canonical');
 const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/promotion-certificate');
 const { verifyRuntimePromotionGate } = require('../g-bank-sovereign-v2/runtime-promotion-gate');
 const { runtimeHAObservationPayload, signHARuntimeObservation } = require('../g-bank-sovereign-v2/ha-runtime-attestation');
+const { HARuntimeChallengeStore } = require('../g-bank-sovereign-v2/ha-runtime-challenge-store');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T09:30:00.000Z');
@@ -65,10 +66,14 @@ function fixture() {
     trusted_signing_key_binding_sha256: H('e'), ttl_seconds: 300, now: NOW,
   });
 
+  const challengePath = path.join(root, 'runtime-ha-challenges.jsonl');
+  const challengeStore = new HARuntimeChallengeStore(challengePath);
+  const challenge = challengeStore.issue({ ttl_ms: 30000, now: NOW });
+
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const runtimeObserver = { observer_id: 'OBSERVER:RUNTIME:PRIMARY', public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }).toString() };
   const runtimePayload = runtimeHAObservationPayload({
-    haAudit, haDeploymentAudit, observer: runtimeObserver, observed_at: new Date(NOW).toISOString(), nonce_sha256: H('f'),
+    haAudit, haDeploymentAudit, observer: runtimeObserver, observed_at: new Date(NOW).toISOString(), nonce_sha256: challenge.nonce_sha256,
   });
   const runtimeObservation = signHARuntimeObservation({ payload: runtimePayload, private_key: privateKey });
 
@@ -85,6 +90,7 @@ function fixture() {
     G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE: promotionFile,
     G_BANK_RUNTIME_HA_ATTESTATION_FILE: runtimeHAFile,
     G_BANK_RUNTIME_HA_OBSERVER_FILE: runtimeHAObserverFile,
+    G_BANK_RUNTIME_HA_CHALLENGE_STORE: challengePath,
     G_BANK_PROMOTION_CERTIFICATE_SHA256: certificate.certificate_sha256,
     G_BANK_ACTIVE_POLICY_SHA256: H('c'), G_BANK_ACTIVE_AUTHORITY_SET_SHA256: H('d'),
     G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256: evidence_bindings.legal_authorization_evidence_sha256,
@@ -99,7 +105,7 @@ function fixture() {
     G_BANK_HA_AUDIT_SHA256: evidence_bindings.ha_audit_sha256,
     G_BANK_HA_DEPLOYMENT_AUDIT_SHA256: evidence_bindings.ha_deployment_audit_sha256,
   };
-  return { root, readiness, certificate, runtimeObservation, readinessFile, promotionFile, runtimeHAFile, runtimeHAObserverFile, env };
+  return { root, readiness, certificate, runtimeObservation, challengeStore, challenge, readinessFile, promotionFile, runtimeHAFile, runtimeHAObserverFile, env };
 }
 
 (() => {
@@ -107,6 +113,10 @@ function fixture() {
   const gate = verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000 });
   assert.equal(gate.state, 'PASS');
   assert.equal(gate.runtime_submit_gate_satisfied, true);
+  assert.equal(gate.ha_runtime_challenge_consumed, false);
+  assert.equal(f.challengeStore.verify().consumed_count, 0, 'precheck must never consume the challenge');
+  assert.equal(gate.ha_runtime_challenge_nonce_sha256, f.challenge.nonce_sha256);
+  assert.equal(gate.ha_runtime_challenge_issue_record_sha256, f.challenge.issue_record_sha256);
   assert.equal(gate.grants_external_rights, false);
   assert.equal(gate.permits_value_movement_by_itself, false);
   assert.equal(gate.recovery_audit_sha256, H('a'));
@@ -119,6 +129,12 @@ function fixture() {
   assert.equal(gate.authority_set_sha256, H('d'));
   assert.equal(f.certificate.expires_at, FENCE, 'certificate lifetime must be capped to leader fence');
   assert.match(gate.gate_sha256, /^[0-9a-f]{64}$/);
+
+  const submitGate = verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, consumeChallenge: true });
+  assert.equal(submitGate.ha_runtime_challenge_consumed, true);
+  assert.match(submitGate.ha_runtime_challenge_consume_record_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(f.challengeStore.verify().consumed_count, 1);
+  assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000, consumeChallenge: true }), /ha_runtime_challenge_replay/);
 })();
 
 for (const [field, value, pattern] of [
@@ -154,6 +170,11 @@ for (const [field, value, pattern] of [
 (() => {
   const f = fixture();
   assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 16000 }), /ha_runtime_observation_stale_or_future/);
+})();
+
+(() => {
+  const f = fixture();
+  assert.throws(() => verifyRuntimePromotionGate({ env: { ...f.env, G_BANK_RUNTIME_HA_CHALLENGE_STORE: '' }, now: NOW + 1000 }), /runtime_ha_challenge_store_required/);
 })();
 
 (() => {
