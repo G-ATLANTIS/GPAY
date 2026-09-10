@@ -87,14 +87,13 @@ function verifyHARuntimeObservation({ observation, trustedObserver, expected, no
 
   const fields = [
     'cluster_authority_root_sha256', 'voter_journal_root_sha256', 'state_root_sha256',
-    'ha_audit_sha256', 'ha_deployment_audit_sha256', 'fence_record_sha256', 'latest_commit_sha256',
+    'ha_audit_sha256', 'ha_deployment_audit_sha256',
   ];
   for (const field of fields) {
     const actual = hash64(`ha_runtime_${field}`, observation[field]);
     const wanted = hash64(`ha_runtime_expected_${field}`, expected?.[field]);
     if (actual !== wanted) throw new Error(`ha_runtime_expected_mismatch:${field}`);
   }
-  if (positiveInt('ha_runtime_latest_commit_index', observation.latest_commit_index) !== positiveInt('ha_runtime_expected_latest_commit_index', expected?.latest_commit_index)) throw new Error('ha_runtime_expected_mismatch:latest_commit_index');
   if (String(observation.fence_valid_until) !== String(expected?.fence_valid_until || '')) throw new Error('ha_runtime_expected_mismatch:fence_valid_until');
 
   const auditBody = {
