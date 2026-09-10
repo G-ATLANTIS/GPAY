@@ -61,8 +61,6 @@ class DirectSettlementAdapter {
     if (!instruction?.instruction_sha256) throw new Error('settlement_instruction_required');
     if (!idempotencyKey) throw new Error('settlement_idempotency_key_required');
 
-    // Final local gate before the external transport call. It recomputes the exact
-    // payment-operation binding and atomically consumes the matching one-time HA challenge.
     const runtimeGate = verifyRuntimePromotionGate({
       env: this.env,
       now,
@@ -81,6 +79,7 @@ class DirectSettlementAdapter {
       settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256,
       runtime_promotion_gate_sha256: runtimeGate.gate_sha256,
       promotion_certificate_sha256: runtimeGate.promotion_certificate_sha256,
+      trusted_runtime_ha_observer_sha256: runtimeGate.trusted_runtime_ha_observer_sha256,
       recovery_audit_sha256: runtimeGate.recovery_audit_sha256,
       customer_monitoring_audit_sha256: runtimeGate.customer_monitoring_audit_sha256,
       ha_audit_sha256: runtimeGate.ha_audit_sha256,
@@ -106,6 +105,7 @@ class DirectSettlementAdapter {
       message_type: message.message_type, message_sha256: message.document_sha256, instruction_sha256: instruction.instruction_sha256,
       settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256,
       runtime_promotion_gate_sha256: runtimeGate.gate_sha256, promotion_certificate_sha256: runtimeGate.promotion_certificate_sha256,
+      trusted_runtime_ha_observer_sha256: runtimeGate.trusted_runtime_ha_observer_sha256,
       recovery_audit_sha256: runtimeGate.recovery_audit_sha256, customer_monitoring_audit_sha256: runtimeGate.customer_monitoring_audit_sha256,
       ha_audit_sha256: runtimeGate.ha_audit_sha256, ha_deployment_audit_sha256: runtimeGate.ha_deployment_audit_sha256,
       ha_voter_journal_root_sha256: runtimeGate.ha_voter_journal_root_sha256,
