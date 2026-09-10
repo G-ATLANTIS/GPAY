@@ -1,5 +1,5 @@
 {
-  "version": "1.11.0",
+  "version": "1.12.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -37,6 +37,12 @@
     "gpay_payment_intent_email_stored_as_hash": true,
     "webhook_requires_valid_gpay_origin_intent": true,
     "webhook_verifies_provider_amount_against_metadata_and_intent": true,
+    "payment_intent_runtime_uses_same_backend_selector_as_payment_state": true,
+    "postgres_payment_intent_schema_implemented": true,
+    "postgres_payment_intent_provider_payment_unique": true,
+    "postgres_payment_intent_immutable_binding_verified_in_ci": true,
+    "postgres_payment_intent_origin_verification_verified_in_ci": true,
+    "mollie_create_and_webhook_use_shared_intent_runtime": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -63,9 +69,11 @@
     "payment_intent_binding_ci": "passed",
     "payment_intent_binding_run_id": 34522444143,
     "locked_postgres_and_preflight_ci": "passed",
-    "locked_postgres_and_preflight_commit": "e3a974f56b1d111c555d4d7a6105891c63324c23",
     "locked_postgres_and_preflight_run_id": 34523056665,
-    "locked_postgres_and_preflight_run_number": 126
+    "shared_postgres_payment_intent_ci": "passed",
+    "shared_postgres_payment_intent_commit": "2abef27012b9fd1fc5a19f599f9cd941acc7406d",
+    "shared_postgres_payment_intent_run_id": 34523393901,
+    "shared_postgres_payment_intent_run_number": 140
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -78,7 +86,8 @@
   "not_yet_guaranteed": {
     "crash_safe_exactly_once_external_side_effects": true,
     "multi_process_distributed_locking": true,
-    "payment_intent_store_shared_across_hosts": true,
+    "atomic_cross_table_intent_and_payment_state_transaction": true,
+    "per_effect_idempotency_records": true,
     "postgres_production_database_provisioned": true,
     "postgres_backend_activated_in_production": true,
     "multi_host_transactional_state_store_verified_live": true,
