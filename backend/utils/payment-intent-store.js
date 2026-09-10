@@ -40,6 +40,10 @@ function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
+function normalizeEmailHash(email) {
+  return sha256(String(email).trim().toLowerCase());
+}
+
 function normalizeAmount(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -65,7 +69,7 @@ function createPaymentIntent({ orderId, amount, currency = 'EUR', email }) {
     orderId: String(orderId),
     amount: normalizeAmount(amount),
     currency: String(currency).toUpperCase(),
-    emailHash: sha256(String(email).trim().toLowerCase()),
+    emailHash: normalizeEmailHash(email),
     status: 'CREATED',
     createdAt: now,
     updatedAt: now,
@@ -118,11 +122,14 @@ function verifyPaymentIntent({ intentId, providerPaymentId, orderId, amount, cur
   if (intent.orderId !== String(orderId)) return { ok: false, reason: 'order_mismatch' };
   if (intent.amount !== normalizeAmount(amount)) return { ok: false, reason: 'amount_mismatch' };
   if (intent.currency !== String(currency).toUpperCase()) return { ok: false, reason: 'currency_mismatch' };
-  if (intent.emailHash !== sha256(String(email).trim().toLowerCase())) return { ok: false, reason: 'email_mismatch' };
+  if (intent.emailHash !== normalizeEmailHash(email)) return { ok: false, reason: 'email_mismatch' };
   return { ok: true, intent };
 }
 
 module.exports = {
+  sha256,
+  normalizeEmailHash,
+  normalizeAmount,
   createPaymentIntent,
   bindProviderPayment,
   getPaymentIntent,
