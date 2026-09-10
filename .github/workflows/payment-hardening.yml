@@ -25,3 +25,36 @@ jobs:
         run: npm ci
       - name: Run payment hardening tests
         run: npm test
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gpay
+          POSTGRES_PASSWORD: gpay
+          POSTGRES_DB: gpay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gpay -d gpay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install PostgreSQL driver for integration proof only
+        run: npm install --no-save --package-lock=false pg@8.23.0
+      - name: Run real PostgreSQL CAS integration test
+        env:
+          GPAY_POSTGRES_URL: postgresql://gpay:gpay@127.0.0.1:5432/gpay
+        run: node --test tests/payment-state-postgres-integration.test.js
