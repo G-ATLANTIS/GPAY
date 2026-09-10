@@ -29,6 +29,7 @@ function assessSovereignReadiness({
   prudential = null,
   monitoringAudit = null,
   recoveryAudit = null,
+  haAudit = null,
 } = {}) {
   const safeguarding = prudential?.safeguarding || null;
   const liquidity = prudential?.liquidity || null;
@@ -40,6 +41,7 @@ function assessSovereignReadiness({
   const configuredTreasuryHash = normalizedHash(env.G_BANK_TREASURY_ASSESSMENT_SHA256);
   const configuredMonitoringHash = normalizedHash(env.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256);
   const configuredRecoveryHash = normalizedHash(env.G_BANK_RECOVERY_AUDIT_SHA256);
+  const configuredHAHash = normalizedHash(env.G_BANK_HA_AUDIT_SHA256);
 
   const evidence_bindings = Object.freeze({
     legal_authorization_evidence_sha256: normalizedHash(env.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256),
@@ -52,8 +54,10 @@ function assessSovereignReadiness({
     treasury_assessment_sha256: configuredTreasuryHash,
     customer_monitoring_audit_sha256: configuredMonitoringHash,
     recovery_audit_sha256: configuredRecoveryHash,
+    ha_audit_sha256: configuredHAHash,
   });
   const recoveryCheckpointRoot = normalizedHash(recoveryAudit?.checkpoint_state_root_sha256);
+  const haCheckpointRoot = normalizedHash(haAudit?.checkpoint_state_root_sha256);
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -89,6 +93,16 @@ function assessSovereignReadiness({
     recovery_no_external_rights: recoveryAudit?.grants_external_rights === false,
     recovery_no_live_activation: recoveryAudit?.activates_live_execution === false,
     recovery_no_value_movement: recoveryAudit?.permits_value_movement === false,
+    ha_audit_binding_present: sha256Present(configuredHAHash),
+    ha_audit_pass: assessmentValid(haAudit, 'g-bank-ha-readiness-audit/v2', 'audit_sha256'),
+    ha_audit_binding_matches: sha256Present(configuredHAHash) && configuredHAHash === String(haAudit?.audit_sha256 || '').toLowerCase(),
+    ha_checkpoint_root_present: sha256Present(haCheckpointRoot),
+    ha_checkpoint_matches_recovery: sha256Present(haCheckpointRoot) && sha256Present(recoveryCheckpointRoot) && haCheckpointRoot === recoveryCheckpointRoot,
+    ha_quorum_present: positiveInt(haAudit?.quorum) && Number(haAudit?.active_voter_count) >= Number(haAudit?.quorum),
+    ha_fence_current: Boolean(haAudit?.fence_valid_until) && Date.parse(haAudit.fence_valid_until) > Date.now(),
+    ha_no_external_rights: haAudit?.grants_external_rights === false,
+    ha_no_value_movement: haAudit?.permits_value_movement_by_itself === false,
+    ha_network_not_faked: haAudit?.distributed_network_verified === false,
     transport_module_present: Boolean(String(env.G_BANK_SETTLEMENT_TRANSPORT_MODULE || '')),
     settlement_authorization_binding_present: sha256Present(env.G_BANK_SETTLEMENT_AUTHORIZATION_SHA256),
     legal_authorization_evidence_binding_present: sha256Present(evidence_bindings.legal_authorization_evidence_sha256),
@@ -102,50 +116,21 @@ function assessSovereignReadiness({
     settlement_system_identified: Boolean(transportPreflight?.settlement_system),
   };
 
-  const transportKeys = new Set([
-    'transport_live_authenticated',
-    'transport_live_connected',
-    'transport_external_receipt_present',
-    'transport_scheme_supported',
-    'settlement_system_identified',
-  ]);
-  const prudentialKeys = new Set([
-    'prudential_audit_binding_present',
-    'safeguarding_pass',
-    'liquidity_pass',
-    'invariant_audit_pass',
-    'prudential_audit_binding_matches',
-    'treasury_binding_present',
-    'treasury_pass',
-    'treasury_binding_matches',
-  ]);
-  const operationalKeys = new Set([
-    'operational_resilience_binding_present',
-    'operational_resilience_pass',
-    'operational_resilience_binding_matches',
-  ]);
-  const monitoringKeys = new Set([
-    'customer_monitoring_binding_present',
-    'customer_monitoring_pass',
-    'customer_monitoring_binding_matches',
-  ]);
-  const recoveryKeys = new Set([
-    'recovery_audit_binding_present',
-    'recovery_audit_pass',
-    'recovery_audit_binding_matches',
-    'recovery_checkpoint_root_present',
-    'recovery_no_external_rights',
-    'recovery_no_live_activation',
-    'recovery_no_value_movement',
-  ]);
-  const staticKeys = Object.keys(checks).filter(k => !transportKeys.has(k) && !prudentialKeys.has(k) && !operationalKeys.has(k) && !monitoringKeys.has(k) && !recoveryKeys.has(k));
+  const transportKeys = new Set(['transport_live_authenticated','transport_live_connected','transport_external_receipt_present','transport_scheme_supported','settlement_system_identified']);
+  const prudentialKeys = new Set(['prudential_audit_binding_present','safeguarding_pass','liquidity_pass','invariant_audit_pass','prudential_audit_binding_matches','treasury_binding_present','treasury_pass','treasury_binding_matches']);
+  const operationalKeys = new Set(['operational_resilience_binding_present','operational_resilience_pass','operational_resilience_binding_matches']);
+  const monitoringKeys = new Set(['customer_monitoring_binding_present','customer_monitoring_pass','customer_monitoring_binding_matches']);
+  const recoveryKeys = new Set(['recovery_audit_binding_present','recovery_audit_pass','recovery_audit_binding_matches','recovery_checkpoint_root_present','recovery_no_external_rights','recovery_no_live_activation','recovery_no_value_movement']);
+  const haKeys = new Set(['ha_audit_binding_present','ha_audit_pass','ha_audit_binding_matches','ha_checkpoint_root_present','ha_checkpoint_matches_recovery','ha_quorum_present','ha_fence_current','ha_no_external_rights','ha_no_value_movement','ha_network_not_faked']);
+  const staticKeys = Object.keys(checks).filter(k => !transportKeys.has(k) && !prudentialKeys.has(k) && !operationalKeys.has(k) && !monitoringKeys.has(k) && !recoveryKeys.has(k) && !haKeys.has(k));
   const static_configuration_ready = staticKeys.every(k => checks[k] === true);
   const external_transport_verified = [...transportKeys].every(k => checks[k] === true);
   const prudential_controls_verified = [...prudentialKeys].every(k => checks[k] === true);
   const operational_controls_verified = [...operationalKeys].every(k => checks[k] === true);
   const customer_monitoring_verified = [...monitoringKeys].every(k => checks[k] === true);
   const recovery_controls_verified = [...recoveryKeys].every(k => checks[k] === true);
-  const direct_live_ready = static_configuration_ready && external_transport_verified && prudential_controls_verified && operational_controls_verified && customer_monitoring_verified && recovery_controls_verified;
+  const ha_controls_verified = [...haKeys].every(k => checks[k] === true);
+  const direct_live_ready = static_configuration_ready && external_transport_verified && prudential_controls_verified && operational_controls_verified && customer_monitoring_verified && recovery_controls_verified && ha_controls_verified;
 
   return Object.freeze({
     schema: 'g-bank-sovereign-readiness/v2',
@@ -156,14 +141,16 @@ function assessSovereignReadiness({
     operational_controls_verified,
     customer_monitoring_verified,
     recovery_controls_verified,
+    ha_controls_verified,
     direct_live_ready,
     checks,
     evidence_bindings,
     recovery_checkpoint_state_root_sha256: recoveryCheckpointRoot,
+    ha_checkpoint_state_root_sha256: haCheckpointRoot,
     transport_scheme: transportPreflight?.scheme || null,
     settlement_system: transportPreflight?.settlement_system || null,
     value_movement_permitted_by_readiness: direct_live_ready,
-    note: 'direct_live_ready is a technical gate only; it does not itself create legal authorization, scheme membership, central-bank access, or settlement rights',
+    note: 'direct_live_ready is a technical gate only; it does not itself create legal authorization, scheme membership, central-bank access, settlement rights, or prove distributed network deployment',
   });
 }
 
