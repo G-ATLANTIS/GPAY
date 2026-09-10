@@ -31,7 +31,6 @@ const A = keyNode('NODE:A');
 const B = keyNode('NODE:B');
 const C = keyNode('NODE:C');
 const D = keyNode('NODE:D');
-const byId = Object.fromEntries([A, B, C, D].map(node => [node.node_id, node]));
 const cluster1 = { cluster_id: 'G-BANK-HA-PRIMARY', cluster_epoch: 1, nodes: [pub(A), pub(B), pub(C)] };
 const cluster2 = { cluster_id: 'G-BANK-HA-PRIMARY', cluster_epoch: 2, nodes: [pub(B), pub(C), pub(D)] };
 const normalized1 = normalizeCluster(cluster1);
@@ -83,10 +82,10 @@ function reconfigSign(node, domain) {
 }
 const fromSignatures = [reconfigSign(A, 'FROM'), reconfigSign(B, 'FROM')];
 const toSignatures = [reconfigSign(B, 'TO'), reconfigSign(D, 'TO')];
-assert.throws(() => createJointReconfigurationCertificate({ proposal, from_cluster: cluster1, to_cluster: cluster2, from_signatures: [fromSignatures[0]], to_signatures, voteStores: reconfigStores, now: NOW + 2000 }), /ha_reconfiguration_from_quorum_not_met/);
-assert.throws(() => createJointReconfigurationCertificate({ proposal, from_cluster: cluster1, to_cluster: cluster2, from_signatures, to_signatures: [toSignatures[0]], voteStores: reconfigStores, now: NOW + 2000 }), /ha_reconfiguration_to_quorum_not_met/);
+assert.throws(() => createJointReconfigurationCertificate({ proposal, from_cluster: cluster1, to_cluster: cluster2, from_signatures: [fromSignatures[0]], to_signatures: toSignatures, voteStores: reconfigStores, now: NOW + 2000 }), /ha_reconfiguration_from_quorum_not_met/);
+assert.throws(() => createJointReconfigurationCertificate({ proposal, from_cluster: cluster1, to_cluster: cluster2, from_signatures: fromSignatures, to_signatures: [toSignatures[0]], voteStores: reconfigStores, now: NOW + 2000 }), /ha_reconfiguration_to_quorum_not_met/);
 
-const certificate = createJointReconfigurationCertificate({ proposal, from_cluster: cluster1, to_cluster: cluster2, from_signatures, to_signatures, voteStores: reconfigStores, now: NOW + 2000 });
+const certificate = createJointReconfigurationCertificate({ proposal, from_cluster: cluster1, to_cluster: cluster2, from_signatures: fromSignatures, to_signatures: toSignatures, voteStores: reconfigStores, now: NOW + 2000 });
 assert.equal(certificate.from_signer_node_ids.length, 2);
 assert.equal(certificate.to_signer_node_ids.length, 2);
 assert.equal(verifyJointReconfigurationCertificate({ proposal, from_cluster: cluster1, to_cluster: cluster2, certificate, voteStores: reconfigStores }), true);
