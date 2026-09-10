@@ -29,7 +29,7 @@ function verifySchemeValidationEvidence(evidence, message, {
     validation_level: evidence.validation_level,
     validator_binding_sha256: evidence.validator_binding_sha256,
     validation_receipt_sha256: evidence.validation_receipt_sha256,
-    verified_at: new Date(now).toISOString(),
+    evidence_observed_at: evidence.observed_at,
   };
   proof.proof_sha256 = sha256(canonicalJson(proof));
   return Object.freeze(proof);
