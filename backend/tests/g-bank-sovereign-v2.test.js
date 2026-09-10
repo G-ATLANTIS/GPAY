@@ -12,6 +12,7 @@ const { GBankSovereignCore } = require('../g-bank-sovereign-v2/sovereign-core');
 const { createSovereignApproval, verifySovereignApproval } = require('../g-bank-sovereign-v2/approval');
 const { evaluatePaymentPolicy } = require('../g-bank-sovereign-v2/risk-policy');
 const { approvalPayload } = require('../g-bank-sovereign-v2/authority');
+const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/promotion-certificate');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T06:30:00.000Z');
@@ -24,6 +25,15 @@ function env() {
     G_BANK_GOVERNANCE_REQUIRED: 'true',
     G_BANK_SIMULATED_LIVE_SUCCESS: 'false',
     G_BANK_SETTLEMENT_AUTHORIZATION_SHA256: H('a'),
+    G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256: H('b'),
+    G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256: H('c'),
+    G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256: H('d'),
+    G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256: H('e'),
+    G_BANK_PRUDENTIAL_AUDIT_SHA256: H('1'),
+    G_BANK_OPERATIONAL_RESILIENCE_SHA256: H('2'),
+    G_BANK_TREASURY_ASSESSMENT_SHA256: H('3'),
+    G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256: H('4'),
+    G_BANK_RECOVERY_AUDIT_SHA256: H('5'),
     G_BANK_SOVEREIGN_APPROVAL_SECRET: '0123456789abcdef0123456789abcdef0123456789abcdef',
     G_BANK_BIC: 'ABNANL2A',
     G_BANK_OUTBOUND_SUSPENSE_ACCOUNT: 'G:SUSPENSE:OUTBOUND',
@@ -59,7 +69,52 @@ function instruction(id = 'PAY0000000000001') {
   };
 }
 
-function setup(transport) {
+function configureRuntimePromotion(root, e) {
+  const readiness = {
+    schema: 'g-bank-sovereign-readiness/v2',
+    state: 'DIRECT_LIVE_READY',
+    static_configuration_ready: true,
+    external_transport_verified: true,
+    prudential_controls_verified: true,
+    operational_controls_verified: true,
+    customer_monitoring_verified: true,
+    recovery_controls_verified: true,
+    direct_live_ready: true,
+    checks: { synthetic_runtime_fixture_verified: true },
+    value_movement_permitted_by_readiness: true,
+    note: 'test fixture only',
+  };
+  const certificate = createTechnicalPromotionCertificate({
+    readiness,
+    checkpoint: { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('6') },
+    governance: { policy_sha256: H('7'), authority_set_sha256: H('8') },
+    evidence_bindings: {
+      legal_authorization_evidence_sha256: e.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256,
+      scheme_participation_evidence_sha256: e.G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256,
+      settlement_access_evidence_sha256: e.G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256,
+      production_identity_evidence_sha256: e.G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256,
+      transport_preflight_receipt_sha256: H('9'),
+      prudential_audit_sha256: e.G_BANK_PRUDENTIAL_AUDIT_SHA256,
+      operational_resilience_sha256: e.G_BANK_OPERATIONAL_RESILIENCE_SHA256,
+      treasury_assessment_sha256: e.G_BANK_TREASURY_ASSESSMENT_SHA256,
+      customer_monitoring_audit_sha256: e.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256,
+      recovery_audit_sha256: e.G_BANK_RECOVERY_AUDIT_SHA256,
+    },
+    trusted_signing_key_binding_sha256: H('f'),
+    ttl_seconds: 300,
+    now: NOW,
+  });
+  const readinessPath = path.join(root, 'runtime-readiness.json');
+  const promotionPath = path.join(root, 'runtime-promotion.json');
+  fs.writeFileSync(readinessPath, JSON.stringify(readiness, null, 2) + '\n', { mode: 0o600 });
+  fs.writeFileSync(promotionPath, JSON.stringify(certificate, null, 2) + '\n', { mode: 0o600 });
+  e.G_BANK_RUNTIME_READINESS_FILE = readinessPath;
+  e.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = promotionPath;
+  e.G_BANK_PROMOTION_CERTIFICATE_SHA256 = certificate.certificate_sha256;
+  return { readiness, certificate };
+}
+
+function setup(transport, { promotion = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-v2-'));
   const e = env();
   const accounts = new AccountRegistry(path.join(root, 'accounts.json'));
@@ -109,7 +164,8 @@ function setup(transport) {
     policy_epoch: 1,
   };
 
-  const settlement = new DirectSettlementAdapter({ transport, env: e });
+  const runtimePromotion = promotion ? configureRuntimePromotion(root, e) : null;
+  const settlement = new DirectSettlementAdapter({ transport, env: e, clock: () => NOW });
   const core = new GBankSovereignCore({
     accounts,
     ledger,
@@ -119,7 +175,7 @@ function setup(transport) {
     stateDir: path.join(root, 'state'),
     env: e,
   });
-  return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator };
+  return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimePromotion };
 }
 
 function schemeEvidence(prepared) {
@@ -161,7 +217,14 @@ function authoritySignatures(s, prepared, validation, key) {
   let submitCount = 0;
   const settledTransport = {
     async preflight() { return { environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT', external_receipt_sha256: H('5') }; },
-    async submit() { submitCount += 1; return { submission_id: 'SUB-001', status: 'SUBMITTED', external_receipt_sha256: H('6'), provider_request_id: 'REQ-001' }; },
+    async submit(request) {
+      submitCount += 1;
+      assert.match(request.runtime_promotion_gate_sha256, /^[0-9a-f]{64}$/);
+      assert.match(request.promotion_certificate_sha256, /^[0-9a-f]{64}$/);
+      assert.equal(request.recovery_audit_sha256, H('5'));
+      assert.equal(request.customer_monitoring_audit_sha256, H('4'));
+      return { submission_id: 'SUB-001', status: 'SUBMITTED', external_receipt_sha256: H('6'), provider_request_id: 'REQ-001' };
+    },
     async readback() { return { status: 'SETTLED', settlement_reference: 'SETTLE-001', external_receipt_sha256: H('7') }; },
   };
   const s = setup(settledTransport);
@@ -193,6 +256,21 @@ function authoritySignatures(s, prepared, validation, key) {
   assert.throws(() => verifySovereignApproval(approval, { prepared, schemeValidationEvidence: validation, idempotencyKey: wrongKey, now: NOW }, s.e), /approval_idempotency_mismatch/);
   const wrongValidation = { ...validation, validation_receipt_sha256: H('9') };
   assert.throws(() => verifySovereignApproval(approval, { prepared, schemeValidationEvidence: wrongValidation, idempotencyKey: key, now: NOW }, s.e), /approval_scheme_validation_receipt_mismatch/);
+
+  let blockedSubmitCount = 0;
+  const blockedTransport = {
+    async preflight() { return { environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT', external_receipt_sha256: H('5') }; },
+    async submit() { blockedSubmitCount += 1; return { submission_id: 'MUST-NOT-HAPPEN', external_receipt_sha256: H('6') }; },
+    async readback() { return { status: 'UNKNOWN', external_receipt_sha256: H('7') }; },
+  };
+  const blocked = setup(blockedTransport, { promotion: false });
+  const blockedPrepared = blocked.core.prepare({ rawInstruction: instruction('PAY0000000000008'), complianceBundle: evidence(), now: NOW });
+  const blockedKey = crypto.randomUUID();
+  const blockedValidation = schemeEvidence(blockedPrepared);
+  const blockedApproval = createSovereignApproval({ prepared: blockedPrepared, schemeValidationEvidence: blockedValidation, idempotencyKey: blockedKey, now: NOW }, blocked.e);
+  const blockedSignatures = authoritySignatures(blocked, blockedPrepared, blockedValidation, blockedKey);
+  await assert.rejects(blocked.core.execute({ prepared: blockedPrepared, schemeValidationEvidence: blockedValidation, approvalToken: blockedApproval, authoritySignatures: blockedSignatures, idempotencyKey: blockedKey, now: NOW }), /runtime_readiness_file_required/);
+  assert.equal(blockedSubmitCount, 0, 'transport.submit must not be called without runtime promotion');
 
   const noSignatureSetup = setup(settledTransport);
   const noSigPrepared = noSignatureSetup.core.prepare({ rawInstruction: instruction('PAY0000000000009'), complianceBundle: evidence(), now: NOW });
