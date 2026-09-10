@@ -32,12 +32,13 @@ function fixture() {
     observer,
     observed_at: new Date(NOW).toISOString(),
     nonce_sha256: H('7'),
+    operation_binding_sha256: H('8'),
   });
   const observation = signHARuntimeObservation({ payload, private_key: privateKey });
   const expected = {
     cluster_authority_root_sha256: H('2'), voter_journal_root_sha256: H('3'), state_root_sha256: H('6'),
     ha_audit_sha256: haAudit.audit_sha256, ha_deployment_audit_sha256: deploymentAudit.audit_sha256,
-    fence_valid_until: new Date(NOW + 60000).toISOString(),
+    operation_binding_sha256: H('8'), fence_valid_until: new Date(NOW + 60000).toISOString(),
   };
   return { observer, privateKey, haAudit, deploymentAudit, payload, observation, expected };
 }
@@ -48,6 +49,7 @@ function fixture() {
   assert.equal(audit.state, 'PASS');
   assert.equal(audit.cluster_authority_root_sha256, H('2'));
   assert.equal(audit.voter_journal_root_sha256, H('3'));
+  assert.equal(audit.operation_binding_sha256, H('8'));
   assert.equal(audit.latest_commit_index, 77);
   assert.equal(audit.grants_external_rights, false);
   assert.equal(audit.permits_value_movement_by_itself, false);
@@ -56,9 +58,10 @@ function fixture() {
 
 (() => {
   const f = fixture();
-  assert.throws(() => verifyHARuntimeObservation({ observation: f.observation, trustedObserver: f.observer, expected: { ...f.expected, cluster_authority_root_sha256: H('8') }, now: NOW + 1000 }), /ha_runtime_expected_mismatch:cluster_authority_root_sha256/);
-  assert.throws(() => verifyHARuntimeObservation({ observation: f.observation, trustedObserver: f.observer, expected: { ...f.expected, voter_journal_root_sha256: H('8') }, now: NOW + 1000 }), /ha_runtime_expected_mismatch:voter_journal_root_sha256/);
-  assert.throws(() => verifyHARuntimeObservation({ observation: f.observation, trustedObserver: f.observer, expected: { ...f.expected, ha_audit_sha256: H('8') }, now: NOW + 1000 }), /ha_runtime_expected_mismatch:ha_audit_sha256/);
+  assert.throws(() => verifyHARuntimeObservation({ observation: f.observation, trustedObserver: f.observer, expected: { ...f.expected, cluster_authority_root_sha256: H('9') }, now: NOW + 1000 }), /ha_runtime_expected_mismatch:cluster_authority_root_sha256/);
+  assert.throws(() => verifyHARuntimeObservation({ observation: f.observation, trustedObserver: f.observer, expected: { ...f.expected, voter_journal_root_sha256: H('9') }, now: NOW + 1000 }), /ha_runtime_expected_mismatch:voter_journal_root_sha256/);
+  assert.throws(() => verifyHARuntimeObservation({ observation: f.observation, trustedObserver: f.observer, expected: { ...f.expected, ha_audit_sha256: H('9') }, now: NOW + 1000 }), /ha_runtime_expected_mismatch:ha_audit_sha256/);
+  assert.throws(() => verifyHARuntimeObservation({ observation: f.observation, trustedObserver: f.observer, expected: { ...f.expected, operation_binding_sha256: H('9') }, now: NOW + 1000 }), /ha_runtime_expected_mismatch:operation_binding_sha256/);
 })();
 
 (() => {
@@ -79,8 +82,8 @@ function fixture() {
 
 (() => {
   const f = fixture();
-  const tampered = { ...f.observation, cluster_authority_root_sha256: H('9') };
+  const tampered = { ...f.observation, operation_binding_sha256: H('9') };
   assert.throws(() => verifyHARuntimeObservation({ observation: tampered, trustedObserver: f.observer, expected: f.expected, now: NOW + 1000 }), /ha_runtime_observation_hash_mismatch/);
 })();
 
-console.log('G-BANK sovereign v2 submit-time HA runtime attestation tests: PASS');
+console.log('G-BANK sovereign v2 transaction-bound submit-time HA attestation tests: PASS');
