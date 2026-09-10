@@ -2,7 +2,7 @@
 
 ## Purpose
 
-G-BANK Sovereign Core v2 makes the G-BANK ledger, payment state machine, approval policy, ISO 20022 message generation, idempotency, receipts, prudential controls and reconciliation independent of payment aggregators.
+G-BANK Sovereign Core v2 makes the G-BANK ledger, payment state machine, approval policy, ISO 20022 message generation, idempotency, receipts, treasury controls, prudential controls and reconciliation independent of payment aggregators.
 
 Mollie and TrueLayer are compatibility rails only. They are not the G-BANK source of truth.
 
@@ -27,6 +27,8 @@ EXPLICIT CRYPTOGRAPHIC APPROVAL
         |
 SAFEGUARDING + LIQUIDITY + INVARIANT AUDIT
         |
+TREASURY / PREFUNDING / SETTLEMENT HEADROOM
+        |
 OPERATIONAL RESILIENCE / EMERGENCY FREEZE
         |
 ATOMIC IDEMPOTENCY CLAIM
@@ -39,7 +41,9 @@ PROVIDER/CSM READBACK
         |
 SETTLED / REJECTED / UNKNOWN
         |
-RECONCILIATION
+EXTERNAL STATEMENT RECONCILIATION
+        |
+END-OF-DAY CLOSE ROOT
         |
 HASH-CHAIN RECEIPTS + LEDGER
 ```
@@ -58,83 +62,86 @@ HASH-CHAIN RECEIPTS + LEDGER
 - external scheme-validation evidence binding
 - deterministic risk policy with per-payment limits, daily velocity, beneficiary blocks and quorum requirements
 - authority-set and governance proof binding
-- approval bound to:
-  - exact prepared payment
-  - instruction hash
-  - message hash
-  - compliance proof
-  - scheme-validation receipt
-  - source account
-  - amount and currency
-  - beneficiary binding
-  - scheme
-  - exact idempotency key
+- approval bound to the exact prepared payment, validation receipt and idempotency key
 - safeguarding coverage assessment
 - intraday/stressed liquidity headroom assessment
+- evidence-bound treasury position and prefunding headroom
 - bank-wide invariant auditor
 - operational resilience assessment and emergency freeze
 - direct settlement adapter contract
-- required live connectivity/authentication preflight
 - outbound ledger hold before external submission
 - no automatic resubmission after ambiguous provider state
 - settlement readback and reconciliation
-- final value-flow claim only after `SETTLED`
-- deterministic rejection release
+- hash-verified external settlement-statement reconciliation
+- append-only end-of-day close proof store
 - hash-chained audit receipts
 - no-network safety test suite
 - operator CLI with pluggable settlement transport module
 
-## Prudential layer
+## Prudential and treasury layer
 
-The safeguarding assessment uses:
+Safeguarding requires protected customer liabilities and configured buffer to be covered. Liquidity requires immediately available liquidity to cover pending outbound flows, stressed outflow and minimum buffer.
 
-```text
-required_safeguarded
-  = customer_liabilities
-  + pending_outbound_holds
-  + required_buffer
-```
+Treasury position is independently assessed against a **hash-verified external settlement-liquidity snapshot**. The snapshot must bind currency, available amount, settlement system, settlement account identity and observation time. A random hash or locally asserted balance cannot satisfy the treasury evidence check.
 
-If safeguarded assets are below that requirement, the assessment returns `BLOCK`.
-
-The liquidity assessment uses:
+Treasury headroom is calculated as:
 
 ```text
-required_liquidity
-  = pending_outbound
+required_settlement_liquidity
+  = pending_outbound_holds
+  + minimum_prefunding
+  + reserve_buffer
   + stressed_outflow
-  + minimum_buffer
+
+settlement_headroom
+  = verified_external_settlement_liquidity
+  - required_settlement_liquidity
 ```
 
-If immediately available liquidity is below the requirement, the assessment returns `BLOCK`.
+A negative headroom returns `BLOCK`.
 
-The invariant auditor then requires, at minimum:
+The invariant auditor requires ledger integrity, zero trial-balance total, mandatory system accounts, non-negative customer balances, safeguarding PASS and liquidity PASS.
 
-- verified ledger hash chain and sequence;
-- zero trial-balance total for the currency;
-- active safeguarding, suspense and settlement accounts;
-- no negative customer balance;
-- safeguarding assessment = `PASS`;
-- liquidity assessment = `PASS`.
+## Settlement statement reconciliation
 
-Its resulting audit hash is independently bound into the live-readiness configuration. Environment flags alone cannot manufacture this proof.
+At end of day, externally settled entries are reconciled against G-BANK's own `SOVEREIGN_SETTLEMENT_VERIFIED` receipts using the settlement `submission_id`, amount and currency.
+
+The external statement must be hash-verified and must use one currency consistently. Reconciliation blocks on:
+
+- duplicate internal settlement receipts;
+- an internal settlement missing externally;
+- an unexpected external settlement;
+- amount mismatch;
+- statement tampering;
+- statement-entry currency mismatch.
+
+No mismatch is auto-corrected and no compensating payment is generated automatically.
+
+## End-of-day close
+
+A business date can become `CLOSED` only when all of these are valid and hash-bound:
+
+```text
+state checkpoint
+invariant audit = PASS
+safeguarding = PASS
+liquidity = PASS
+treasury = PASS
+operational resilience = PASS
+settlement reconciliation = PASS
+```
+
+The resulting EOD close contains the state root and all control-proof hashes. `EndOfDayStore` is append-only per business date: replaying the same close root is idempotent, while attempting to close the same date with a different root is denied.
 
 ## Operational resilience layer
 
-Operational readiness blocks on any of the following:
+Operational readiness blocks on ledger or receipt-chain integrity failure, checkpoint failure, unresolved settlement uncertainty above policy, excessive clock drift, or emergency freeze.
 
-- ledger integrity not verified;
-- receipt-chain integrity not verified;
-- checkpoint not verified;
-- unresolved settlement uncertainty above the configured policy;
-- clock drift above the configured limit;
-- emergency freeze active.
-
-The assessment hash is separately bound into live readiness. `UNKNOWN` settlement state is never interpreted as permission to retry or fail over automatically.
+`UNKNOWN` settlement state is never interpreted as permission to retry or fail over automatically.
 
 ## Fail-closed live requirements
 
-All of these must be true before the software readiness gate can report direct-live ready:
+All software and external gates must pass before the technical readiness gate can report `DIRECT_LIVE_READY`, including:
 
 ```text
 G_BANK_ENABLE_LIVE=true
@@ -143,104 +150,26 @@ G_BANK_DIRECT_SETTLEMENT_ENABLED=true
 G_BANK_SIMULATED_LIVE_SUCCESS!=true
 G_BANK_GOVERNANCE_REQUIRED=true
 G_BANK_SETTLEMENT_AUTHORIZATION_SHA256=<verified external authorization binding>
-G_BANK_SOVEREIGN_APPROVAL_SECRET=<minimum 32-byte secret>
-G_BANK_SETTLEMENT_TRANSPORT_MODULE=<authorized transport implementation>
 G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256=<verified evidence binding>
 G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256=<verified evidence binding>
 G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256=<verified evidence binding>
 G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256=<verified evidence binding>
 G_BANK_PRUDENTIAL_AUDIT_SHA256=<current PASS invariant-audit hash>
 G_BANK_OPERATIONAL_RESILIENCE_SHA256=<current PASS resilience-assessment hash>
+G_BANK_TREASURY_ASSESSMENT_SHA256=<current PASS treasury-assessment hash>
 ```
 
-The transport's preflight must independently report:
+The transport preflight must independently report LIVE, authenticated and connected status, supported SCT/SCT Inst scheme and an external receipt hash.
 
-```text
-environment=LIVE
-authenticated=true
-connected=true
-scheme=SCT or SCT_INST
-external_receipt_sha256=<verified receipt>
-```
-
-The technical readiness result also requires valid governance, prudential and operational PASS evidence. A local environment variable alone therefore cannot make an unverified transport appear live.
+Environment variables alone cannot manufacture a valid readiness state because the supplied prudential/operational/treasury assessments are themselves hash-recomputed and bound.
 
 ## Critical ambiguity rule
 
-A connection failure after submission is treated as potentially having reached the external settlement system.
-
-G-BANK then:
-
-1. does not resubmit automatically;
-2. leaves the value in outbound suspense;
-3. marks execution `UNKNOWN`;
-4. requires readback/reconciliation;
-5. never routes the same payment to another provider automatically.
-
-This prevents a failover path from creating a duplicate real payment.
-
-## Ledger booking model
-
-Before external submission:
-
-```text
-DEBIT  source account
-CREDIT outbound suspense
-```
-
-On verified settlement:
-
-```text
-DEBIT  outbound suspense
-CREDIT settlement-out account
-```
-
-On verified rejection:
-
-```text
-DEBIT  outbound suspense
-CREDIT source account
-```
-
-This is an internal conserved-value ledger model. Statutory/financial-reporting general-ledger classification can be layered separately.
-
-## ISO 20022 boundary
-
-Message generation does **not** claim EPC/TARGET validity by itself.
-
-Before execution, G-BANK requires an external scheme-validation receipt cryptographically bound to the exact XML document hash. Production deployments must validate against the applicable scheme rules and production ISO 20022 namespaces/business validation rules.
-
-Current design target: 2025 SCT/SCT Inst rulebooks using the ISO 20022 2019 message version. Unstructured addresses are not relied upon; structured address fields are supported so the core is prepared for the 15 November 2026 EPC change.
+A connection failure after submission is treated as potentially having reached the external settlement system. G-BANK does not auto-resubmit, keeps value in outbound suspense, marks the execution `UNKNOWN`, and requires reconciliation.
 
 ## Direct settlement boundary
 
-`backend/g-bank-sovereign-v2/direct-settlement.js` defines the verified transport contract. It deliberately does not pretend that T2, TIPS or another CSM can be reached without real admission, credentials, certificates, network connectivity and provider receipts.
-
-An actual TARGET/TIPS/CSM transport must be supplied through:
-
-```text
-G_BANK_SETTLEMENT_TRANSPORT_MODULE=/absolute/path/to/authorized-transport.js
-```
-
-The module exports either:
-
-```js
-module.exports = { transport }
-```
-
-or:
-
-```js
-module.exports.createTransport = ({ env }) => transport
-```
-
-and the transport implements:
-
-```js
-preflight()
-submit(payload)
-readback(submissionId)
-```
+`backend/g-bank-sovereign-v2/direct-settlement.js` defines the verified transport contract. It deliberately does not claim T2, TIPS or CSM access without actual authorization, production identity/certificates, connectivity and external receipts.
 
 ## Reality state
 
@@ -254,8 +183,11 @@ G_BANK_OWN_APPROVAL_AND_IDEMPOTENCY = IMPLEMENTED
 G_BANK_OWN_RISK_GOVERNANCE = IMPLEMENTED
 G_BANK_OWN_SAFEGUARDING_ASSESSMENT = IMPLEMENTED
 G_BANK_OWN_LIQUIDITY_ASSESSMENT = IMPLEMENTED
+G_BANK_OWN_TREASURY_POSITION = IMPLEMENTED
 G_BANK_OWN_INVARIANT_AUDITOR = IMPLEMENTED
 G_BANK_OWN_OPERATIONAL_FREEZE = IMPLEMENTED
+G_BANK_OWN_SETTLEMENT_STATEMENT_RECONCILIATION = IMPLEMENTED
+G_BANK_OWN_END_OF_DAY_CLOSE = IMPLEMENTED
 G_BANK_OWN_RECONCILIATION = IMPLEMENTED
 G_BANK_DIRECT_SETTLEMENT_INTERFACE = IMPLEMENTED
 G_BANK_DIRECT_TARGET_TIPS_TRANSPORT = NOT_YET_EXTERNALLY_CONNECTED
@@ -264,45 +196,8 @@ G_BANK_DNB_ECB_AUTHORIZATION = NOT_CLAIMED
 G_BANK_VALUE_MOVEMENT = DENY_UNTIL_VERIFIED_AUTHORIZED_TRANSPORT
 ```
 
-## Operator flow
-
-Prepare only (no network):
-
-```bash
-node scripts/g-bank-sovereign-v2.js prepare \
-  --instruction .secrets/input/payment.json \
-  --compliance .secrets/evidence/compliance.json \
-  --out .secrets/prepared/payment.json
-```
-
-After external scheme validation, generate an approval bound to that exact validation receipt and a fresh idempotency key:
-
-```bash
-node scripts/g-bank-sovereign-v2.js approve \
-  --prepared .secrets/prepared/payment.json \
-  --validation .secrets/evidence/scheme-validation.json \
-  --idempotency-key '<fresh-uuid>' \
-  --out .secrets/approvals/payment.approval
-```
-
-Execution is intentionally impossible until an authorized live transport module and all live gates are configured.
-
 ## Promotion rule
 
-Do not label direct settlement `LIVE` until all of the following have real evidence:
-
-- legal/regulatory authorization appropriate to the activity
-- scheme/settlement admission where required
-- production identity/certificate material
-- production network path
-- authenticated preflight
-- scheme-validation path
-- current safeguarding PASS evidence
-- current liquidity PASS evidence
-- current invariant-audit PASS evidence
-- current operational-resilience PASS evidence
-- bounded submission
-- provider/CSM readback
-- reconciliation receipt
+Do not label direct settlement `LIVE` until legal/regulatory authorization, scheme/settlement admission, production identity/certificate material, production network path, authenticated transport preflight, scheme-validation path, current governance/prudential/treasury/resilience PASS evidence, bounded submission, provider/CSM readback and reconciliation receipts all exist as real external evidence.
 
 No simulated, mocked or locally inferred result can satisfy these conditions.
