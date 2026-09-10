@@ -29,7 +29,49 @@ function validatePublicBaseUrl(value) {
   }
 }
 
-function runProductionPreflight(env = process.env) {
+function validatePaymentStateBackend(env = process.env, resolvePg = () => require.resolve('pg')) {
+  const backend = (env.GPAY_PAYMENT_STATE_BACKEND || 'local').trim().toLowerCase();
+  if (backend === 'local') {
+    return {
+      ok: true,
+      backend,
+      status: 'local_single_host',
+      postgresUrlPresent: false,
+      driverAvailable: false,
+    };
+  }
+
+  if (backend !== 'postgres') {
+    return {
+      ok: false,
+      backend,
+      status: 'unsupported_backend',
+      postgresUrlPresent: false,
+      driverAvailable: false,
+    };
+  }
+
+  const postgresUrlPresent = nonEmpty(env.GPAY_POSTGRES_URL);
+  let driverAvailable = false;
+  try {
+    resolvePg();
+    driverAvailable = true;
+  } catch {
+    driverAvailable = false;
+  }
+
+  return {
+    ok: postgresUrlPresent && driverAvailable,
+    backend,
+    status: postgresUrlPresent
+      ? (driverAvailable ? 'postgres_configured' : 'postgres_driver_missing')
+      : 'postgres_url_missing',
+    postgresUrlPresent,
+    driverAvailable,
+  };
+}
+
+function runProductionPreflight(env = process.env, options = {}) {
   const checks = [];
 
   for (const name of REQUIRED_RUNTIME_ENV) {
@@ -50,6 +92,16 @@ function runProductionPreflight(env = process.env) {
     status: publicUrl.ok ? 'public_https' : publicUrl.reason,
   });
 
+  const stateBackend = validatePaymentStateBackend(env, options.resolvePg);
+  checks.push({
+    name: 'PAYMENT_STATE_BACKEND',
+    ok: stateBackend.ok,
+    status: stateBackend.status,
+    backend: stateBackend.backend,
+    postgresUrlPresent: stateBackend.postgresUrlPresent,
+    driverAvailable: stateBackend.driverAvailable,
+  });
+
   // GCOIN remains intent-only in this branch. Production payment readiness must never
   // imply authorization to sign or broadcast an Ethereum transaction.
   checks.push({
@@ -65,7 +117,7 @@ function runProductionPreflight(env = process.env) {
     .every((check) => check.ok);
 
   return {
-    schemaVersion: '1.0.0',
+    schemaVersion: '1.1.0',
     readyForLivePaymentCreation,
     externalExecutionPerformed: false,
     livePaymentCreated: false,
@@ -84,5 +136,6 @@ module.exports = {
   REQUIRED_RUNTIME_ENV,
   classifyMollieKey,
   validatePublicBaseUrl,
+  validatePaymentStateBackend,
   runProductionPreflight,
 };
