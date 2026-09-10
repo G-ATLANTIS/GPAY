@@ -16,6 +16,12 @@ function assertLimit(value) {
   return n;
 }
 
+function assertDay(value) {
+  const day = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('velocity_day_invalid');
+  return day;
+}
+
 function dayFromNow(now) {
   const d = new Date(now);
   if (!Number.isFinite(d.getTime())) throw new Error('velocity_now_invalid');
@@ -29,7 +35,7 @@ class VelocityStore {
   }
 
   _id(accountId, currency, day) {
-    return sha256(`${accountId}\n${currency}\n${day}`);
+    return sha256(`${accountId}\n${currency}\n${assertDay(day)}`);
   }
 
   _paths(accountId, currency, day) {
@@ -45,7 +51,7 @@ class VelocityStore {
       schema: 'g-bank-sovereign-velocity-state/v2',
       account_id: String(accountId),
       currency: String(currency),
-      day,
+      day: assertDay(day),
       reservations: [],
       state_sha256: null,
     };
@@ -58,13 +64,14 @@ class VelocityStore {
   }
 
   _readUnlocked(accountId, currency, day) {
-    const { file } = this._paths(accountId, currency, day);
-    if (!fs.existsSync(file)) return this._seal(this._empty(accountId, currency, day));
+    const normalizedDay = assertDay(day);
+    const { file } = this._paths(accountId, currency, normalizedDay);
+    if (!fs.existsSync(file)) return this._seal(this._empty(accountId, currency, normalizedDay));
     const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
     const supplied = doc.state_sha256;
     const expected = this._seal({ ...doc, state_sha256: null }).state_sha256;
     if (supplied !== expected) throw new Error('velocity_state_hash_mismatch');
-    if (doc.account_id !== String(accountId) || doc.currency !== String(currency) || doc.day !== day) {
+    if (doc.account_id !== String(accountId) || doc.currency !== String(currency) || doc.day !== normalizedDay) {
       throw new Error('velocity_state_binding_mismatch');
     }
     return doc;
@@ -81,7 +88,8 @@ class VelocityStore {
   }
 
   _withLock(accountId, currency, day, fn) {
-    const { file, lock } = this._paths(accountId, currency, day);
+    const normalizedDay = assertDay(day);
+    const { file, lock } = this._paths(accountId, currency, normalizedDay);
     let fd;
     try {
       fd = fs.openSync(lock, 'wx', 0o600);
@@ -90,7 +98,7 @@ class VelocityStore {
       throw err;
     }
     try {
-      const doc = this._readUnlocked(accountId, currency, day);
+      const doc = this._readUnlocked(accountId, currency, normalizedDay);
       return fn(doc, file);
     } finally {
       try { fs.closeSync(fd); } catch {}
@@ -98,20 +106,20 @@ class VelocityStore {
     }
   }
 
-  reserve({ idempotencyKey, accountId, currency, instructionSha256, amountMinor, maxDailyMinor, now = Date.now() }) {
+  reserve({ idempotencyKey, accountId, currency, instructionSha256, amountMinor, maxDailyMinor, day = null, now = Date.now() }) {
     if (!idempotencyKey) throw new Error('velocity_idempotency_key_required');
     if (!/^[0-9a-f]{64}$/i.test(String(instructionSha256 || ''))) throw new Error('velocity_instruction_hash_invalid');
     const amount = assertAmount(amountMinor);
     const limit = assertLimit(maxDailyMinor);
-    const day = dayFromNow(now);
+    const reservationDay = day ? assertDay(day) : dayFromNow(now);
     const keyHash = sha256(String(idempotencyKey));
-    return this._withLock(accountId, currency, day, (doc, file) => {
+    return this._withLock(accountId, currency, reservationDay, (doc, file) => {
       const existing = doc.reservations.find(r => r.key_sha256 === keyHash);
       if (existing) {
         if (existing.instruction_sha256 !== instructionSha256 || existing.amount_minor !== amount) {
           throw new Error('velocity_idempotency_reuse_mismatch');
         }
-        return Object.freeze({ ...existing, idempotent_replay: true });
+        return Object.freeze({ ...existing, day: reservationDay, idempotent_replay: true });
       }
       const committed = doc.reservations
         .filter(r => r.state === 'RESERVED' || r.state === 'SETTLED')
@@ -128,34 +136,34 @@ class VelocityStore {
       };
       doc.reservations.push(record);
       this._writeUnlocked(file, doc);
-      return Object.freeze({ ...record, idempotent_replay: false });
+      return Object.freeze({ ...record, day: reservationDay, idempotent_replay: false });
     });
   }
 
-  transition({ idempotencyKey, accountId, currency, to, now = Date.now() }) {
+  transition({ idempotencyKey, accountId, currency, day, to, now = Date.now() }) {
     if (!['SETTLED', 'RELEASED'].includes(to)) throw new Error('velocity_transition_invalid');
-    const day = dayFromNow(now);
+    const reservationDay = assertDay(day);
     const keyHash = sha256(String(idempotencyKey || ''));
-    return this._withLock(accountId, currency, day, (doc, file) => {
+    return this._withLock(accountId, currency, reservationDay, (doc, file) => {
       const record = doc.reservations.find(r => r.key_sha256 === keyHash);
       if (!record) throw new Error('velocity_reservation_missing');
-      if (record.state === to) return Object.freeze({ ...record, idempotent_replay: true });
+      if (record.state === to) return Object.freeze({ ...record, day: reservationDay, idempotent_replay: true });
       if (record.state !== 'RESERVED') throw new Error(`velocity_transition_forbidden_${record.state}_to_${to}`);
       record.state = to;
       record.updated_at = new Date(now).toISOString();
       this._writeUnlocked(file, doc);
-      return Object.freeze({ ...record, idempotent_replay: false });
+      return Object.freeze({ ...record, day: reservationDay, idempotent_replay: false });
     });
   }
 
-  snapshot({ accountId, currency, now = Date.now() }) {
-    const day = dayFromNow(now);
-    const doc = this._readUnlocked(accountId, currency, day);
+  snapshot({ accountId, currency, day = null, now = Date.now() }) {
+    const reservationDay = day ? assertDay(day) : dayFromNow(now);
+    const doc = this._readUnlocked(accountId, currency, reservationDay);
     const committed_minor = doc.reservations
       .filter(r => r.state === 'RESERVED' || r.state === 'SETTLED')
       .reduce((sum, r) => sum + r.amount_minor, 0);
-    return Object.freeze({ day, committed_minor, reservation_count: doc.reservations.length, state_sha256: doc.state_sha256 });
+    return Object.freeze({ day: reservationDay, committed_minor, reservation_count: doc.reservations.length, state_sha256: doc.state_sha256 });
   }
 }
 
-module.exports = { VelocityStore, dayFromNow };
+module.exports = { VelocityStore, dayFromNow, assertDay };
