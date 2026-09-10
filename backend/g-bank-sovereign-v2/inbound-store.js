@@ -5,10 +5,9 @@ const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
 
 const ALLOWED = {
-  CLAIMED: new Set(['PENDING', 'REJECTED']),
-  PENDING: new Set(['AVAILABLE', 'REJECTED']),
+  CLAIMED: new Set(['PENDING']),
+  PENDING: new Set(['AVAILABLE']),
   AVAILABLE: new Set(),
-  REJECTED: new Set(),
 };
 
 class InboundStore {
