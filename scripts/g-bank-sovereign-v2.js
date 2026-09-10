@@ -117,14 +117,18 @@ function governanceSnapshot(riskPolicy, authoritySet) {
   });
 }
 
-function configureRuntimePromotion(a, env = process.env) {
+function configureRuntimePromotionArtifacts(a, env = process.env) {
   if (!a.readiness || !a.promotion || !a['promotion-sha256']) {
     throw new Error('--readiness --promotion --promotion-sha256_required');
   }
   env.G_BANK_RUNTIME_READINESS_FILE = path.resolve(a.readiness);
   env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = path.resolve(a.promotion);
   env.G_BANK_PROMOTION_CERTIFICATE_SHA256 = sha256Arg('promotion_sha256', a['promotion-sha256']);
-  return verifyRuntimePromotionGate({ env });
+  return Object.freeze({
+    readiness_file: env.G_BANK_RUNTIME_READINESS_FILE,
+    promotion_file: env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE,
+    promotion_sha256: env.G_BANK_PROMOTION_CERTIFICATE_SHA256,
+  });
 }
 
 function coreFor(a, { live = false, governanceRequired = false } = {}) {
@@ -230,6 +234,8 @@ async function main() {
       state: certificate.state,
       certificate_sha256: certificate.certificate_sha256,
       state_root_sha256: certificate.state_root_sha256,
+      policy_sha256: certificate.policy_sha256,
+      authority_set_sha256: certificate.authority_set_sha256,
       recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
       customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
       expires_at: certificate.expires_at,
@@ -244,8 +250,9 @@ async function main() {
     if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256']) {
       throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256_required');
     }
-    const runtimeGate = configureRuntimePromotion(a, process.env);
+    configureRuntimePromotionArtifacts(a, process.env);
     const { core } = coreFor(a, { live: true, governanceRequired: true });
+    const runtimeGate = verifyRuntimePromotionGate({ env: process.env });
     const result = await core.execute({
       prepared: readJson(a.prepared),
       schemeValidationEvidence: readJson(a.validation),
