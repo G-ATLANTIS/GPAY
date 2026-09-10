@@ -6,6 +6,7 @@ const { PostgresPaymentStateAdapter } = require('../backend/utils/payment-state-
 const { PostgresPaymentIntentAdapter } = require('../backend/utils/payment-intent-postgres');
 const { SharedPaymentIntentRuntime } = require('../backend/utils/payment-intent-runtime');
 const { normalizeEmailHash } = require('../backend/utils/payment-intent-store');
+const { PostgresPaymentEffectLedger } = require('../backend/utils/payment-effect-ledger');
 
 const connectionString = process.env.GPAY_POSTGRES_URL;
 
@@ -114,6 +115,36 @@ if (!connectionString) {
       );
     } finally {
       await pool.query('DELETE FROM gpay_payment_intent WHERE intent_id=$1', [intentId]).catch(() => {});
+      await pool.end();
+    }
+  });
+
+  test('real postgres payment effect ledger suppresses duplicate completion', async () => {
+    const pool = new Pool({ connectionString, max: 4 });
+    const ledger = new PostgresPaymentEffectLedger(pool);
+    const paymentId = `tr_fx_${crypto.randomUUID().replace(/-/g, '')}`;
+
+    try {
+      await ledger.ensureReady();
+      const prepared = await ledger.prepare('mollie', paymentId, 'invoice', { orderId: 'ci-order-fx' });
+      assert.equal(prepared.created, true);
+      assert.equal(prepared.record.status, 'PREPARED');
+
+      const completed = await ledger.complete('mollie', paymentId, 'invoice', { invoicePath: '/tmp/ci.pdf' });
+      assert.equal(completed.changed, true);
+      assert.equal(completed.record.status, 'COMPLETED');
+      assert.equal(completed.record.data.invoicePath, '/tmp/ci.pdf');
+
+      const replay = await ledger.prepare('mollie', paymentId, 'invoice', { orderId: 'different' });
+      assert.equal(replay.created, false);
+      assert.equal(replay.record.status, 'COMPLETED');
+      assert.equal(replay.record.data.invoicePath, '/tmp/ci.pdf');
+
+      const completionReplay = await ledger.complete('mollie', paymentId, 'invoice', { invoicePath: '/tmp/other.pdf' });
+      assert.equal(completionReplay.changed, false);
+      assert.equal(completionReplay.record.data.invoicePath, '/tmp/ci.pdf');
+    } finally {
+      await pool.query('DELETE FROM gpay_payment_effect WHERE provider=$1 AND provider_payment_id=$2', ['mollie', paymentId]).catch(() => {});
       await pool.end();
     }
   });
