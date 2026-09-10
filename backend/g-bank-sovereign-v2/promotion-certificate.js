@@ -15,6 +15,7 @@ function verifyReadiness(readiness) {
     'external_transport_verified',
     'prudential_controls_verified',
     'operational_controls_verified',
+    'customer_monitoring_verified',
     'direct_live_ready',
     'value_movement_permitted_by_readiness',
   ];
@@ -49,6 +50,7 @@ function createTechnicalPromotionCertificate({
     prudential_audit_sha256: hash64('prudential_audit_sha256', evidence.prudential_audit_sha256),
     operational_resilience_sha256: hash64('operational_resilience_sha256', evidence.operational_resilience_sha256),
     treasury_assessment_sha256: hash64('treasury_assessment_sha256', evidence.treasury_assessment_sha256),
+    customer_monitoring_audit_sha256: hash64('customer_monitoring_audit_sha256', evidence.customer_monitoring_audit_sha256),
   };
   const ttl = Number(ttl_seconds);
   if (!Number.isSafeInteger(ttl) || ttl < 30 || ttl > 300) throw new Error('promotion_certificate_ttl_invalid');
