@@ -38,7 +38,10 @@ function normalizeCluster(config) {
     try { key = crypto.createPublicKey(publicKeyPem); } catch { throw new Error('ha_node_public_key_invalid'); }
     if (key.asymmetricKeyType !== 'ed25519') throw new Error('ha_node_key_type_must_be_ed25519');
     return Object.freeze({
-      node_id: nodeId, role, status, public_key_pem: publicKeyPem,
+      node_id: nodeId,
+      role,
+      status,
+      public_key_pem: publicKeyPem,
       public_key_binding_sha256: sha256(key.export({ type: 'spki', format: 'der' })),
     });
   }).sort((a, b) => a.node_id.localeCompare(b.node_id));
@@ -46,7 +49,14 @@ function normalizeCluster(config) {
   const activeVoters = nodes.filter(node => node.role === 'VOTER' && node.status === 'ACTIVE');
   if (activeVoters.length < 3) throw new Error('ha_active_voter_count_too_low');
   const quorum = Math.floor(activeVoters.length / 2) + 1;
-  const body = { schema: 'g-bank-ha-cluster/v2', cluster_id: clusterId, cluster_epoch: clusterEpoch, nodes, active_voter_count: activeVoters.length, quorum };
+  const body = {
+    schema: 'g-bank-ha-cluster/v2',
+    cluster_id: clusterId,
+    cluster_epoch: clusterEpoch,
+    nodes,
+    active_voter_count: activeVoters.length,
+    quorum,
+  };
   return Object.freeze({ ...body, cluster_sha256: sha256(canonicalJson(body)) });
 }
 
@@ -63,31 +73,88 @@ function createFenceProposal({ cluster, term, leader_node_id, previous_fence_sha
   const start = Date.parse(valid_from);
   const end = Date.parse(valid_until);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end - start > 300000) throw new Error('ha_fence_window_invalid');
-  return proposal({ cluster_sha256: c.cluster_sha256, cluster_epoch: c.cluster_epoch, term: positiveInt('ha_fence_term', term), leader_node_id: leader,
-    previous_fence_sha256: hash64('ha_previous_fence_sha256', previous_fence_sha256, { nullable: true }), valid_from: new Date(start).toISOString(), valid_until: new Date(end).toISOString() }, 'g-bank-ha-fence-proposal/v2');
+  return proposal({
+    cluster_sha256: c.cluster_sha256,
+    cluster_epoch: c.cluster_epoch,
+    term: positiveInt('ha_fence_term', term),
+    leader_node_id: leader,
+    previous_fence_sha256: hash64('ha_previous_fence_sha256', previous_fence_sha256, { nullable: true }),
+    valid_from: new Date(start).toISOString(),
+    valid_until: new Date(end).toISOString(),
+  }, 'g-bank-ha-fence-proposal/v2');
 }
 
 function createCommitProposal({ cluster, term, leader_node_id, commit_index, state_root_sha256, fence_record_sha256, previous_commit_sha256 = null }) {
   const c = normalizeCluster(cluster);
-  return proposal({ cluster_sha256: c.cluster_sha256, cluster_epoch: c.cluster_epoch, term: positiveInt('ha_commit_term', term), leader_node_id: String(leader_node_id || '').toUpperCase(),
-    commit_index: positiveInt('ha_commit_index', commit_index), state_root_sha256: hash64('ha_state_root_sha256', state_root_sha256),
-    fence_record_sha256: hash64('ha_fence_record_sha256', fence_record_sha256), previous_commit_sha256: hash64('ha_previous_commit_sha256', previous_commit_sha256, { nullable: true }) }, 'g-bank-ha-commit-proposal/v2');
+  const leader = String(leader_node_id || '').toUpperCase();
+  const node = c.nodes.find(n => n.node_id === leader && n.role === 'VOTER' && n.status === 'ACTIVE');
+  if (!node) throw new Error('ha_commit_leader_not_active_voter');
+  return proposal({
+    cluster_sha256: c.cluster_sha256,
+    cluster_epoch: c.cluster_epoch,
+    term: positiveInt('ha_commit_term', term),
+    leader_node_id: leader,
+    commit_index: positiveInt('ha_commit_index', commit_index),
+    state_root_sha256: hash64('ha_state_root_sha256', state_root_sha256),
+    fence_record_sha256: hash64('ha_fence_record_sha256', fence_record_sha256),
+    previous_commit_sha256: hash64('ha_previous_commit_sha256', previous_commit_sha256, { nullable: true }),
+  }, 'g-bank-ha-commit-proposal/v2');
 }
 
-function signProposal({ proposal: p, node_id, private_key, signed_at = new Date().toISOString() }) {
-  if (!p?.proposal_sha256) throw new Error('ha_proposal_required');
+function signatureEnvelope({ proposal: p, node_id, signed_at, signer_key_binding_sha256 }) {
+  if (!p || !/^g-bank-ha-(fence|commit)-proposal\/v2$/.test(String(p.schema || ''))) throw new Error('ha_proposal_invalid');
+  const nodeId = String(node_id || '').toUpperCase();
+  if (!/^[A-Z0-9:_-]{3,96}$/.test(nodeId)) throw new Error('ha_signature_node_id_invalid');
   const signedAt = Date.parse(signed_at);
   if (!Number.isFinite(signedAt)) throw new Error('ha_signature_time_invalid');
-  const signature = crypto.sign(null, Buffer.from(p.proposal_sha256, 'utf8'), private_key).toString('base64');
-  return Object.freeze({ node_id: String(node_id || '').toUpperCase(), proposal_sha256: p.proposal_sha256, signed_at: new Date(signedAt).toISOString(), signature_base64: signature });
+  return Object.freeze({
+    schema: 'g-bank-ha-signature-envelope/v2',
+    node_id: nodeId,
+    cluster_sha256: hash64('ha_signature_cluster_sha256', p.cluster_sha256),
+    cluster_epoch: positiveInt('ha_signature_cluster_epoch', p.cluster_epoch),
+    proposal_schema: p.schema,
+    proposal_sha256: hash64('ha_signature_proposal_sha256', p.proposal_sha256),
+    signer_key_binding_sha256: hash64('ha_signer_key_binding_sha256', signer_key_binding_sha256),
+    signed_at: new Date(signedAt).toISOString(),
+  });
 }
 
-function verifyQuorumCertificate({ cluster, proposal: p, signatures, now = Date.now(), max_signature_age_ms = 300000 }) {
-  const c = normalizeCluster(cluster);
+function privateKeyBinding(privateKey) {
+  let publicKey;
+  try { publicKey = crypto.createPublicKey(privateKey); } catch { throw new Error('ha_private_key_invalid'); }
+  if (publicKey.asymmetricKeyType !== 'ed25519') throw new Error('ha_private_key_type_must_be_ed25519');
+  return sha256(publicKey.export({ type: 'spki', format: 'der' }));
+}
+
+function signProposal({ proposal: p, node_id, private_key, signed_at = new Date().toISOString(), vote_store = null }) {
+  if (!p?.proposal_sha256) throw new Error('ha_proposal_required');
+  const nodeId = String(node_id || '').toUpperCase();
+  const keyBinding = privateKeyBinding(private_key);
+  const envelope = signatureEnvelope({ proposal: p, node_id: nodeId, signed_at, signer_key_binding_sha256: keyBinding });
+  const payload = canonicalJson(envelope);
+  const signedPayloadSha256 = sha256(payload);
+  if (vote_store) {
+    if (typeof vote_store.reserve !== 'function') throw new Error('ha_vote_store_invalid');
+    vote_store.reserve({ proposal: p, node_id: nodeId, signer_key_binding_sha256: keyBinding, signed_at: envelope.signed_at });
+  }
+  const signature = crypto.sign(null, Buffer.from(payload, 'utf8'), private_key).toString('base64');
+  return Object.freeze({
+    ...envelope,
+    signed_payload_sha256: signedPayloadSha256,
+    signature_base64: signature,
+  });
+}
+
+function verifyProposal(p, c) {
   if (!p || !/^g-bank-ha-(fence|commit)-proposal\/v2$/.test(String(p.schema || ''))) throw new Error('ha_proposal_invalid');
   const { proposal_sha256, ...body } = p;
   if (sha256(canonicalJson(body)) !== String(proposal_sha256 || '').toLowerCase()) throw new Error('ha_proposal_hash_mismatch');
   if (p.cluster_sha256 !== c.cluster_sha256 || p.cluster_epoch !== c.cluster_epoch) throw new Error('ha_proposal_cluster_mismatch');
+}
+
+function verifyQuorumCertificate({ cluster, proposal: p, signatures, now = Date.now(), max_signature_age_ms = 300000 }) {
+  const c = normalizeCluster(cluster);
+  verifyProposal(p, c);
   if (!Array.isArray(signatures)) throw new Error('ha_signatures_required');
 
   const accepted = [];
@@ -98,21 +165,44 @@ function verifyQuorumCertificate({ cluster, proposal: p, signatures, now = Date.
     seen.add(nodeId);
     const node = c.nodes.find(n => n.node_id === nodeId && n.role === 'VOTER' && n.status === 'ACTIVE');
     if (!node) continue;
-    if (sig.proposal_sha256 !== p.proposal_sha256) throw new Error('ha_signature_proposal_mismatch');
-    const signedAt = Date.parse(sig.signed_at);
-    if (!Number.isFinite(signedAt) || signedAt > now + 30000 || now - signedAt > max_signature_age_ms) throw new Error('ha_signature_stale_or_future');
+    const expectedEnvelope = signatureEnvelope({
+      proposal: p,
+      node_id: nodeId,
+      signed_at: sig.signed_at,
+      signer_key_binding_sha256: node.public_key_binding_sha256,
+    });
+    for (const [key, value] of Object.entries(expectedEnvelope)) {
+      if (sig?.[key] !== value) throw new Error(`ha_signature_envelope_mismatch:${key}`);
+    }
+    const payload = canonicalJson(expectedEnvelope);
+    if (hash64('ha_signed_payload_sha256', sig.signed_payload_sha256) !== sha256(payload)) throw new Error('ha_signature_payload_hash_mismatch');
+    const signedAt = Date.parse(expectedEnvelope.signed_at);
+    if (signedAt > now + 30000 || now - signedAt > max_signature_age_ms) throw new Error('ha_signature_stale_or_future');
     let ok = false;
-    try { ok = crypto.verify(null, Buffer.from(p.proposal_sha256, 'utf8'), node.public_key_pem, Buffer.from(String(sig.signature_base64 || ''), 'base64')); } catch { ok = false; }
+    try {
+      ok = crypto.verify(null, Buffer.from(payload, 'utf8'), node.public_key_pem, Buffer.from(String(sig.signature_base64 || ''), 'base64'));
+    } catch { ok = false; }
     if (!ok) throw new Error('ha_signature_invalid');
-    accepted.push(Object.freeze({ node_id: nodeId, proposal_sha256: p.proposal_sha256, signed_at: new Date(signedAt).toISOString(), signature_base64: String(sig.signature_base64) }));
+    accepted.push(Object.freeze({
+      ...expectedEnvelope,
+      signed_payload_sha256: sig.signed_payload_sha256,
+      signature_base64: String(sig.signature_base64),
+    }));
   }
   accepted.sort((a, b) => a.node_id.localeCompare(b.node_id));
   if (accepted.length < c.quorum) throw new Error('ha_quorum_not_met');
   const certBody = {
-    schema: 'g-bank-ha-quorum-certificate/v2', cluster_sha256: c.cluster_sha256, cluster_epoch: c.cluster_epoch,
-    proposal_sha256: p.proposal_sha256, proposal_schema: p.schema, quorum_required: c.quorum,
-    signer_node_ids: accepted.map(sig => sig.node_id), signatures: accepted,
-    verified_at: new Date(now).toISOString(), grants_external_rights: false, permits_value_movement_by_itself: false,
+    schema: 'g-bank-ha-quorum-certificate/v2',
+    cluster_sha256: c.cluster_sha256,
+    cluster_epoch: c.cluster_epoch,
+    proposal_sha256: p.proposal_sha256,
+    proposal_schema: p.schema,
+    quorum_required: c.quorum,
+    signer_node_ids: accepted.map(sig => sig.node_id),
+    signatures: accepted,
+    verified_at: new Date(now).toISOString(),
+    grants_external_rights: false,
+    permits_value_movement_by_itself: false,
   };
   return Object.freeze({ ...certBody, certificate_sha256: sha256(canonicalJson(certBody)) });
 }
@@ -130,4 +220,12 @@ function verifyStoredQuorumCertificate({ cluster, proposal: p, certificate }) {
   return true;
 }
 
-module.exports = { normalizeCluster, createFenceProposal, createCommitProposal, signProposal, verifyQuorumCertificate, verifyStoredQuorumCertificate };
+module.exports = {
+  normalizeCluster,
+  createFenceProposal,
+  createCommitProposal,
+  signatureEnvelope,
+  signProposal,
+  verifyQuorumCertificate,
+  verifyStoredQuorumCertificate,
+};
