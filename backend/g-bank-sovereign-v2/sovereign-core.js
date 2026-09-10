@@ -1,8 +1,8 @@
 'use strict';
 
 const path = require('node:path');
-const { canonicalJson, sha256 } = require('../g-bank-live-v1/canonical');
-const { ReceiptLedger } = require('../g-bank-live-v1/receipt-ledger');
+const { canonicalJson, sha256 } = require('./canonical');
+const { SovereignReceiptLedger } = require('./receipt-ledger');
 const { normalizeInstruction } = require('./instruction');
 const { buildPacs008 } = require('./iso20022');
 const { verifyComplianceBundle } = require('./compliance');
@@ -35,7 +35,7 @@ class GBankSovereignCore {
     this.env = env;
     const root = path.resolve(stateDir);
     this.executions = new SovereignExecutionStore(path.join(root, 'executions'));
-    this.receipts = new ReceiptLedger(path.join(root, 'receipts.jsonl'));
+    this.receipts = new SovereignReceiptLedger(path.join(root, 'receipts.jsonl'));
   }
 
   _systemAccounts(currency) {
