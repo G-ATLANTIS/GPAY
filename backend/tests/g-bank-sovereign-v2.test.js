@@ -70,6 +70,18 @@ function instruction(id = 'PAY0000000000001') {
 }
 
 function configureRuntimePromotion(root, e) {
+  const evidenceBindings = {
+    legal_authorization_evidence_sha256: e.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256,
+    scheme_participation_evidence_sha256: e.G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256,
+    settlement_access_evidence_sha256: e.G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256,
+    production_identity_evidence_sha256: e.G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256,
+    transport_preflight_receipt_sha256: H('9'),
+    prudential_audit_sha256: e.G_BANK_PRUDENTIAL_AUDIT_SHA256,
+    operational_resilience_sha256: e.G_BANK_OPERATIONAL_RESILIENCE_SHA256,
+    treasury_assessment_sha256: e.G_BANK_TREASURY_ASSESSMENT_SHA256,
+    customer_monitoring_audit_sha256: e.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256,
+    recovery_audit_sha256: e.G_BANK_RECOVERY_AUDIT_SHA256,
+  };
   const readiness = {
     schema: 'g-bank-sovereign-readiness/v2',
     state: 'DIRECT_LIVE_READY',
@@ -81,6 +93,9 @@ function configureRuntimePromotion(root, e) {
     recovery_controls_verified: true,
     direct_live_ready: true,
     checks: { synthetic_runtime_fixture_verified: true },
+    evidence_bindings: evidenceBindings,
+    transport_scheme: 'SCT_INST',
+    settlement_system: 'TEST-DIRECT',
     value_movement_permitted_by_readiness: true,
     note: 'test fixture only',
   };
@@ -88,18 +103,7 @@ function configureRuntimePromotion(root, e) {
     readiness,
     checkpoint: { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('6') },
     governance: { policy_sha256: H('7'), authority_set_sha256: H('8') },
-    evidence_bindings: {
-      legal_authorization_evidence_sha256: e.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256,
-      scheme_participation_evidence_sha256: e.G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256,
-      settlement_access_evidence_sha256: e.G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256,
-      production_identity_evidence_sha256: e.G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256,
-      transport_preflight_receipt_sha256: H('9'),
-      prudential_audit_sha256: e.G_BANK_PRUDENTIAL_AUDIT_SHA256,
-      operational_resilience_sha256: e.G_BANK_OPERATIONAL_RESILIENCE_SHA256,
-      treasury_assessment_sha256: e.G_BANK_TREASURY_ASSESSMENT_SHA256,
-      customer_monitoring_audit_sha256: e.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256,
-      recovery_audit_sha256: e.G_BANK_RECOVERY_AUDIT_SHA256,
-    },
+    evidence_bindings: evidenceBindings,
     trusted_signing_key_binding_sha256: H('f'),
     ttl_seconds: 300,
     now: NOW,
