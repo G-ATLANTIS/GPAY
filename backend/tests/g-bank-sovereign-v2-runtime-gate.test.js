@@ -28,7 +28,8 @@ function fixture() {
     ha_controls_verified: true, ha_deployment_verified: true, direct_live_ready: true,
     checks: { live_flag: true, recovery_audit_pass: true, customer_monitoring_pass: true, ha_audit_pass: true, ha_deployment_pass: true },
     evidence_bindings,
-    recovery_checkpoint_state_root_sha256: H('b'), ha_checkpoint_state_root_sha256: H('b'), ha_fence_valid_until: FENCE,
+    recovery_checkpoint_state_root_sha256: H('b'), ha_checkpoint_state_root_sha256: H('b'),
+    ha_voter_journal_root_sha256: H('1'), ha_cluster_authority_root_sha256: H('2'), ha_fence_valid_until: FENCE,
     transport_scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT', value_movement_permitted_by_readiness: true,
     note: 'runtime gate test fixture',
   };
@@ -73,6 +74,8 @@ function fixture() {
   assert.equal(gate.recovery_audit_sha256, H('a'));
   assert.equal(gate.ha_audit_sha256, H('f'));
   assert.equal(gate.ha_deployment_audit_sha256, H('0'));
+  assert.equal(gate.ha_voter_journal_root_sha256, H('1'));
+  assert.equal(gate.ha_cluster_authority_root_sha256, H('2'));
   assert.equal(gate.ha_fence_valid_until, FENCE);
   assert.equal(gate.policy_sha256, H('c'));
   assert.equal(gate.authority_set_sha256, H('d'));
@@ -91,6 +94,13 @@ for (const [field, value, pattern] of [
   const f = fixture();
   assert.throws(() => verifyRuntimePromotionGate({ env: { ...f.env, [field]: value }, now: NOW + 1000 }), pattern);
 }
+
+(() => {
+  const f = fixture();
+  const changed = { ...f.readiness, ha_cluster_authority_root_sha256: H('3') };
+  fs.writeFileSync(f.readinessFile, JSON.stringify(changed, null, 2) + '\n');
+  assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 1000 }), /promotion_ha_cluster_authority_root_mismatch|readiness_mismatch/);
+})();
 
 (() => {
   const f = fixture();
