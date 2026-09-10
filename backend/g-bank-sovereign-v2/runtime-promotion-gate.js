@@ -32,6 +32,7 @@ const RUNTIME_BINDINGS = Object.freeze([
   ['treasury_assessment_sha256', 'G_BANK_TREASURY_ASSESSMENT_SHA256'],
   ['customer_monitoring_audit_sha256', 'G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256'],
   ['recovery_audit_sha256', 'G_BANK_RECOVERY_AUDIT_SHA256'],
+  ['ha_audit_sha256', 'G_BANK_HA_AUDIT_SHA256'],
 ]);
 
 function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}) {
@@ -69,6 +70,7 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
     authority_set_sha256: certificate.authority_set_sha256,
     customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
     recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
+    ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
     grants_external_rights: false,
     permits_value_movement_by_itself: false,
     runtime_submit_gate_satisfied: true,
