@@ -22,6 +22,11 @@ function assessmentValid(value, schema, hashField) {
   return sha256(canonicalJson(body)) === supplied;
 }
 
+function timestampFresh(value, now, maxAgeMs = 60000) {
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) && ts <= now + 30000 && now - ts <= maxAgeMs;
+}
+
 function assessSovereignReadiness({
   env = process.env,
   transportPreflight = null,
@@ -30,6 +35,7 @@ function assessSovereignReadiness({
   monitoringAudit = null,
   recoveryAudit = null,
   haAudit = null,
+  haDeploymentAudit = null,
   now = Date.now(),
 } = {}) {
   const safeguarding = prudential?.safeguarding || null;
@@ -43,6 +49,7 @@ function assessSovereignReadiness({
   const configuredMonitoringHash = normalizedHash(env.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256);
   const configuredRecoveryHash = normalizedHash(env.G_BANK_RECOVERY_AUDIT_SHA256);
   const configuredHAHash = normalizedHash(env.G_BANK_HA_AUDIT_SHA256);
+  const configuredHADeploymentHash = normalizedHash(env.G_BANK_HA_DEPLOYMENT_AUDIT_SHA256);
 
   const evidence_bindings = Object.freeze({
     legal_authorization_evidence_sha256: normalizedHash(env.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256),
@@ -56,12 +63,11 @@ function assessSovereignReadiness({
     customer_monitoring_audit_sha256: configuredMonitoringHash,
     recovery_audit_sha256: configuredRecoveryHash,
     ha_audit_sha256: configuredHAHash,
+    ha_deployment_audit_sha256: configuredHADeploymentHash,
   });
   const recoveryCheckpointRoot = normalizedHash(recoveryAudit?.checkpoint_state_root_sha256);
   const haCheckpointRoot = normalizedHash(haAudit?.checkpoint_state_root_sha256);
-  const haFenceValidUntil = Number.isFinite(Date.parse(haAudit?.fence_valid_until))
-    ? new Date(Date.parse(haAudit.fence_valid_until)).toISOString()
-    : null;
+  const haFenceValidUntil = Number.isFinite(Date.parse(haAudit?.fence_valid_until)) ? new Date(Date.parse(haAudit.fence_valid_until)).toISOString() : null;
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -106,7 +112,20 @@ function assessSovereignReadiness({
     ha_fence_current: Boolean(haFenceValidUntil) && Date.parse(haFenceValidUntil) > now,
     ha_no_external_rights: haAudit?.grants_external_rights === false,
     ha_no_value_movement: haAudit?.permits_value_movement_by_itself === false,
-    ha_network_not_faked: haAudit?.distributed_network_verified === false,
+    ha_control_plane_does_not_fake_network: haAudit?.distributed_network_verified === false,
+    ha_deployment_binding_present: sha256Present(configuredHADeploymentHash),
+    ha_deployment_pass: assessmentValid(haDeploymentAudit, 'g-bank-ha-deployment-audit/v2', 'audit_sha256'),
+    ha_deployment_binding_matches: sha256Present(configuredHADeploymentHash) && configuredHADeploymentHash === String(haDeploymentAudit?.audit_sha256 || '').toLowerCase(),
+    ha_deployment_cluster_matches_control_plane: Boolean(haAudit?.cluster_sha256) && haDeploymentAudit?.cluster_sha256 === haAudit.cluster_sha256,
+    ha_deployment_fresh: timestampFresh(haDeploymentAudit?.audited_at, now, 60000),
+    ha_deployment_observation_fresh: timestampFresh(haDeploymentAudit?.observed_at, now, 60000),
+    ha_distributed_network_verified: haDeploymentAudit?.distributed_network_verified === true,
+    ha_all_active_voters_healthy: haDeploymentAudit?.all_active_voters_healthy === true,
+    ha_unique_machine_identities_verified: haDeploymentAudit?.unique_machine_identities_verified === true,
+    ha_unique_endpoints_verified: haDeploymentAudit?.unique_endpoints_verified === true,
+    ha_unique_failure_domains_verified: haDeploymentAudit?.unique_failure_domains_verified === true,
+    ha_deployment_no_external_rights: haDeploymentAudit?.grants_external_rights === false,
+    ha_deployment_no_value_movement: haDeploymentAudit?.permits_value_movement_by_itself === false,
     transport_module_present: Boolean(String(env.G_BANK_SETTLEMENT_TRANSPORT_MODULE || '')),
     settlement_authorization_binding_present: sha256Present(env.G_BANK_SETTLEMENT_AUTHORIZATION_SHA256),
     legal_authorization_evidence_binding_present: sha256Present(evidence_bindings.legal_authorization_evidence_sha256),
@@ -125,7 +144,13 @@ function assessSovereignReadiness({
   const operationalKeys = new Set(['operational_resilience_binding_present','operational_resilience_pass','operational_resilience_binding_matches']);
   const monitoringKeys = new Set(['customer_monitoring_binding_present','customer_monitoring_pass','customer_monitoring_binding_matches']);
   const recoveryKeys = new Set(['recovery_audit_binding_present','recovery_audit_pass','recovery_audit_binding_matches','recovery_checkpoint_root_present','recovery_no_external_rights','recovery_no_live_activation','recovery_no_value_movement']);
-  const haKeys = new Set(['ha_audit_binding_present','ha_audit_pass','ha_audit_binding_matches','ha_checkpoint_root_present','ha_checkpoint_matches_recovery','ha_quorum_present','ha_fence_current','ha_no_external_rights','ha_no_value_movement','ha_network_not_faked']);
+  const haKeys = new Set([
+    'ha_audit_binding_present','ha_audit_pass','ha_audit_binding_matches','ha_checkpoint_root_present','ha_checkpoint_matches_recovery','ha_quorum_present','ha_fence_current',
+    'ha_no_external_rights','ha_no_value_movement','ha_control_plane_does_not_fake_network',
+    'ha_deployment_binding_present','ha_deployment_pass','ha_deployment_binding_matches','ha_deployment_cluster_matches_control_plane',
+    'ha_deployment_fresh','ha_deployment_observation_fresh','ha_distributed_network_verified','ha_all_active_voters_healthy',
+    'ha_unique_machine_identities_verified','ha_unique_endpoints_verified','ha_unique_failure_domains_verified','ha_deployment_no_external_rights','ha_deployment_no_value_movement',
+  ]);
   const staticKeys = Object.keys(checks).filter(k => !transportKeys.has(k) && !prudentialKeys.has(k) && !operationalKeys.has(k) && !monitoringKeys.has(k) && !recoveryKeys.has(k) && !haKeys.has(k));
   const static_configuration_ready = staticKeys.every(k => checks[k] === true);
   const external_transport_verified = [...transportKeys].every(k => checks[k] === true);
@@ -146,6 +171,7 @@ function assessSovereignReadiness({
     customer_monitoring_verified,
     recovery_controls_verified,
     ha_controls_verified,
+    ha_deployment_verified: checks.ha_distributed_network_verified && checks.ha_deployment_pass && checks.ha_deployment_fresh,
     direct_live_ready,
     checks,
     evidence_bindings,
@@ -155,8 +181,8 @@ function assessSovereignReadiness({
     transport_scheme: transportPreflight?.scheme || null,
     settlement_system: transportPreflight?.settlement_system || null,
     value_movement_permitted_by_readiness: direct_live_ready,
-    note: 'direct_live_ready is a technical gate only; it does not itself create legal authorization, scheme membership, central-bank access, settlement rights, or prove distributed network deployment',
+    note: 'direct_live_ready is a technical gate only; distributed HA requires a fresh trusted external deployment attestation and still does not create legal authorization, scheme membership, central-bank access, or settlement rights',
   });
 }
 
-module.exports = { assessSovereignReadiness, sha256Present, positiveInt, assessmentValid, normalizedHash };
+module.exports = { assessSovereignReadiness, sha256Present, positiveInt, assessmentValid, normalizedHash, timestampFresh };
