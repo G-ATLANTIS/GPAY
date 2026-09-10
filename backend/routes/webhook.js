@@ -9,6 +9,7 @@ const { getProcessed, recordProcessed } = require('../utils/payment-idempotency-
 const { acquirePaymentLock } = require('../utils/payment-lock');
 const { createGcoinSettlementIntent } = require('../utils/gcoin-settlement-intent');
 const { createPaymentStateRuntime } = require('../utils/payment-state-runtime');
+const { verifyPaymentIntent } = require('../utils/payment-intent-store');
 const router = express.Router();
 
 function requireMollieConfig() {
@@ -49,31 +50,60 @@ router.post('/mollie/webhook', async (req, res) => {
       });
     }
 
-    const begun = await stateRuntime.begin('mollie', id);
     const payment = await mollieClient.payments.get(id);
-    const { orderId, amount, email } = payment.metadata || {};
+    const { gpayIntentId, orderId, amount, email } = payment.metadata || {};
+    const providerAmount = payment.amount?.value;
+    const currency = payment.amount?.currency || 'EUR';
 
-    if (!orderId || !amount || !email) return res.status(422).json({ error: 'Payment metadata incomplete' });
+    if (!gpayIntentId || !orderId || !amount || !email) {
+      return res.status(422).json({ error: 'Payment metadata incomplete' });
+    }
+
+    if (!providerAmount || Number(providerAmount).toFixed(2) !== Number(amount).toFixed(2)) {
+      return res.status(422).json({ error: 'Provider amount does not match payment metadata', code: 'PAYMENT_AMOUNT_MISMATCH' });
+    }
+
+    const intentVerification = verifyPaymentIntent({
+      intentId: gpayIntentId,
+      providerPaymentId: id,
+      orderId,
+      amount: providerAmount,
+      currency,
+      email,
+    });
+    if (!intentVerification.ok) {
+      return res.status(403).json({
+        error: 'Payment is not bound to a valid GPAY intent',
+        code: 'PAYMENT_INTENT_VERIFICATION_FAILED',
+        reason: intentVerification.reason,
+      });
+    }
+
     if (payment.status !== 'paid') {
       return res.status(200).json({ status: payment.status, providerPaymentId: id, processed: false });
     }
 
+    const begun = await stateRuntime.begin('mollie', id);
     const processedAt = begun.state.processedAt;
-    const currency = payment.amount?.currency || 'EUR';
-    await stateRuntime.advance('mollie', id, 'PROVIDER_VERIFIED', { orderId, amount: String(amount), currency });
+    await stateRuntime.advance('mollie', id, 'PROVIDER_VERIFIED', {
+      gpayIntentId,
+      orderId,
+      amount: String(providerAmount),
+      currency,
+    });
 
     const rewardEventId = crypto.createHash('sha256').update(`mollie:${id}:${orderId}:reward`).digest('hex');
-    const tokens = rewardTokens(amount, email, { eventId: rewardEventId });
+    const tokens = rewardTokens(providerAmount, email, { eventId: rewardEventId });
     const settlementIntent = createGcoinSettlementIntent({
       provider: 'mollie', providerPaymentId: id, orderId,
-      amount: String(amount), currency, rewardEventId,
+      amount: String(providerAmount), currency, rewardEventId,
       gcoinAmount: String(tokens), broadcast: false,
     });
 
-    const invoicePath = await generateInvoice(orderId, amount, email);
+    const invoicePath = await generateInvoice(orderId, providerAmount, email);
     const receipt = createReceipt({
       provider: 'mollie', providerPaymentId: id, orderId,
-      amount: String(amount), currency, status: payment.status, processedAt,
+      amount: String(providerAmount), currency, status: payment.status, processedAt,
       rewardEventId, tokens,
       settlementEventId: settlementIntent.settlementEventId,
       settlementMode: settlementIntent.mode,
@@ -83,6 +113,7 @@ router.post('/mollie/webhook', async (req, res) => {
     });
 
     await stateRuntime.advance('mollie', id, 'EFFECTS_PREPARED', {
+      gpayIntentId,
       receiptHash: receipt.receiptHash,
       settlementEventId: settlementIntent.settlementEventId,
     });
@@ -97,10 +128,13 @@ router.post('/mollie/webhook', async (req, res) => {
       });
     }
 
-    await stateRuntime.advance('mollie', id, 'COMMITTED', { receiptHash: receipt.receiptHash });
+    await stateRuntime.advance('mollie', id, 'COMMITTED', {
+      gpayIntentId,
+      receiptHash: receipt.receiptHash,
+    });
 
     fs.mkdirSync('logs', { recursive: true });
-    fs.appendFileSync('logs/payments.log', `[OK] ${orderId} provider=mollie payment=${id} status=paid receipt=${receipt.receiptHash} gcoin_intent=${settlementIntent.settlementEventId} execution=not_attempted\n`);
+    fs.appendFileSync('logs/payments.log', `[OK] ${orderId} provider=mollie payment=${id} intent=${gpayIntentId} status=paid receipt=${receipt.receiptHash} gcoin_intent=${settlementIntent.settlementEventId} execution=not_attempted\n`);
 
     let notification = 'sent';
     try { await sendMail(email, invoicePath); }
@@ -111,6 +145,7 @@ router.post('/mollie/webhook', async (req, res) => {
 
     return res.status(200).json({
       status: 'processed', providerPaymentId: id,
+      paymentIntentId: gpayIntentId,
       receiptHash: receipt.receiptHash,
       settlementEventId: settlementIntent.settlementEventId,
       settlementMode: settlementIntent.mode,
