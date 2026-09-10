@@ -4,9 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
 const { verifyRecoveryManifest, assertSafeSourcePath, hashDirectory } = require('./recovery-manifest');
+const { verifyRecoveryAnchorRecord } = require('./recovery-anchor-store');
 
 function hashFile(filePath) {
-  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) throw new Error('restore_file_missing');
+  if (!fs.existsSync(filePath)) throw new Error('restore_file_missing');
+  const stat = fs.lstatSync(filePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('restore_file_invalid');
   return sha256(fs.readFileSync(filePath));
 }
 
@@ -18,7 +21,7 @@ function resolveRestoredPath(root, label, kind) {
 
 function verifyRestoreCandidate({ manifest, anchor, restore_root, checkpoint }) {
   verifyRecoveryManifest(manifest);
-  if (!anchor || anchor.schema !== 'g-bank-recovery-anchor/v2') throw new Error('restore_anchor_required');
+  verifyRecoveryAnchorRecord(anchor);
   if (anchor.generation !== manifest.generation) throw new Error('restore_generation_anchor_mismatch');
   if (anchor.manifest_sha256 !== manifest.manifest_sha256) throw new Error('restore_manifest_anchor_mismatch');
   if (anchor.previous_manifest_sha256 !== manifest.previous_manifest_sha256) throw new Error('restore_manifest_chain_anchor_mismatch');
@@ -27,7 +30,9 @@ function verifyRestoreCandidate({ manifest, anchor, restore_root, checkpoint }) 
   if (checkpoint.state_root_sha256 !== manifest.checkpoint_state_root_sha256) throw new Error('restore_checkpoint_state_root_mismatch');
 
   const root = path.resolve(String(restore_root || ''));
-  if (!root || root === path.parse(root).root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new Error('restore_root_invalid');
+  if (!root || root === path.parse(root).root || !fs.existsSync(root)) throw new Error('restore_root_invalid');
+  const rootStat = fs.lstatSync(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('restore_root_invalid');
   assertSafeSourcePath(root);
   const checks = [];
   for (const item of manifest.items) {
@@ -36,14 +41,16 @@ function verifyRestoreCandidate({ manifest, anchor, restore_root, checkpoint }) 
       checks.push(Object.freeze({ label: item.label, present: false, hash_match: false, size_match: false }));
       continue;
     }
+    const stat = fs.lstatSync(restored);
+    if (stat.isSymbolicLink()) throw new Error('restore_symlink_forbidden');
     let currentHash;
     let currentSize;
     if (item.kind === 'FILE') {
-      if (!fs.statSync(restored).isFile()) throw new Error('restore_item_kind_mismatch');
+      if (!stat.isFile()) throw new Error('restore_item_kind_mismatch');
       currentHash = hashFile(restored);
-      currentSize = fs.statSync(restored).size;
+      currentSize = stat.size;
     } else if (item.kind === 'DIRECTORY') {
-      if (!fs.statSync(restored).isDirectory()) throw new Error('restore_item_kind_mismatch');
+      if (!stat.isDirectory()) throw new Error('restore_item_kind_mismatch');
       const directory = hashDirectory(restored);
       currentHash = directory.root_sha256;
       currentSize = directory.rows.reduce((sum, row) => sum + row.size_bytes, 0);
@@ -74,14 +81,16 @@ function verifyRestoreCandidate({ manifest, anchor, restore_root, checkpoint }) 
 
 function assertNoRollback({ candidateManifest, trustedAnchor }) {
   verifyRecoveryManifest(candidateManifest);
-  if (!trustedAnchor || trustedAnchor.schema !== 'g-bank-recovery-anchor/v2') throw new Error('restore_trusted_anchor_required');
-  if (candidateManifest.generation < trustedAnchor.generation) throw new Error('restore_rollback_generation_denied');
-  if (candidateManifest.generation === trustedAnchor.generation && candidateManifest.manifest_sha256 !== trustedAnchor.manifest_sha256) {
-    throw new Error('restore_same_generation_root_conflict');
+  verifyRecoveryAnchorRecord(trustedAnchor);
+  const candidateGeneration = Number(candidateManifest.generation);
+  const trustedGeneration = Number(trustedAnchor.generation);
+  if (candidateGeneration < trustedGeneration) throw new Error('restore_rollback_generation_denied');
+  if (candidateGeneration === trustedGeneration) {
+    if (candidateManifest.manifest_sha256 !== trustedAnchor.manifest_sha256) throw new Error('restore_same_generation_root_conflict');
+    return true;
   }
-  if (candidateManifest.generation > trustedAnchor.generation && candidateManifest.previous_manifest_sha256 !== trustedAnchor.manifest_sha256) {
-    throw new Error('restore_forward_chain_disconnected');
-  }
+  if (candidateGeneration !== trustedGeneration + 1) throw new Error('restore_intermediate_anchors_required');
+  if (candidateManifest.previous_manifest_sha256 !== trustedAnchor.manifest_sha256) throw new Error('restore_forward_chain_disconnected');
   return true;
 }
 
