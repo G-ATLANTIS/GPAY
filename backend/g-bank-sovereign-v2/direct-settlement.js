@@ -6,9 +6,7 @@ const { verifyRuntimePromotionGate } = require('./runtime-promotion-gate');
 
 class DirectSettlementAdapter {
   constructor({ transport, env = process.env, name = 'g-direct-settlement', clock = () => Date.now() } = {}) {
-    if (!transport || typeof transport.preflight !== 'function' || typeof transport.submit !== 'function' || typeof transport.readback !== 'function') {
-      throw new Error('settlement_transport_invalid');
-    }
+    if (!transport || typeof transport.preflight !== 'function' || typeof transport.submit !== 'function' || typeof transport.readback !== 'function') throw new Error('settlement_transport_invalid');
     if (typeof clock !== 'function') throw new Error('settlement_clock_invalid');
     this.transport = transport;
     this.env = env;
@@ -40,26 +38,16 @@ class DirectSettlementAdapter {
   async preflight() {
     const authorization_sha256 = this._requireEnabled();
     const result = await this.transport.preflight();
-    if (!result || result.environment !== 'LIVE' || result.authenticated !== true || result.connected !== true) {
-      throw new Error('direct_settlement_preflight_not_verified');
-    }
+    if (!result || result.environment !== 'LIVE' || result.authenticated !== true || result.connected !== true) throw new Error('direct_settlement_preflight_not_verified');
     if (!['SCT', 'SCT_INST'].includes(result.scheme)) throw new Error('direct_settlement_scheme_invalid');
     if (!result.external_receipt_sha256) throw new Error('direct_settlement_preflight_receipt_required');
     assertSha256('settlement_preflight_receipt_sha256', result.external_receipt_sha256);
     const observed_at = result.observed_at || new Date(this.clock()).toISOString();
     const receipt = Object.freeze({
-      provider: this.name,
-      environment: 'LIVE',
-      authenticated: true,
-      connected: true,
-      scheme: result.scheme,
-      settlement_system: result.settlement_system || null,
-      external_receipt_sha256: result.external_receipt_sha256,
-      authorization_sha256,
-      provider_http_status: result.provider_http_status ?? null,
-      payment_message_submitted: false,
-      value_moved: false,
-      observed_at,
+      provider: this.name, environment: 'LIVE', authenticated: true, connected: true, scheme: result.scheme,
+      settlement_system: result.settlement_system || null, external_receipt_sha256: result.external_receipt_sha256,
+      authorization_sha256, provider_http_status: result.provider_http_status ?? null, payment_message_submitted: false,
+      value_moved: false, observed_at,
     });
     this.lastPreflight = receipt;
     return receipt;
@@ -75,16 +63,13 @@ class DirectSettlementAdapter {
     if (!idempotencyKey) throw new Error('settlement_idempotency_key_required');
 
     const response = await this.transport.submit({
-      message_type: message.message_type,
-      message_document: message.document,
-      message_sha256: message.document_sha256,
-      instruction,
-      idempotency_key: idempotencyKey,
-      authorization_sha256,
+      message_type: message.message_type, message_document: message.document, message_sha256: message.document_sha256,
+      instruction, idempotency_key: idempotencyKey, authorization_sha256,
       runtime_promotion_gate_sha256: runtimeGate.gate_sha256,
       promotion_certificate_sha256: runtimeGate.promotion_certificate_sha256,
       recovery_audit_sha256: runtimeGate.recovery_audit_sha256,
       customer_monitoring_audit_sha256: runtimeGate.customer_monitoring_audit_sha256,
+      ha_audit_sha256: runtimeGate.ha_audit_sha256,
       runtime_preflight_receipt_sha256: preflight.external_receipt_sha256,
     });
     if (!response?.submission_id) throw new Error('settlement_submission_id_missing');
@@ -92,21 +77,13 @@ class DirectSettlementAdapter {
     assertSha256('settlement_submission_receipt_sha256', response.external_receipt_sha256);
 
     const receipt = {
-      schema: 'g-bank-direct-settlement-submission/v2',
-      provider: this.name,
-      environment: 'LIVE',
-      submission_id: String(response.submission_id),
-      status: String(response.status || 'SUBMITTED'),
-      message_type: message.message_type,
-      message_sha256: message.document_sha256,
-      instruction_sha256: instruction.instruction_sha256,
-      runtime_promotion_gate_sha256: runtimeGate.gate_sha256,
-      promotion_certificate_sha256: runtimeGate.promotion_certificate_sha256,
-      recovery_audit_sha256: runtimeGate.recovery_audit_sha256,
-      customer_monitoring_audit_sha256: runtimeGate.customer_monitoring_audit_sha256,
-      runtime_preflight_receipt_sha256: preflight.external_receipt_sha256,
-      external_receipt_sha256: response.external_receipt_sha256,
-      provider_request_id: response.provider_request_id || null,
+      schema: 'g-bank-direct-settlement-submission/v2', provider: this.name, environment: 'LIVE',
+      submission_id: String(response.submission_id), status: String(response.status || 'SUBMITTED'),
+      message_type: message.message_type, message_sha256: message.document_sha256, instruction_sha256: instruction.instruction_sha256,
+      runtime_promotion_gate_sha256: runtimeGate.gate_sha256, promotion_certificate_sha256: runtimeGate.promotion_certificate_sha256,
+      recovery_audit_sha256: runtimeGate.recovery_audit_sha256, customer_monitoring_audit_sha256: runtimeGate.customer_monitoring_audit_sha256,
+      ha_audit_sha256: runtimeGate.ha_audit_sha256, runtime_preflight_receipt_sha256: preflight.external_receipt_sha256,
+      external_receipt_sha256: response.external_receipt_sha256, provider_request_id: response.provider_request_id || null,
       observed_at: new Date(now).toISOString(),
     };
     receipt.receipt_sha256 = sha256(canonicalJson(receipt));
@@ -119,19 +96,10 @@ class DirectSettlementAdapter {
     if (!result?.external_receipt_sha256) throw new Error('settlement_readback_receipt_missing');
     assertSha256('settlement_readback_receipt_sha256', result.external_receipt_sha256);
     const status = String(result.status || 'UNKNOWN').toUpperCase();
-    if (!['SUBMITTED', 'ACCEPTED', 'SETTLED', 'REJECTED', 'UNKNOWN'].includes(status)) {
-      throw new Error('settlement_readback_status_invalid');
-    }
-    return Object.freeze({
-      provider: this.name,
-      environment: 'LIVE',
-      submission_id: String(submissionId),
-      status,
-      settlement_reference: result.settlement_reference || null,
-      external_receipt_sha256: result.external_receipt_sha256,
-      provider_request_id: result.provider_request_id || null,
-      observed_at: result.observed_at || new Date(this.clock()).toISOString(),
-    });
+    if (!['SUBMITTED', 'ACCEPTED', 'SETTLED', 'REJECTED', 'UNKNOWN'].includes(status)) throw new Error('settlement_readback_status_invalid');
+    return Object.freeze({ provider: this.name, environment: 'LIVE', submission_id: String(submissionId), status,
+      settlement_reference: result.settlement_reference || null, external_receipt_sha256: result.external_receipt_sha256,
+      provider_request_id: result.provider_request_id || null, observed_at: result.observed_at || new Date(this.clock()).toISOString() });
   }
 }
 
