@@ -14,6 +14,7 @@ const { assessOperationalResilience } = require('../g-bank-sovereign-v2/operatio
 const { assessTreasuryPosition, verifySettlementLiquidityEvidence } = require('../g-bank-sovereign-v2/treasury-position');
 const { snapshotState } = require('../g-bank-sovereign-v2/checkpoint');
 const { createEndOfDayClose } = require('../g-bank-sovereign-v2/eod-close');
+const { EndOfDayStore } = require('../g-bank-sovereign-v2/eod-store');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T20:00:00.000Z');
@@ -139,6 +140,19 @@ function setup() {
   assert.equal(close.state, 'CLOSED');
   assert.match(close.close_sha256, /^[0-9a-f]{64}$/);
 
+  const eodStore = new EndOfDayStore(path.join(s.root, 'eod'));
+  const committed = eodStore.commit(close);
+  assert.equal(committed.close_sha256, close.close_sha256);
+  assert.equal(eodStore.read('2026-09-10').close_sha256, close.close_sha256);
+  assert.equal(eodStore.commit(close).close_sha256, close.close_sha256, 'same EOD root is idempotent');
+
+  const conflictingBody = { ...close, closed_at: new Date(NOW + 1000).toISOString() };
+  delete conflictingBody.close_sha256;
+  const conflicting = { ...conflictingBody, close_sha256: sha256(canonicalJson(conflictingBody)) };
+  assert.throws(() => eodStore.commit(conflicting), /business_date_already_closed_with_different_root/);
+  const tamperedClose = { ...close, state_root_sha256: H('f') };
+  assert.throws(() => eodStore.commit(tamperedClose), /eod_close_hash_mismatch/);
+
   const constrained = assessTreasuryPosition({
     accounts: s.accounts,
     ledger: s.ledger,
@@ -163,6 +177,7 @@ function setup() {
   });
   assert.equal(blockedClose.state, 'BLOCK');
   assert(blockedClose.reasons.includes('TREASURY_BLOCKED'));
+  assert.throws(() => eodStore.commit(blockedClose), /eod_close_not_closed/);
 
   const tamperedEvidence = { ...evidence, available_minor: 999999 };
   assert.throws(() => verifySettlementLiquidityEvidence(tamperedEvidence, { currency: 'EUR', now: NOW }), /hash_mismatch/);
