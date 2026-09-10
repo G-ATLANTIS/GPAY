@@ -64,6 +64,26 @@ function emptyInboundReconciliation(inboundPath) {
   return reconcileInboundStatement({ inboundStore, statement, now: NOW });
 }
 
+function monitoringFleetAudit(state = 'PASS') {
+  const body = {
+    schema: 'g-bank-monitoring-fleet-audit/v2',
+    state,
+    policy_sha256: H('c'),
+    policy_epoch: 7,
+    monitorable_customer_count: 0,
+    assessment_count: 0,
+    clear_customer_count: 0,
+    review_required_customer_count: 0,
+    suspended_customer_count: 0,
+    reasons: state === 'PASS' ? [] : ['TEST_MONITORING_BLOCK'],
+    audited_at: new Date(NOW - 500).toISOString(),
+    regulatory_determination_made: false,
+    external_report_submitted: false,
+    permits_value_movement_by_itself: false,
+  };
+  return Object.freeze({ ...body, audit_sha256: sha256(canonicalJson(body)) });
+}
+
 function setup() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-treasury-v2-'));
   const accountsPath = path.join(root, 'accounts.json');
@@ -147,6 +167,7 @@ function setup() {
     inboundStatePath: s.inboundPath,
     now: NOW,
   });
+  assert.match(checkpoint.monitoring_policy_root_sha256, /^[0-9a-f]{64}$/);
   const resilience = assessOperationalResilience({
     ledger_verified: true,
     receipt_chain_verified: true,
@@ -161,10 +182,12 @@ function setup() {
   assert.equal(resilience.state, 'PASS');
   const settlementReconciliation = emptySettlementReconciliation();
   const inboundSettlementReconciliation = emptyInboundReconciliation(s.inboundPath);
+  const monitoring = monitoringFleetAudit();
   assert.equal(settlementReconciliation.state, 'PASS');
   assert.equal(inboundSettlementReconciliation.state, 'PASS');
+  assert.equal(monitoring.state, 'PASS');
 
-  const close = createEndOfDayClose({
+  const closeArgs = {
     business_date: '2026-09-10',
     checkpoint,
     invariantAudit: invariant,
@@ -174,9 +197,13 @@ function setup() {
     resilienceAssessment: resilience,
     settlementReconciliation,
     inboundSettlementReconciliation,
+    monitoringFleetAudit: monitoring,
     now: NOW,
-  });
+  };
+  const close = createEndOfDayClose(closeArgs);
   assert.equal(close.state, 'CLOSED');
+  assert.equal(close.monitoring_fleet_audit_sha256, monitoring.audit_sha256);
+  assert.equal(close.monitoring_policy_root_sha256, checkpoint.monitoring_policy_root_sha256);
   assert.match(close.close_sha256, /^[0-9a-f]{64}$/);
 
   const eodStore = new EndOfDayStore(path.join(s.root, 'eod'));
@@ -204,18 +231,7 @@ function setup() {
   assert.equal(constrained.state, 'BLOCK');
   assert.equal(constrained.settlement_headroom_minor, -2000);
 
-  const blockedClose = createEndOfDayClose({
-    business_date: '2026-09-10',
-    checkpoint,
-    invariantAudit: invariant,
-    safeguardingAssessment: safeguarding,
-    liquidityAssessment: liquidity,
-    treasuryAssessment: constrained,
-    resilienceAssessment: resilience,
-    settlementReconciliation,
-    inboundSettlementReconciliation,
-    now: NOW,
-  });
+  const blockedClose = createEndOfDayClose({ ...closeArgs, treasuryAssessment: constrained });
   assert.equal(blockedClose.state, 'BLOCK');
   assert(blockedClose.reasons.includes('TREASURY_BLOCKED'));
   assert.throws(() => eodStore.commit(blockedClose), /eod_close_not_closed/);
@@ -226,18 +242,7 @@ function setup() {
     ...blockedReconciliationBody,
     reconciliation_sha256: sha256(canonicalJson(blockedReconciliationBody)),
   };
-  const reconBlockedClose = createEndOfDayClose({
-    business_date: '2026-09-10',
-    checkpoint,
-    invariantAudit: invariant,
-    safeguardingAssessment: safeguarding,
-    liquidityAssessment: liquidity,
-    treasuryAssessment: treasury,
-    resilienceAssessment: resilience,
-    settlementReconciliation: blockedReconciliation,
-    inboundSettlementReconciliation,
-    now: NOW,
-  });
+  const reconBlockedClose = createEndOfDayClose({ ...closeArgs, settlementReconciliation: blockedReconciliation });
   assert.equal(reconBlockedClose.state, 'BLOCK');
   assert(reconBlockedClose.reasons.includes('SETTLEMENT_RECONCILIATION_BLOCKED'));
 
@@ -247,20 +252,18 @@ function setup() {
     ...blockedInboundBody,
     reconciliation_sha256: sha256(canonicalJson(blockedInboundBody)),
   };
-  const inboundBlockedClose = createEndOfDayClose({
-    business_date: '2026-09-10',
-    checkpoint,
-    invariantAudit: invariant,
-    safeguardingAssessment: safeguarding,
-    liquidityAssessment: liquidity,
-    treasuryAssessment: treasury,
-    resilienceAssessment: resilience,
-    settlementReconciliation,
-    inboundSettlementReconciliation: blockedInbound,
-    now: NOW,
-  });
+  const inboundBlockedClose = createEndOfDayClose({ ...closeArgs, inboundSettlementReconciliation: blockedInbound });
   assert.equal(inboundBlockedClose.state, 'BLOCK');
   assert(inboundBlockedClose.reasons.includes('INBOUND_SETTLEMENT_RECONCILIATION_BLOCKED'));
+
+  const monitoringBlockedClose = createEndOfDayClose({ ...closeArgs, monitoringFleetAudit: monitoringFleetAudit('BLOCK') });
+  assert.equal(monitoringBlockedClose.state, 'BLOCK');
+  assert(monitoringBlockedClose.reasons.includes('CUSTOMER_MONITORING_BLOCKED'));
+
+  const checkpointWithoutMonitoringPolicy = { ...checkpoint, monitoring_policy_root_sha256: null };
+  const missingPolicyClose = createEndOfDayClose({ ...closeArgs, checkpoint: checkpointWithoutMonitoringPolicy });
+  assert.equal(missingPolicyClose.state, 'BLOCK');
+  assert(missingPolicyClose.reasons.includes('MONITORING_POLICY_ROOT_MISSING'));
 
   const tamperedEvidence = { ...evidence, available_minor: 999999 };
   assert.throws(() => verifySettlementLiquidityEvidence(tamperedEvidence, { currency: 'EUR', now: NOW }), /hash_mismatch/);
@@ -272,18 +275,7 @@ function setup() {
     emergency_freeze: true,
     now: NOW,
   });
-  const frozenClose = createEndOfDayClose({
-    business_date: '2026-09-10',
-    checkpoint,
-    invariantAudit: invariant,
-    safeguardingAssessment: safeguarding,
-    liquidityAssessment: liquidity,
-    treasuryAssessment: treasury,
-    resilienceAssessment: frozen,
-    settlementReconciliation,
-    inboundSettlementReconciliation,
-    now: NOW,
-  });
+  const frozenClose = createEndOfDayClose({ ...closeArgs, resilienceAssessment: frozen });
   assert.equal(frozenClose.state, 'BLOCK');
   assert(frozenClose.reasons.includes('RESILIENCE_BLOCKED'));
 
