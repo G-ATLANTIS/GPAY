@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
+  "version": "1.8.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -15,12 +15,14 @@
     "local_state_atomic_replace_and_fsync": true,
     "local_crash_recovery_state_machine_only": true,
     "payment_state_adapter_contract_implemented": true,
+    "payment_state_runtime_wired_into_mollie_webhook": true,
     "postgres_payment_state_schema_implemented": true,
     "postgres_unique_provider_payment_identity": true,
     "postgres_versioned_compare_and_set_stage_transition": true,
     "postgres_backend_missing_config_fails_closed": true,
     "postgres_backend_missing_driver_fails_closed": true,
     "no_silent_postgres_to_local_fallback": true,
+    "shared_runtime_cas_contention_test_implemented": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -41,7 +43,8 @@
   "verification": {
     "webhook_mount_and_lazy_client_ci": "passed",
     "recovery_state_machine_ci": "passed",
-    "postgres_adapter_contract_ci": "pending"
+    "postgres_adapter_contract_ci": "pending",
+    "shared_runtime_contention_ci": "pending"
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
