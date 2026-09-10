@@ -6,6 +6,10 @@ function sha256Present(value) {
   return /^[0-9a-f]{64}$/i.test(String(value || ''));
 }
 
+function normalizedHash(value) {
+  return sha256Present(value) ? String(value).toLowerCase() : null;
+}
+
 function positiveInt(value) {
   const n = Number(value);
   return Number.isSafeInteger(n) && n >= 1;
@@ -31,11 +35,24 @@ function assessSovereignReadiness({
   const invariantAudit = prudential?.invariant_audit || null;
   const operational = prudential?.operational_resilience || null;
   const treasury = prudential?.treasury || null;
-  const configuredPrudentialHash = String(env.G_BANK_PRUDENTIAL_AUDIT_SHA256 || '').toLowerCase();
-  const configuredOperationalHash = String(env.G_BANK_OPERATIONAL_RESILIENCE_SHA256 || '').toLowerCase();
-  const configuredTreasuryHash = String(env.G_BANK_TREASURY_ASSESSMENT_SHA256 || '').toLowerCase();
-  const configuredMonitoringHash = String(env.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256 || '').toLowerCase();
-  const configuredRecoveryHash = String(env.G_BANK_RECOVERY_AUDIT_SHA256 || '').toLowerCase();
+  const configuredPrudentialHash = normalizedHash(env.G_BANK_PRUDENTIAL_AUDIT_SHA256);
+  const configuredOperationalHash = normalizedHash(env.G_BANK_OPERATIONAL_RESILIENCE_SHA256);
+  const configuredTreasuryHash = normalizedHash(env.G_BANK_TREASURY_ASSESSMENT_SHA256);
+  const configuredMonitoringHash = normalizedHash(env.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256);
+  const configuredRecoveryHash = normalizedHash(env.G_BANK_RECOVERY_AUDIT_SHA256);
+
+  const evidence_bindings = Object.freeze({
+    legal_authorization_evidence_sha256: normalizedHash(env.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256),
+    scheme_participation_evidence_sha256: normalizedHash(env.G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256),
+    settlement_access_evidence_sha256: normalizedHash(env.G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256),
+    production_identity_evidence_sha256: normalizedHash(env.G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256),
+    transport_preflight_receipt_sha256: normalizedHash(transportPreflight?.external_receipt_sha256),
+    prudential_audit_sha256: configuredPrudentialHash,
+    operational_resilience_sha256: configuredOperationalHash,
+    treasury_assessment_sha256: configuredTreasuryHash,
+    customer_monitoring_audit_sha256: configuredMonitoringHash,
+    recovery_audit_sha256: configuredRecoveryHash,
+  });
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -72,13 +89,13 @@ function assessSovereignReadiness({
     recovery_no_value_movement: recoveryAudit?.permits_value_movement === false,
     transport_module_present: Boolean(String(env.G_BANK_SETTLEMENT_TRANSPORT_MODULE || '')),
     settlement_authorization_binding_present: sha256Present(env.G_BANK_SETTLEMENT_AUTHORIZATION_SHA256),
-    legal_authorization_evidence_binding_present: sha256Present(env.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256),
-    scheme_participation_evidence_binding_present: sha256Present(env.G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256),
-    settlement_access_evidence_binding_present: sha256Present(env.G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256),
-    production_identity_evidence_binding_present: sha256Present(env.G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256),
+    legal_authorization_evidence_binding_present: sha256Present(evidence_bindings.legal_authorization_evidence_sha256),
+    scheme_participation_evidence_binding_present: sha256Present(evidence_bindings.scheme_participation_evidence_sha256),
+    settlement_access_evidence_binding_present: sha256Present(evidence_bindings.settlement_access_evidence_sha256),
+    production_identity_evidence_binding_present: sha256Present(evidence_bindings.production_identity_evidence_sha256),
     transport_live_authenticated: transportPreflight?.environment === 'LIVE' && transportPreflight?.authenticated === true,
     transport_live_connected: transportPreflight?.connected === true,
-    transport_external_receipt_present: sha256Present(transportPreflight?.external_receipt_sha256),
+    transport_external_receipt_present: sha256Present(evidence_bindings.transport_preflight_receipt_sha256),
     transport_scheme_supported: ['SCT', 'SCT_INST'].includes(transportPreflight?.scheme),
     settlement_system_identified: Boolean(transportPreflight?.settlement_system),
   };
@@ -138,9 +155,12 @@ function assessSovereignReadiness({
     recovery_controls_verified,
     direct_live_ready,
     checks,
+    evidence_bindings,
+    transport_scheme: transportPreflight?.scheme || null,
+    settlement_system: transportPreflight?.settlement_system || null,
     value_movement_permitted_by_readiness: direct_live_ready,
     note: 'direct_live_ready is a technical gate only; it does not itself create legal authorization, scheme membership, central-bank access, or settlement rights',
   });
 }
 
-module.exports = { assessSovereignReadiness, sha256Present, positiveInt, assessmentValid };
+module.exports = { assessSovereignReadiness, sha256Present, positiveInt, assessmentValid, normalizedHash };
