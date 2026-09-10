@@ -1,6 +1,6 @@
 'use strict';
 
-const { canonicalJson, sha256 } = require('../g-bank-live-v1/canonical');
+const { canonicalJson, sha256 } = require('./canonical');
 
 function assertSha256(name, value) {
   const v = String(value || '').toLowerCase();
@@ -39,9 +39,7 @@ function verifyComplianceBundle(bundle, {
     assertFresh('verification_of_payee', vop.observed_at, now, max_vop_age_ms);
     assertSha256('vop_evidence_sha256', vop.evidence_sha256);
   } else if (vop) {
-    if (!['MATCH', 'CLOSE_MATCH', 'NO_MATCH', 'NOT_AVAILABLE'].includes(vop.result)) {
-      throw new Error('verification_of_payee_result_invalid');
-    }
+    if (!['MATCH', 'CLOSE_MATCH', 'NO_MATCH', 'NOT_AVAILABLE'].includes(vop.result)) throw new Error('verification_of_payee_result_invalid');
     assertFresh('verification_of_payee', vop.observed_at, now, max_vop_age_ms);
     assertSha256('vop_evidence_sha256', vop.evidence_sha256);
   }
