@@ -35,6 +35,8 @@ jobs:
           node --check backend/g-bank-sovereign-v2/monitoring-evidence.js
           node --check backend/g-bank-sovereign-v2/evidence-revocation-store.js
           node --check backend/g-bank-sovereign-v2/monitoring-case-store.js
+          node --check backend/g-bank-sovereign-v2/monitoring-policy.js
+          node --check backend/g-bank-sovereign-v2/monitoring-case-sla.js
           node --check backend/g-bank-sovereign-v2/transaction-monitoring.js
           node --check backend/g-bank-sovereign-v2/transaction-activity-source.js
           node --check backend/g-bank-sovereign-v2/continuous-customer-monitoring.js
