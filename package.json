@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "node backend/utils/provider-evidence-client.test.js",
+    "test": "node --test tests/*.test.js",
     "test:provider-evidence": "node backend/utils/provider-evidence-client.test.js",
-    "proof:mollie:sandbox": "node scripts/run-mollie-sandbox-proof.js"
+    "proof:mollie:sandbox": "node scripts/run-mollie-sandbox-proof.js",
+    "preflight:production": "node backend/utils/production-preflight.js"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,7 @@
     "fs-extra": "^11.3.0",
     "nodemailer": "^7.0.5",
     "pdfkit": "^0.17.1",
+    "pg": "8.23.0",
     "qrcode": "^1.5.4",
     "web3": "^4.16.0"
   },
