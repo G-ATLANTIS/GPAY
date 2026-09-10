@@ -37,7 +37,7 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     direct_live_ready,
     checks,
     value_movement_permitted_by_readiness: direct_live_ready,
-    note: direct_live_ready is a technical gate only; it does not itself create legal authorization or scheme membership,
+    note: 'direct_live_ready is a technical gate only; it does not itself create legal authorization or scheme membership',
   });
 }
 
