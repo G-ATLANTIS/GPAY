@@ -67,7 +67,13 @@ function assessSovereignReadiness({
   });
   const recoveryCheckpointRoot = normalizedHash(recoveryAudit?.checkpoint_state_root_sha256);
   const haCheckpointRoot = normalizedHash(haAudit?.checkpoint_state_root_sha256);
+  const haVoterJournalRoot = normalizedHash(haAudit?.voter_journal_root_sha256);
   const haFenceValidUntil = Number.isFinite(Date.parse(haAudit?.fence_valid_until)) ? new Date(Date.parse(haAudit.fence_valid_until)).toISOString() : null;
+  const haQuorum = Number(haAudit?.quorum);
+  const haActiveVoters = Number(haAudit?.active_voter_count);
+  const haJournalStores = Number(haAudit?.voter_journal_store_count);
+  const durableFenceSigners = Number(haAudit?.durable_fence_signer_count);
+  const durableCommitSigners = Number(haAudit?.durable_commit_signer_count);
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -108,7 +114,11 @@ function assessSovereignReadiness({
     ha_audit_binding_matches: sha256Present(configuredHAHash) && configuredHAHash === String(haAudit?.audit_sha256 || '').toLowerCase(),
     ha_checkpoint_root_present: sha256Present(haCheckpointRoot),
     ha_checkpoint_matches_recovery: sha256Present(haCheckpointRoot) && sha256Present(recoveryCheckpointRoot) && haCheckpointRoot === recoveryCheckpointRoot,
-    ha_quorum_present: positiveInt(haAudit?.quorum) && Number(haAudit?.active_voter_count) >= Number(haAudit?.quorum),
+    ha_quorum_present: Number.isSafeInteger(haQuorum) && haQuorum >= 2 && Number.isSafeInteger(haActiveVoters) && haActiveVoters >= haQuorum,
+    ha_voter_journal_root_present: sha256Present(haVoterJournalRoot),
+    ha_voter_journal_store_coverage_complete: Number.isSafeInteger(haJournalStores) && Number.isSafeInteger(haActiveVoters) && haJournalStores === haActiveVoters,
+    ha_durable_fence_quorum: Number.isSafeInteger(durableFenceSigners) && Number.isSafeInteger(haQuorum) && durableFenceSigners >= haQuorum,
+    ha_durable_commit_quorum: Number.isSafeInteger(durableCommitSigners) && Number.isSafeInteger(haQuorum) && durableCommitSigners >= haQuorum,
     ha_fence_current: Boolean(haFenceValidUntil) && Date.parse(haFenceValidUntil) > now,
     ha_no_external_rights: haAudit?.grants_external_rights === false,
     ha_no_value_movement: haAudit?.permits_value_movement_by_itself === false,
@@ -145,7 +155,8 @@ function assessSovereignReadiness({
   const monitoringKeys = new Set(['customer_monitoring_binding_present','customer_monitoring_pass','customer_monitoring_binding_matches']);
   const recoveryKeys = new Set(['recovery_audit_binding_present','recovery_audit_pass','recovery_audit_binding_matches','recovery_checkpoint_root_present','recovery_no_external_rights','recovery_no_live_activation','recovery_no_value_movement']);
   const haKeys = new Set([
-    'ha_audit_binding_present','ha_audit_pass','ha_audit_binding_matches','ha_checkpoint_root_present','ha_checkpoint_matches_recovery','ha_quorum_present','ha_fence_current',
+    'ha_audit_binding_present','ha_audit_pass','ha_audit_binding_matches','ha_checkpoint_root_present','ha_checkpoint_matches_recovery','ha_quorum_present',
+    'ha_voter_journal_root_present','ha_voter_journal_store_coverage_complete','ha_durable_fence_quorum','ha_durable_commit_quorum','ha_fence_current',
     'ha_no_external_rights','ha_no_value_movement','ha_control_plane_does_not_fake_network',
     'ha_deployment_binding_present','ha_deployment_pass','ha_deployment_binding_matches','ha_deployment_cluster_matches_control_plane',
     'ha_deployment_fresh','ha_deployment_observation_fresh','ha_distributed_network_verified','ha_all_active_voters_healthy',
@@ -177,11 +188,12 @@ function assessSovereignReadiness({
     evidence_bindings,
     recovery_checkpoint_state_root_sha256: recoveryCheckpointRoot,
     ha_checkpoint_state_root_sha256: haCheckpointRoot,
+    ha_voter_journal_root_sha256: haVoterJournalRoot,
     ha_fence_valid_until: haFenceValidUntil,
     transport_scheme: transportPreflight?.scheme || null,
     settlement_system: transportPreflight?.settlement_system || null,
     value_movement_permitted_by_readiness: direct_live_ready,
-    note: 'direct_live_ready is a technical gate only; distributed HA requires a fresh trusted external deployment attestation and still does not create legal authorization, scheme membership, central-bank access, or settlement rights',
+    note: 'direct_live_ready is a technical gate only; durable quorum journals and a fresh trusted external distributed-HA attestation are mandatory and still do not create legal authorization, scheme membership, central-bank access, or settlement rights',
   });
 }
 
