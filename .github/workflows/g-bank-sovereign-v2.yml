@@ -29,6 +29,7 @@ jobs:
           node --check backend/g-bank-sovereign-v2/receipt-ledger.js
           node --check backend/g-bank-sovereign-v2/ledger.js
           node --check backend/g-bank-sovereign-v2/accounts.js
+          node --check backend/g-bank-sovereign-v2/account-operation-lock.js
           node --check backend/g-bank-sovereign-v2/account-lifecycle.js
           node --check backend/g-bank-sovereign-v2/account-balance-view.js
           node --check backend/g-bank-sovereign-v2/account-statements.js
