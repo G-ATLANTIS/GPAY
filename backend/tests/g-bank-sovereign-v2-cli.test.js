@@ -19,7 +19,6 @@ const challengeStore = path.join(root, 'runtime-ha-challenges.jsonl');
 const challengeOut = path.join(root, 'runtime-ha-challenge.json');
 const preparedPath = path.join(root, 'prepared.json');
 const promotionPath = path.join(root, 'promotion.json');
-const promotionSigningRequestPath = path.join(root, 'promotion-signing-request.json');
 const idempotencyKey = '00000000-0000-4000-8000-000000000001';
 const prepared = { iso20022: { document_sha256: H('1') }, instruction: { instruction_sha256: H('2') } };
 const promotion = { certificate_sha256: H('3') };
@@ -76,17 +75,31 @@ const baseEnv = { ...process.env, G_BANK_SETTLEMENT_TRANSPORT_MODULE: transport 
 (() => {
   const result = spawnSync(process.execPath, baseArgs, { env: baseEnv, encoding: 'utf8' });
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /--promotion-signing-request --promotion-signature-evidence --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required/);
-  assert.equal(fs.existsSync(marker), false, 'transport module must not load when detached promotion-signature inputs are absent');
+  assert.match(result.stderr, /--promotion-signing-request --promotion-signature-evidence --promotion-signer-authority --promotion-signature-bundle --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required/);
+  assert.equal(fs.existsSync(marker), false, 'transport module must not load when promotion signature/quorum inputs are absent');
 })();
 
 (() => {
-  const argsWithPromotionEvidence = [
+  const argsWithSingleSignerEvidence = [
     ...baseArgs,
     '--promotion-signing-request', dummy,
     '--promotion-signature-evidence', dummy,
   ];
-  const result = spawnSync(process.execPath, argsWithPromotionEvidence, { env: baseEnv, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, argsWithSingleSignerEvidence, { env: baseEnv, encoding: 'utf8' });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /--promotion-signer-authority --promotion-signature-bundle --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required/);
+  assert.equal(fs.existsSync(marker), false, 'single promotion signer evidence must not be enough to load transport');
+})();
+
+(() => {
+  const argsWithPromotionQuorum = [
+    ...baseArgs,
+    '--promotion-signing-request', dummy,
+    '--promotion-signature-evidence', dummy,
+    '--promotion-signer-authority', dummy,
+    '--promotion-signature-bundle', dummy,
+  ];
+  const result = spawnSync(process.execPath, argsWithPromotionQuorum, { env: baseEnv, encoding: 'utf8' });
   assert.equal(result.status, 2);
   assert.match(result.stderr, /--runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required/);
   assert.equal(fs.existsSync(marker), false, 'transport module must not load when runtime HA arguments are absent');
@@ -97,6 +110,8 @@ const baseEnv = { ...process.env, G_BANK_SETTLEMENT_TRANSPORT_MODULE: transport 
     ...baseArgs,
     '--promotion-signing-request', dummy,
     '--promotion-signature-evidence', dummy,
+    '--promotion-signer-authority', dummy,
+    '--promotion-signature-bundle', dummy,
     '--runtime-ha-attestation', dummy,
     '--runtime-ha-observer', dummy,
   ];
@@ -106,5 +121,4 @@ const baseEnv = { ...process.env, G_BANK_SETTLEMENT_TRANSPORT_MODULE: transport 
   assert.equal(fs.existsSync(marker), false, 'transport module must not load when runtime HA challenge store is absent');
 })();
 
-assert.equal(fs.existsSync(promotionSigningRequestPath), false);
-console.log('G-BANK sovereign v2 detached-promotion-signature CLI contract tests: PASS');
+console.log('G-BANK sovereign v2 promotion-quorum CLI contract tests: PASS');
