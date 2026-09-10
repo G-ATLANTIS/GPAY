@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
+const { durableReplaceFileSync, durableCreateFileSync } = require('./durable-write');
 
 function safeName(key) {
   return sha256(String(key));
@@ -43,10 +44,10 @@ class IdempotencyStore {
     };
 
     try {
-      fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n', {
-        flag: 'wx',
-        mode: 0o600,
-      });
+      // O_EXCL create + fsync of file and directory: once claim() returns
+      // owner:true the PENDING marker has reached stable storage, so a crash
+      // cannot lose the fact that this key is in-flight.
+      durableCreateFileSync(file, JSON.stringify(record, null, 2) + '\n', { mode: 0o600 });
       return { owner: true, record };
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
@@ -74,9 +75,9 @@ class IdempotencyStore {
       updated_at: new Date().toISOString(),
       result: result ?? null,
     };
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-    fs.renameSync(tmp, file);
+    // Temp write -> fsync -> atomic rename -> directory fsync. A completed
+    // finalize survives a crash immediately after this call returns.
+    durableReplaceFileSync(file, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
     return next;
   }
 }

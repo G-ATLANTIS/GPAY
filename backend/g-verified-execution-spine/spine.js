@@ -426,8 +426,12 @@ async function executeVerified(rawRequest, context = {}) {
     };
 
     // ---- Stage VERIFY_READBACK --------------------------------------- -------
+    // Discovery assurance was the *entry gate*. What THIS execution+verification
+    // proves is bounded only by the connector's declared ceiling, not by the
+    // read-only discovery level.
+    const ceiling = connector.assurance_ceiling;
     let verificationMethod = VERIFICATION_METHOD.PROVIDER_RECEIPT_ONLY;
-    let achievedAssurance = minAssurance(discoverAssurance, ASSURANCE.L3);
+    let achievedAssurance = minAssurance(ceiling, ASSURANCE.L3);
     let verificationEvidence = { mode: 'provider_receipt_only', provider_request_id: String(exec.provider_request_id) };
 
     if (connector.supportsReadback) {
@@ -477,17 +481,32 @@ async function executeVerified(rawRequest, context = {}) {
           });
       }
 
-      verificationMethod = readback.external === true
-        ? VERIFICATION_METHOD.AUTHENTICATED_PROVIDER_READBACK
-        : VERIFICATION_METHOD.LOCAL_STATE_READBACK;
-      achievedAssurance = readback.external === true
-        ? minAssurance(discoverAssurance, ASSURANCE.L4)
-        : minAssurance(discoverAssurance, ASSURANCE.L1);
-      verificationEvidence = { mode: 'readback', observed_status: readback.observed_status || null, external: readback.external === true };
+      // L4 is only awarded for an external readback whose binding evidence is
+      // STRONG (payment id + amount + currency + intent/reference hash +
+      // counterparty binding, all present and matched). An external readback
+      // with WEAK binding is honestly capped at L3 / PROVIDER_RECEIPT_ONLY —
+      // it proves an object exists, not that it is *this* execution's effect.
+      const strongBinding = readback.binding_strength === 'STRONG';
+      if (readback.external === true && strongBinding) {
+        verificationMethod = VERIFICATION_METHOD.AUTHENTICATED_PROVIDER_READBACK;
+        achievedAssurance = minAssurance(ceiling, ASSURANCE.L4);
+      } else if (readback.external === true) {
+        verificationMethod = VERIFICATION_METHOD.PROVIDER_RECEIPT_ONLY;
+        achievedAssurance = minAssurance(ceiling, ASSURANCE.L3);
+      } else {
+        verificationMethod = VERIFICATION_METHOD.LOCAL_STATE_READBACK;
+        achievedAssurance = minAssurance(ceiling, ASSURANCE.L1);
+      }
+      verificationEvidence = {
+        mode: 'readback',
+        observed_status: readback.observed_status || null,
+        external: readback.external === true,
+        binding_strength: readback.binding_strength || (readback.external === true ? 'WEAK' : 'LOCAL'),
+      };
     } else {
       // No readback available. Classify honestly: strongest external receipt
       // only, capped at L3, never "fully verified".
-      achievedAssurance = minAssurance(discoverAssurance, ASSURANCE.L3);
+      achievedAssurance = minAssurance(ceiling, ASSURANCE.L3);
     }
 
     // ---- post-state ------------------------------------------------------- --
@@ -676,23 +695,51 @@ async function reconcile({ idempotency_key, provider_request_id }, context = {})
     return { reconciled: false, state: 'STILL_UNCERTAIN', detail: `readback_failed:${err.message}` };
   }
 
-  if (readback && readback.verified === true) {
+  // Confirmed: the connector read back the effect AND bound it to this
+  // execution. Recover the original outcome; never re-issue.
+  if (readback && readback.verified === true && readback.binding_ok !== false) {
     appendAudit(ctx, {
       event: 'RECONCILED_EFFECT_CONFIRMED',
       idempotency_key_sha256: sha256(String(idempotency_key)),
       provider: connector.name,
-      provider_request_id: provider_request_id || null,
+      provider_request_id: provider_request_id || readback.provider_request_id || null,
       observed_status: readback.observed_status || null,
     });
     return { reconciled: true, state: 'EFFECT_CONFIRMED', readback: safeEvidence(readback) };
   }
+
+  // The connector reached the provider and it is definitively NOT there.
+  const status = String((readback && readback.observed_status) || '').toUpperCase();
+  const definitivelyAbsent = ['NOT_FOUND', 'ABSENT'].includes(status);
+  if (readback && readback.verified === false && definitivelyAbsent) {
+    appendAudit(ctx, {
+      event: 'RECONCILED_EFFECT_ABSENT',
+      idempotency_key_sha256: sha256(String(idempotency_key)),
+      provider: connector.name,
+      provider_request_id: provider_request_id || null,
+    });
+    return {
+      reconciled: true,
+      state: 'EFFECT_ABSENT',
+      detail: 'no external effect found; a fresh request may be issued after an explicit safe state transition',
+    };
+  }
+
+  // Could not determine (no correlation id, provider unreachable, binding
+  // mismatch). Do NOT allow a retry — an operator must resolve it.
+  const manual = readback && (readback.manual_required === true || readback.binding_ok === false);
   appendAudit(ctx, {
-    event: 'RECONCILED_EFFECT_ABSENT',
+    event: 'RECONCILE_UNRESOLVED',
     idempotency_key_sha256: sha256(String(idempotency_key)),
     provider: connector.name,
-    provider_request_id: provider_request_id || null,
+    observed_status: (readback && readback.observed_status) || null,
+    outcome: manual ? 'MANUAL_REQUIRED' : 'STILL_UNCERTAIN',
   });
-  return { reconciled: true, state: 'EFFECT_ABSENT', detail: 'no external effect found; a fresh request may be issued' };
+  return {
+    reconciled: false,
+    state: manual ? 'MANUAL_REQUIRED' : 'STILL_UNCERTAIN',
+    detail: 'reconcile could not prove presence or absence of the external effect; retry is not permitted',
+  };
 }
 
 module.exports = {

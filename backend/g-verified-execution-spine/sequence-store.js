@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { sha256 } = require('../g-bank-live-v1/canonical');
+const { durableReplaceFileSync } = require('../g-bank-live-v1/durable-write');
 
 // Monotonic per-stream sequence guard. A "stream" is an (actor, capability)
 // pair. A request carries `expected_sequence`; the spine accepts it only if it
@@ -44,19 +45,25 @@ class SequenceStore {
     return { ok: true, current: cur, reason: null };
   }
 
-  // Advance the committed sequence. Refuses to move backwards.
+  // Advance the committed sequence. Refuses to move backwards. The write is
+  // temp -> fsync -> atomic rename -> directory fsync, so a crash immediately
+  // after commit() returns cannot lose the advance and re-open a window for a
+  // stale-sequence replay.
   commit(stream, sequence) {
     const cur = this.current(stream);
     if (sequence <= cur) throw new Error('sequence_commit_not_monotonic');
     const file = this._file(stream);
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(
-      tmp,
+    durableReplaceFileSync(
+      file,
       JSON.stringify({ stream_sha256: sha256(stream), sequence, updated_at: new Date().toISOString() }, null, 2) + '\n',
-      { flag: 'w', mode: 0o600 },
+      { mode: 0o600 },
     );
-    fs.renameSync(tmp, file);
     return sequence;
+  }
+
+  // Back-compat alias — the routing task spec refers to this as advance().
+  advance(stream, sequence) {
+    return this.commit(stream, sequence);
   }
 }
 

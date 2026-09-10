@@ -1,6 +1,26 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 
+// Hermetic key material: sub-tests that exercise TrueLayer request signing set
+// their own ephemeral TRUELAYER_PRIVATE_KEY_PEM and verify against the matching
+// public key. privateKeyPem() prefers TRUELAYER_PRIVATE_KEY_B64 over _PEM, so an
+// ambient B64 key leaked from a developer's .env into the process environment
+// would make signRequest() sign with the wrong key and the local verify fail.
+// Clear both here; restore on exit. (CI has neither var set, so CI is
+// unaffected — this only removes a local-environment-sensitive false failure.)
+const __ambientKeyEnv = {
+  TRUELAYER_PRIVATE_KEY_B64: process.env.TRUELAYER_PRIVATE_KEY_B64,
+  TRUELAYER_PRIVATE_KEY_PEM: process.env.TRUELAYER_PRIVATE_KEY_PEM,
+};
+delete process.env.TRUELAYER_PRIVATE_KEY_B64;
+delete process.env.TRUELAYER_PRIVATE_KEY_PEM;
+process.on('exit', () => {
+  for (const [k, v] of Object.entries(__ambientKeyEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
+
 process.env.TRUELAYER_ENV = 'sandbox';
 process.env.G_BANK_MAX_PAYMENT_EUR = '100';
 process.env.G_BANK_ENABLE_LIVE = 'false';

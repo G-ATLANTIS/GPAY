@@ -223,5 +223,79 @@ scripts/g-verified-execution-spine.js
 backend/tests/g-verified-execution-spine.test.js
 ```
 
-Reused unchanged: `backend/g-bank-live-v1/canonical.js`,
-`idempotency-store.js`, `receipt-ledger.js`, `providers/mollie-live.js`.
+Reused: `backend/g-bank-live-v1/canonical.js`, `receipt-ledger.js`,
+`providers/mollie-live.js` (unchanged); `idempotency-store.js` (hardened for
+crash-safe durability).
+
+---
+
+## Live Mollie routing (G-BANK-CANONICAL-LIVE-ROUTING-P0)
+
+`GBankLiveCore` is **retired** — its constructor throws. Every live Mollie
+mutation now goes through `executeVerified()` + `MollieSpineConnector`:
+
+```
+scripts/g-bank-live-v1.js  /  backend/routes/mollie.js
+        -> buildMollieRequest()            (canonical request)
+        -> createAuthorization()           (HMAC bound to the request hash)
+        -> executeVerified(request, ctx)
+        -> MollieSpineConnector            (discover / execute / readback)
+        -> MollieLiveAdapter               (raw provider I/O)
+```
+
+`backend/g-verified-execution-spine/gbank-mollie-routing.js` is the shared
+wiring (`buildMollieRegistry`, `buildMolliePolicy`, `buildMollieRequest`,
+`mollieBindingSha256`) so the CLI and the route construct identically.
+
+### L4 binding
+
+The Mollie connector's `readback()` returns `binding_strength`:
+
+* `STRONG` — payment id **and** live mode **and** amount **and** currency
+  **and** `metadata.g_intent_sha256` **and** `metadata.g_destination_binding_sha256`
+  all present and matched → spine awards **L4** /
+  `AUTHENTICATED_PROVIDER_READBACK`.
+* `WEAK` — any of those binding fields missing (e.g. provider did not persist
+  metadata) → spine caps at **L3** / `PROVIDER_RECEIPT_ONLY`.
+* any positive mismatch (wrong id / amount / currency / hash / non-live mode)
+  → `binding_ok:false` → `READBACK_MISMATCH`, quarantined.
+
+Achieved assurance is bounded by the connector's declared ceiling, not by the
+read-only discovery level (discovery is the entry gate only).
+
+### Recovery classification
+
+`reconcile()` returns: `EFFECT_CONFIRMED` (read back and bound to this
+execution — recovers the original outcome, never re-issues), `EFFECT_ABSENT`
+(provider definitively lacks it — a fresh attempt is allowed only after an
+explicit safe transition), `STILL_UNCERTAIN` / `MANUAL_REQUIRED` (cannot prove
+either way — retry is **not** permitted). Mollie without a provider payment id
+is `MANUAL_REQUIRED`.
+
+### Execution truth
+
+`getExecutionTruth(idempotencyKey, ctx)` — the single authoritative answer
+(authorized / execution_attempted / provider_accepted / externally_verified /
+canonical_success / retry_safe), derived **only** from the spine idempotency
+record + hash-chained audit ledger. Legacy `G_*.json` files are not consulted.
+
+### Durability
+
+`backend/g-bank-live-v1/durable-write.js`: `durableCreateFileSync` /
+`durableReplaceFileSync` = temp write → `fsync(file)` → atomic `rename` →
+`fsync(dir)`. Used by `IdempotencyStore.claim/finalize` and
+`SequenceStore.commit` so a completed state transition survives a crash.
+
+### Static bypass guard
+
+`scripts/ci/check-spine-bypass.js` (`npm run guard:spine-bypass`) fails if
+non-allowlisted code reaches a live provider mutation outside the spine. See
+`docs/G_BANK_MUTATION_PATH_INVENTORY.md` for the full path inventory.
+
+### Fail-closed non-Mollie routes
+
+`backend/routes/openbanking.js` `/create-payment` (TrueLayer) and
+`backend/routes/pulsepay.js` are **DENY by default** — 403 unless an explicit
+`G_BANK_ALLOW_UNSPINED_*=I_ACCEPT_UNSPINED_EXECUTION` env acknowledgement is
+set. `backend/routes/webhook.js` is a 501 stub. These remain un-spined pending
+their own connectors.

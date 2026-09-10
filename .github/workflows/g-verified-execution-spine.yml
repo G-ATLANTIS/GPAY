@@ -4,17 +4,21 @@ on:
   pull_request:
     paths:
       - 'backend/g-verified-execution-spine/**'
+      - 'backend/g-bank-live-v1/**'
+      - 'backend/routes/mollie.js'
+      - 'backend/routes/pulsepay.js'
+      - 'backend/routes/webhook.js'
       - 'backend/tests/g-verified-execution-spine.test.js'
+      - 'backend/tests/g-bank-canonical-live-routing.test.js'
+      - 'backend/tests/g-bank-live-v1.test.js'
       - 'scripts/g-verified-execution-spine.js'
+      - 'scripts/g-bank-live-v1.js'
+      - 'scripts/ci/check-spine-bypass.js'
       - '.github/workflows/g-verified-execution-spine.yml'
   push:
     branches:
       - 'feature/g-verified-execution-spine-p0'
-    paths:
-      - 'backend/g-verified-execution-spine/**'
-      - 'backend/tests/g-verified-execution-spine.test.js'
-      - 'scripts/g-verified-execution-spine.js'
-      - '.github/workflows/g-verified-execution-spine.yml'
+      - 'feature/g-bank-canonical-live-routing-p0'
 
 permissions:
   contents: read
@@ -30,9 +34,15 @@ jobs:
           node-version: '22'
       - name: Syntax checks
         run: npm run check:spine
+      - name: Static bypass guard (no live provider mutation outside the spine)
+        run: npm run guard:spine-bypass
+      - name: Bypass guard self-test
+        run: node scripts/ci/check-spine-bypass.js --self-test
       - name: Runtime invariant self-check
         run: npm run selfcheck:spine
-      - name: Fail-closed adversarial test suite (no network, no value movement)
+      - name: Spine adversarial test suite (no network, no value movement)
         run: npm run test:spine
-      - name: Regression - existing g-bank-live-v1 core
-        run: node backend/tests/g-bank-live-v1.test.js
+      - name: Canonical live-routing test suite
+        run: npm run test:routing
+      - name: Regression - openbanking policy suite
+        run: npm run test:banking

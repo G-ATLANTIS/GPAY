@@ -84,6 +84,7 @@ class MollieSpineConnector {
         payment_id: created.payment_id,
         status: created.status || null,
         mode: created.mode || null,
+        checkout_url: created.checkout_url || null,
         provider_http_status: created.provider_http_status,
       },
       applied: true,
@@ -91,22 +92,79 @@ class MollieSpineConnector {
     };
   }
 
+  // L4 requires strong evidence that the read-back payment IS the one this
+  // execution created. A bare "GET payment succeeded" is not enough.
+  //
+  //   binding_ok    = every binding field that IS present matches. Any positive
+  //                   mismatch (wrong id / amount / currency / intent hash /
+  //                   destination / non-live mode) -> false -> READBACK_MISMATCH.
+  //   binding_strength = 'STRONG' only when payment id + live mode + amount +
+  //                   currency + intent-hash + destination-binding are all
+  //                   present and all match. Otherwise 'WEAK' -> the spine caps
+  //                   assurance at L3 and marks verification PROVIDER_RECEIPT_ONLY.
   async readback({ params }, exec) {
     const paymentId = exec && exec.provider_request_id;
+    if (!paymentId) {
+      return { verified: false, binding_ok: false, observed_status: 'NO_PAYMENT_ID', external: true, binding_strength: 'WEAK' };
+    }
     const readback = await this.adapter.getPayment(paymentId);
     const intent = buildIntent(params);
-    const bindingOk =
-      !readback.metadata ||
-      !readback.metadata.g_intent_sha256 ||
-      !intent.intent_sha256 ||
-      readback.metadata.g_intent_sha256 === intent.intent_sha256;
-    const live = !readback.mode || readback.mode === 'live';
+
+    const checks = {};
+    const mismatch = [];
+
+    // Payment identity — mandatory.
+    checks.payment_id = readback.payment_id === paymentId;
+    if (readback.payment_id && !checks.payment_id) mismatch.push('payment_id');
+
+    // Live mode — mandatory and strict (absent mode is NOT treated as live).
+    checks.live_mode = readback.mode === 'live';
+    if (readback.mode && readback.mode !== 'live') mismatch.push('mode');
+
+    // Amount + currency.
+    const expectedValue = Number.isFinite(intent.amount_minor)
+      ? (intent.amount_minor / 100).toFixed(2)
+      : null;
+    if (readback.amount && expectedValue !== null) {
+      checks.amount = String(readback.amount.value) === expectedValue;
+      checks.currency = String(readback.amount.currency) === intent.currency;
+      if (!checks.amount) mismatch.push('amount');
+      if (!checks.currency) mismatch.push('currency');
+    } else {
+      checks.amount = false;
+      checks.currency = false;
+    }
+
+    // Intent hash + destination binding persisted in provider metadata.
+    const md = readback.metadata || {};
+    if (intent.intent_sha256 && md.g_intent_sha256) {
+      checks.intent_sha256 = md.g_intent_sha256 === intent.intent_sha256;
+      if (!checks.intent_sha256) mismatch.push('intent_sha256');
+    } else {
+      checks.intent_sha256 = false;
+    }
+    if (intent.destination_binding && md.g_destination_binding_sha256) {
+      checks.destination_binding = md.g_destination_binding_sha256 === sha256(intent.destination_binding);
+      if (!checks.destination_binding) mismatch.push('destination_binding');
+    } else {
+      checks.destination_binding = false;
+    }
+
+    const mandatoryOk = checks.payment_id && checks.live_mode;
+    const strong =
+      mandatoryOk &&
+      checks.amount &&
+      checks.currency &&
+      checks.intent_sha256 &&
+      checks.destination_binding;
+
     return {
-      verified: live && !!readback.payment_id,
-      binding_ok: bindingOk,
+      verified: mandatoryOk && !!readback.payment_id,
+      binding_ok: mismatch.length === 0 && mandatoryOk,
+      binding_strength: strong ? 'STRONG' : 'WEAK',
       observed_status: readback.status || null,
       external: true, // authenticated external readback
-      detail: { mode: readback.mode || null },
+      detail: { mode: readback.mode || null, checks, mismatch },
     };
   }
 }

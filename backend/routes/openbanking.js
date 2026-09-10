@@ -1490,6 +1490,22 @@ router.post('/webhook', async (req, res) => {
 
 router.post('/create-payment', async (req, res) => {
   try {
+    // G-BANK-CANONICAL-LIVE-ROUTING-P0
+    // This TrueLayer payment-creation path is the legacy execution stack. It is
+    // NOT yet routed through executeVerified() / G_VERIFIED_EXECUTION_SPINE, so
+    // it is DENY by default per: DIRECT_PROVIDER_EXECUTION = DENY. Re-enabling
+    // it requires a deliberate, logged environment acknowledgement of the
+    // bypass until the spine TrueLayer connector lands.
+    if (process.env.G_BANK_ALLOW_UNSPINED_TRUELAYER !== 'I_ACCEPT_UNSPINED_EXECUTION') {
+      return res.status(403).json({
+        error: 'legacy_truelayer_create_payment_is_unspined_and_disabled',
+        remediation:
+          'Route through executeVerified() or set G_BANK_ALLOW_UNSPINED_TRUELAYER=I_ACCEPT_UNSPINED_EXECUTION.',
+        payment_created: false,
+        value_moved: false,
+        verified_value_flow: false,
+      });
+    }
     assertConfigured();
     const { amountEur, amountInMinor, beneficiary, user } = assertPaymentInput(req.body);
     const path = '/v3/payments';

@@ -4,3 +4,18 @@
 backend/.env
 backend/logs/*.log
 .secrets/
+
+# G-BANK-CANONICAL-LIVE-ROUTING-P0 — never commit private key material.
+# Public keys / fixtures are explicitly re-included below.
+*.pem
+*.key
+*.p12
+*.pfx
+!*public*.pem
+!*.public.pem
+
+# Machine-generated task/diagnostic receipt files written at the repo root.
+# These are not fixtures; canonical execution truth comes from the spine
+# (idempotency record + hash-chained audit ledger), not from these files.
+/G_*.json
+/*_VERIFICATION_RECEIPT.json

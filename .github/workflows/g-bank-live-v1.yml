@@ -34,9 +34,10 @@ jobs:
           node --check backend/g-bank-live-v1/approval.js
           node --check backend/g-bank-live-v1/idempotency-store.js
           node --check backend/g-bank-live-v1/receipt-ledger.js
+          node --check backend/g-bank-live-v1/durable-write.js
           node --check backend/g-bank-live-v1/live-core.js
           node --check backend/g-bank-live-v1/providers/mollie-live.js
           node --check scripts/g-bank-live-v1.js
           node --check backend/tests/g-bank-live-v1.test.js
       - name: Fail-closed no-network tests
-        run: node backend/tests/g-bank-live-v1.test.js
+        run: node --test backend/tests/g-bank-live-v1.test.js
