@@ -59,13 +59,29 @@ function loadSettlement(env = process.env) {
   return new DirectSettlementAdapter({ transport, env, name: env.G_BANK_SETTLEMENT_ADAPTER_NAME || 'g-direct-settlement' });
 }
 
+function ephemeralNonExecutionGovernance() {
+  const { publicKey } = crypto.generateKeyPairSync('ed25519');
+  return {
+    riskPolicy: normalizePolicy({}),
+    authoritySet: normalizeAuthoritySet({
+      authority_epoch: 1,
+      operators: [{
+        operator_id: 'NONEXECUTION:EPHEMERAL',
+        role: 'APPROVER',
+        status: 'ACTIVE',
+        public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      }],
+    }),
+  };
+}
+
 function governanceFor(a, { required = true } = {}) {
   const p = statePaths(a);
-  if (!required && (!fs.existsSync(p.riskPolicy) || !fs.existsSync(p.authoritySet))) {
-    return { riskPolicy: {}, authoritySet: {} };
-  }
-  if (!fs.existsSync(p.riskPolicy)) throw new Error('risk_policy_file_required');
-  if (!fs.existsSync(p.authoritySet)) throw new Error('authority_set_file_required');
+  const havePolicy = fs.existsSync(p.riskPolicy);
+  const haveAuthority = fs.existsSync(p.authoritySet);
+  if (!required && (!havePolicy || !haveAuthority)) return ephemeralNonExecutionGovernance();
+  if (!havePolicy) throw new Error('risk_policy_file_required');
+  if (!haveAuthority) throw new Error('authority_set_file_required');
   return {
     riskPolicy: normalizePolicy(readJson(p.riskPolicy)),
     authoritySet: normalizeAuthoritySet(readJson(p.authoritySet)),
