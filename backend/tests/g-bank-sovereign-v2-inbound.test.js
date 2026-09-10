@@ -128,7 +128,7 @@ function setup() {
   assert.equal(statement.entry_count, 1);
   assert.match(statement.statement_sha256, /^[0-9a-f]{64}$/);
 
-  const lifecycle = new AccountLifecycle({ accounts: s.accounts, ledger: s.ledger });
+  const lifecycle = new AccountLifecycle({ accounts: s.accounts, ledger: s.ledger, inboundStore: s.inboundStore });
   const suspended = lifecycle.suspend({ account_id: 'G:CUSTOMER:001', evidence_sha256: H('d'), now: NOW });
   assert.equal(suspended.status, 'SUSPENDED');
   assert.throws(() => lifecycle.close({ account_id: 'G:CUSTOMER:001', evidence_sha256: H('e'), now: NOW }), /zero_balance/);
@@ -142,6 +142,7 @@ function setup() {
 
   const pending2 = s.processor.ingest(inboundEvent({ id: 'IN-002', amount: 700 }), { now: NOW });
   lifecycle.suspend({ account_id: 'G:CUSTOMER:001', evidence_sha256: H('3'), now: NOW });
+  assert.throws(() => lifecycle.close({ account_id: 'G:CUSTOMER:001', evidence_sha256: H('4'), now: NOW }), /pending_inbound/);
   assert.throws(() => s.processor.makeAvailable({ inbound_id: 'IN-002', releaseEvidence: releaseEvidence(pending2), now: NOW }), /account_not_active/);
 
   const tamperedRelease = { ...releaseEvidence(pending2), amount_minor: 701 };
