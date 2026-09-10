@@ -9,6 +9,11 @@ function canonicalReceiptPayload({
   status,
   processedAt,
   rewardEventId = null,
+  settlementEventId = null,
+  settlementMode = null,
+  settlementExecutionStatus = null,
+  settlementContractAddress = null,
+  settlementChainId = null,
 }) {
   return JSON.stringify({
     provider,
@@ -19,6 +24,11 @@ function canonicalReceiptPayload({
     status,
     processedAt,
     rewardEventId,
+    settlementEventId,
+    settlementMode,
+    settlementExecutionStatus,
+    settlementContractAddress,
+    settlementChainId,
   });
 }
 
