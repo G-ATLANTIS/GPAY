@@ -27,6 +27,7 @@ function verifyReadiness(readiness) {
     throw new Error('readiness_checks_required');
   }
   if (Object.values(readiness.checks).some(value => value !== true)) throw new Error('readiness_checks_not_satisfied');
+  hash64('readiness_recovery_checkpoint_state_root_sha256', readiness.recovery_checkpoint_state_root_sha256);
   return readiness;
 }
 
@@ -42,6 +43,9 @@ function createTechnicalPromotionCertificate({
   verifyReadiness(readiness);
   if (!checkpoint || checkpoint.schema !== 'g-bank-sovereign-state-checkpoint/v2') throw new Error('checkpoint_required');
   const stateRoot = hash64('state_root_sha256', checkpoint.state_root_sha256);
+  if (stateRoot !== String(readiness.recovery_checkpoint_state_root_sha256).toLowerCase()) {
+    throw new Error('promotion_recovery_checkpoint_state_root_mismatch');
+  }
   const policyHash = hash64('policy_sha256', governance?.policy_sha256);
   const authorityHash = hash64('authority_set_sha256', governance?.authority_set_sha256);
   const signingKeyHash = hash64('trusted_signing_key_binding_sha256', trusted_signing_key_binding_sha256);
@@ -101,6 +105,9 @@ function verifyTechnicalPromotionCertificate(certificate, { readiness, now = Dat
   }
   if (readiness) {
     verifyReadiness(readiness);
+    if (certificate.state_root_sha256 !== String(readiness.recovery_checkpoint_state_root_sha256).toLowerCase()) {
+      throw new Error('promotion_recovery_checkpoint_state_root_mismatch');
+    }
     if (certificate.readiness_snapshot_sha256 !== sha256(canonicalJson(readiness))) throw new Error('promotion_certificate_readiness_mismatch');
     if (!readiness.evidence_bindings || typeof readiness.evidence_bindings !== 'object') throw new Error('readiness_evidence_bindings_required');
     for (const [key, value] of Object.entries(certificate.evidence_bindings || {})) {
