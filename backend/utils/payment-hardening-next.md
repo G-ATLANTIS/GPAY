@@ -1,11 +1,32 @@
-# Next hardening step
+# GPAY payment hardening — next milestones
 
-Before claiming exactly-once processing, make each downstream side effect idempotent by a stable event identifier derived from provider + payment ID + operation. At minimum:
+The local crash-recovery state machine is implemented, but it is not a substitute for distributed transactionality.
 
-- reward issuance must reject/reuse duplicate event IDs;
-- invoice generation must be deterministic or deduplicate by order/provider payment ID;
-- mail delivery should be recorded so retries do not send duplicates;
-- processing state should support RESERVED -> EFFECTS_APPLIED -> COMMITTED with crash recovery;
-- distributed/multi-process deployment should use a transactional datastore or lock primitive rather than a single JSON file.
+Next milestones, in order:
 
-Only after tests demonstrate replay, crash recovery, and concurrency behavior should the status be upgraded to exactly-once semantics.
+1. **Distributed persistence and locking**
+   - Move payment state and idempotency records from JSON files to a transactional datastore.
+   - Enforce a unique key on `(provider, providerPaymentId)`.
+   - Use transactional compare-and-set or row locking for stage transitions.
+   - Preserve monotonic `RECEIVED -> PROVIDER_VERIFIED -> EFFECTS_PREPARED -> COMMITTED` semantics.
+
+2. **Side-effect idempotency**
+   - Stable operation IDs for reward, invoice and notification events.
+   - Persist per-effect completion independently.
+   - Resume only incomplete effects after restart.
+   - Do not claim exactly-once for third-party effects unless the provider itself offers idempotency and the receipt proves it.
+
+3. **Production deployment proof**
+   - Deploy behind a real HTTPS endpoint.
+   - Run `npm run preflight:production` with authorized runtime configuration.
+   - Capture deployment ID and commit provenance.
+
+4. **First authorized live payment evidence**
+   - Execute only after explicit authorization.
+   - Re-read payment state from Mollie.
+   - Capture the tamper-evident evidence bundle.
+   - Sign it with a separately provisioned GPAY evidence key if available.
+
+5. **External GCOIN settlement**
+   - Separate authorization boundary.
+   - No signer/broadcast path is enabled by this branch.
