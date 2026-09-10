@@ -14,6 +14,7 @@ const { normalizeAuthoritySet } = require('../backend/g-bank-sovereign-v2/author
 const { assessSovereignReadiness } = require('../backend/g-bank-sovereign-v2/readiness');
 const { createTechnicalPromotionCertificate } = require('../backend/g-bank-sovereign-v2/promotion-certificate');
 const { createPromotionSigningRequest } = require('../backend/g-bank-sovereign-v2/promotion-signing');
+const { normalizePromotionSignerAuthority } = require('../backend/g-bank-sovereign-v2/promotion-signer-authority');
 const { verifyRuntimePromotionGate } = require('../backend/g-bank-sovereign-v2/runtime-promotion-gate');
 const { HARuntimeChallengeStore } = require('../backend/g-bank-sovereign-v2/ha-runtime-challenge-store');
 const { settlementOperationBinding } = require('../backend/g-bank-sovereign-v2/settlement-operation-binding');
@@ -123,13 +124,15 @@ function operationFromPrepared(prepared, idempotencyKey, promotionCertificateSha
 }
 
 function configureRuntimePromotionArtifacts(a, env = process.env) {
-  if (!a.readiness || !a.promotion || !a['promotion-sha256'] || !a['promotion-signing-request'] || !a['promotion-signature-evidence'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) {
-    throw new Error('--readiness --promotion --promotion-sha256 --promotion-signing-request --promotion-signature-evidence --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
+  if (!a.readiness || !a.promotion || !a['promotion-sha256'] || !a['promotion-signing-request'] || !a['promotion-signature-evidence'] || !a['promotion-signer-authority'] || !a['promotion-signature-bundle'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) {
+    throw new Error('--readiness --promotion --promotion-sha256 --promotion-signing-request --promotion-signature-evidence --promotion-signer-authority --promotion-signature-bundle --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
   }
   env.G_BANK_RUNTIME_READINESS_FILE = path.resolve(a.readiness);
   env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = path.resolve(a.promotion);
   env.G_BANK_RUNTIME_PROMOTION_SIGNING_REQUEST_FILE = path.resolve(a['promotion-signing-request']);
   env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_EVIDENCE_FILE = path.resolve(a['promotion-signature-evidence']);
+  env.G_BANK_RUNTIME_PROMOTION_SIGNER_AUTHORITY_FILE = path.resolve(a['promotion-signer-authority']);
+  env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_BUNDLE_FILE = path.resolve(a['promotion-signature-bundle']);
   env.G_BANK_RUNTIME_HA_ATTESTATION_FILE = path.resolve(a['runtime-ha-attestation']);
   env.G_BANK_RUNTIME_HA_OBSERVER_FILE = path.resolve(a['runtime-ha-observer']);
   env.G_BANK_RUNTIME_HA_CHALLENGE_STORE = path.resolve(a['runtime-ha-challenge-store']);
@@ -139,6 +142,8 @@ function configureRuntimePromotionArtifacts(a, env = process.env) {
     promotion_file: env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE,
     promotion_signing_request_file: env.G_BANK_RUNTIME_PROMOTION_SIGNING_REQUEST_FILE,
     promotion_signature_evidence_file: env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_EVIDENCE_FILE,
+    promotion_signer_authority_file: env.G_BANK_RUNTIME_PROMOTION_SIGNER_AUTHORITY_FILE,
+    promotion_signature_bundle_file: env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_BUNDLE_FILE,
     runtime_ha_attestation_file: env.G_BANK_RUNTIME_HA_ATTESTATION_FILE,
     runtime_ha_observer_file: env.G_BANK_RUNTIME_HA_OBSERVER_FILE,
     runtime_ha_challenge_store: env.G_BANK_RUNTIME_HA_CHALLENGE_STORE,
@@ -224,18 +229,24 @@ async function main() {
   }
 
   if (command === 'promote') {
-    if (!a.readiness || !a.checkpoint || !a['trusted-signing-key-binding-sha256'] || !a['trusted-runtime-ha-observer-sha256'] || !a.out) throw new Error('--readiness --checkpoint --trusted-signing-key-binding-sha256 --trusted-runtime-ha-observer-sha256 --out_required');
+    if (!a.readiness || !a.checkpoint || !a['trusted-signing-key-binding-sha256'] || !a['trusted-runtime-ha-observer-sha256'] || !a['promotion-signer-authority'] || !a.out) throw new Error('--readiness --checkpoint --trusted-signing-key-binding-sha256 --trusted-runtime-ha-observer-sha256 --promotion-signer-authority --out_required');
     const readiness = readJson(a.readiness);
     const checkpoint = readJson(a.checkpoint);
+    const promotionSignerAuthority = normalizePromotionSignerAuthority(readJson(a['promotion-signer-authority']));
+    const trustedSigningKey = sha256Arg('trusted_signing_key_binding_sha256', a['trusted-signing-key-binding-sha256']);
+    if (!promotionSignerAuthority.signers.some(s => s.key_binding_sha256 === trustedSigningKey)) throw new Error('trusted_promotion_signer_not_in_authority');
     const { riskPolicy, authoritySet } = governanceFor(a, { required: true });
     const certificate = createTechnicalPromotionCertificate({
       readiness, checkpoint, governance: governanceSnapshot(riskPolicy, authoritySet), evidence_bindings: readiness.evidence_bindings,
-      trusted_signing_key_binding_sha256: sha256Arg('trusted_signing_key_binding_sha256', a['trusted-signing-key-binding-sha256']),
+      trusted_signing_key_binding_sha256: trustedSigningKey,
       trusted_runtime_ha_observer_sha256: sha256Arg('trusted_runtime_ha_observer_sha256', a['trusted-runtime-ha-observer-sha256']),
+      promotion_signer_authority_root_sha256: promotionSignerAuthority.authority_root_sha256,
+      promotion_signer_authority_epoch: promotionSignerAuthority.authority_epoch,
+      promotion_signature_quorum: promotionSignerAuthority.quorum,
       ttl_seconds: a['ttl-seconds'] === undefined ? 120 : Number(a['ttl-seconds']),
     });
     const output = writePrivate(a.out, certificate);
-    console.log(JSON.stringify({ state: certificate.state, certificate_sha256: certificate.certificate_sha256, state_root_sha256: certificate.state_root_sha256, policy_sha256: certificate.policy_sha256, authority_set_sha256: certificate.authority_set_sha256, trusted_runtime_ha_observer_sha256: certificate.trusted_runtime_ha_observer_sha256, recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256, ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256, ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256, ha_voter_journal_root_sha256: certificate.ha_voter_journal_root_sha256, ha_cluster_authority_root_sha256: certificate.ha_cluster_authority_root_sha256, customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256, ha_fence_valid_until: certificate.ha_fence_valid_until, expires_at: certificate.expires_at, output, grants_external_rights: certificate.grants_external_rights, permits_value_movement_by_itself: certificate.permits_value_movement_by_itself }, null, 2));
+    console.log(JSON.stringify({ state: certificate.state, certificate_sha256: certificate.certificate_sha256, state_root_sha256: certificate.state_root_sha256, policy_sha256: certificate.policy_sha256, authority_set_sha256: certificate.authority_set_sha256, trusted_runtime_ha_observer_sha256: certificate.trusted_runtime_ha_observer_sha256, promotion_signer_authority_root_sha256: certificate.promotion_signer_authority_root_sha256, promotion_signer_authority_epoch: certificate.promotion_signer_authority_epoch, promotion_signature_quorum: certificate.promotion_signature_quorum, recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256, ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256, ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256, ha_voter_journal_root_sha256: certificate.ha_voter_journal_root_sha256, ha_cluster_authority_root_sha256: certificate.ha_cluster_authority_root_sha256, customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256, ha_fence_valid_until: certificate.ha_fence_valid_until, expires_at: certificate.expires_at, output, grants_external_rights: certificate.grants_external_rights, permits_value_movement_by_itself: certificate.permits_value_movement_by_itself }, null, 2));
     return;
   }
 
@@ -244,19 +255,19 @@ async function main() {
     const certificate = readJson(a.promotion);
     const request = createPromotionSigningRequest({ certificate });
     const output = writePrivate(a.out, request);
-    console.log(JSON.stringify({ state: 'PROMOTION_SIGNING_REQUEST_CREATED', certificate_sha256: request.certificate_sha256, signing_request_sha256: request.signing_request_sha256, trusted_signing_key_binding_sha256: request.trusted_signing_key_binding_sha256, output, grants_external_rights: false, permits_value_movement_by_itself: false }, null, 2));
+    console.log(JSON.stringify({ state: 'PROMOTION_SIGNING_REQUEST_CREATED', certificate_sha256: request.certificate_sha256, signing_request_sha256: request.signing_request_sha256, trusted_signing_key_binding_sha256: request.trusted_signing_key_binding_sha256, promotion_signer_authority_root_sha256: request.promotion_signer_authority_root_sha256, promotion_signer_authority_epoch: request.promotion_signer_authority_epoch, promotion_signature_quorum: request.promotion_signature_quorum, output, grants_external_rights: false, permits_value_movement_by_itself: false }, null, 2));
     return;
   }
 
   if (command === 'execute') {
-    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256'] || !a['promotion-signing-request'] || !a['promotion-signature-evidence'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --promotion-signing-request --promotion-signature-evidence --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
+    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256'] || !a['promotion-signing-request'] || !a['promotion-signature-evidence'] || !a['promotion-signer-authority'] || !a['promotion-signature-bundle'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --promotion-signing-request --promotion-signature-evidence --promotion-signer-authority --promotion-signature-bundle --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
     configureRuntimePromotionArtifacts(a, process.env);
     const prepared = readJson(a.prepared);
     const expectedOperation = { message_sha256: prepared?.iso20022?.document_sha256, instruction_sha256: prepared?.instruction?.instruction_sha256, idempotency_key: a['idempotency-key'] };
     const { core } = coreFor(a, { live: true, governanceRequired: true });
     const runtimeGate = verifyRuntimePromotionGate({ env: process.env, consumeChallenge: false, expectedOperation });
     const result = await core.execute({ prepared, schemeValidationEvidence: readJson(a.validation), approvalToken: fs.readFileSync(path.resolve(a.approval), 'utf8').trim(), authoritySignatures: readJson(a.signatures), idempotencyKey: a['idempotency-key'] });
-    console.log(JSON.stringify({ ...result, settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256, runtime_promotion_gate_sha256: runtimeGate.gate_sha256, promotion_signature_proof_sha256: runtimeGate.promotion_signature_proof_sha256, promotion_signer_key_binding_sha256: runtimeGate.promotion_signer_key_binding_sha256, trusted_runtime_ha_observer_sha256: runtimeGate.trusted_runtime_ha_observer_sha256, ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256, ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256, ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256 }, null, 2));
+    console.log(JSON.stringify({ ...result, settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256, runtime_promotion_gate_sha256: runtimeGate.gate_sha256, promotion_signature_proof_sha256: runtimeGate.promotion_signature_proof_sha256, promotion_signature_quorum_proof_sha256: runtimeGate.promotion_signature_quorum_proof_sha256, promotion_signer_authority_root_sha256: runtimeGate.promotion_signer_authority_root_sha256, promotion_signature_quorum: runtimeGate.promotion_signature_quorum, promotion_signature_valid_signer_count: runtimeGate.promotion_signature_valid_signer_count, promotion_signer_key_binding_sha256: runtimeGate.promotion_signer_key_binding_sha256, trusted_runtime_ha_observer_sha256: runtimeGate.trusted_runtime_ha_observer_sha256, ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256, ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256, ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256 }, null, 2));
     return;
   }
 
