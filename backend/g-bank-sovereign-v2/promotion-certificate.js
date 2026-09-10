@@ -13,7 +13,7 @@ function verifyReadiness(readiness, { now = Date.now() } = {}) {
   const required = [
     'static_configuration_ready', 'external_transport_verified', 'prudential_controls_verified',
     'operational_controls_verified', 'customer_monitoring_verified', 'recovery_controls_verified',
-    'ha_controls_verified', 'direct_live_ready', 'value_movement_permitted_by_readiness',
+    'ha_controls_verified', 'ha_deployment_verified', 'direct_live_ready', 'value_movement_permitted_by_readiness',
   ];
   if (readiness.state !== 'DIRECT_LIVE_READY' || required.some(k => readiness[k] !== true)) throw new Error('direct_live_readiness_not_satisfied');
   if (!readiness.checks || typeof readiness.checks !== 'object' || !Object.keys(readiness.checks).length) throw new Error('readiness_checks_required');
@@ -48,6 +48,7 @@ function createTechnicalPromotionCertificate({ readiness, checkpoint, governance
     customer_monitoring_audit_sha256: hash64('customer_monitoring_audit_sha256', evidence.customer_monitoring_audit_sha256),
     recovery_audit_sha256: hash64('recovery_audit_sha256', evidence.recovery_audit_sha256),
     ha_audit_sha256: hash64('ha_audit_sha256', evidence.ha_audit_sha256),
+    ha_deployment_audit_sha256: hash64('ha_deployment_audit_sha256', evidence.ha_deployment_audit_sha256),
   };
   if (!readiness.evidence_bindings || typeof readiness.evidence_bindings !== 'object') throw new Error('readiness_evidence_bindings_required');
   for (const [key, value] of Object.entries(bindings)) {
