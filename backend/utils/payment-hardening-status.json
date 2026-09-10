@@ -1,5 +1,5 @@
 {
-  "version": "1.12.0",
+  "version": "1.13.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -43,6 +43,13 @@
     "postgres_payment_intent_immutable_binding_verified_in_ci": true,
     "postgres_payment_intent_origin_verification_verified_in_ci": true,
     "mollie_create_and_webhook_use_shared_intent_runtime": true,
+    "per_effect_idempotency_ledger_implemented": true,
+    "per_effect_stable_ids": true,
+    "per_effect_prepare_complete_state": true,
+    "invoice_completed_result_reused_on_retry": true,
+    "email_completed_effect_suppresses_later_duplicate_send": true,
+    "postgres_payment_effect_unique_provider_payment_type": true,
+    "postgres_payment_effect_ledger_verified_in_ci": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -73,7 +80,11 @@
     "shared_postgres_payment_intent_ci": "passed",
     "shared_postgres_payment_intent_commit": "2abef27012b9fd1fc5a19f599f9cd941acc7406d",
     "shared_postgres_payment_intent_run_id": 34523393901,
-    "shared_postgres_payment_intent_run_number": 140
+    "shared_postgres_payment_intent_run_number": 140,
+    "per_effect_idempotency_ci": "passed",
+    "per_effect_idempotency_commit": "4bec5250c5b821529dbcce20cc2e2b92f55d6102",
+    "per_effect_idempotency_run_id": 34523800774,
+    "per_effect_idempotency_run_number": 151
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -87,7 +98,8 @@
     "crash_safe_exactly_once_external_side_effects": true,
     "multi_process_distributed_locking": true,
     "atomic_cross_table_intent_and_payment_state_transaction": true,
-    "per_effect_idempotency_records": true,
+    "email_exactly_once_across_crash_after_provider_acceptance": true,
+    "invoice_external_storage_exactly_once": true,
     "postgres_production_database_provisioned": true,
     "postgres_backend_activated_in_production": true,
     "multi_host_transactional_state_store_verified_live": true,
