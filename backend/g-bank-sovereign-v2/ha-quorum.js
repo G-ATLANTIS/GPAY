@@ -101,7 +101,7 @@ function createCommitProposal({ cluster, term, leader_node_id, commit_index, sta
   }, 'g-bank-ha-commit-proposal/v2');
 }
 
-function signatureEnvelope({ proposal: p, node_id, signed_at, signer_key_binding_sha256 }) {
+function signatureEnvelope({ proposal: p, node_id, signed_at, signer_key_binding_sha256, vote_reservation_sha256 }) {
   if (!p || !/^g-bank-ha-(fence|commit)-proposal\/v2$/.test(String(p.schema || ''))) throw new Error('ha_proposal_invalid');
   const nodeId = String(node_id || '').toUpperCase();
   if (!/^[A-Z0-9:_-]{3,96}$/.test(nodeId)) throw new Error('ha_signature_node_id_invalid');
@@ -115,6 +115,7 @@ function signatureEnvelope({ proposal: p, node_id, signed_at, signer_key_binding
     proposal_schema: p.schema,
     proposal_sha256: hash64('ha_signature_proposal_sha256', p.proposal_sha256),
     signer_key_binding_sha256: hash64('ha_signer_key_binding_sha256', signer_key_binding_sha256),
+    vote_reservation_sha256: hash64('ha_vote_reservation_sha256', vote_reservation_sha256),
     signed_at: new Date(signedAt).toISOString(),
   });
 }
@@ -126,17 +127,26 @@ function privateKeyBinding(privateKey) {
   return sha256(publicKey.export({ type: 'spki', format: 'der' }));
 }
 
-function signProposal({ proposal: p, node_id, private_key, signed_at = new Date().toISOString(), vote_store = null }) {
+function signProposal({ proposal: p, node_id, private_key, signed_at = new Date().toISOString(), vote_store }) {
   if (!p?.proposal_sha256) throw new Error('ha_proposal_required');
+  if (!vote_store || typeof vote_store.reserve !== 'function') throw new Error('ha_vote_store_required_for_signature');
   const nodeId = String(node_id || '').toUpperCase();
   const keyBinding = privateKeyBinding(private_key);
-  const envelope = signatureEnvelope({ proposal: p, node_id: nodeId, signed_at, signer_key_binding_sha256: keyBinding });
+  const reservation = vote_store.reserve({
+    proposal: p,
+    node_id: nodeId,
+    signer_key_binding_sha256: keyBinding,
+    signed_at,
+  });
+  const envelope = signatureEnvelope({
+    proposal: p,
+    node_id: nodeId,
+    signed_at: reservation.signed_at,
+    signer_key_binding_sha256: keyBinding,
+    vote_reservation_sha256: reservation.record_sha256,
+  });
   const payload = canonicalJson(envelope);
   const signedPayloadSha256 = sha256(payload);
-  if (vote_store) {
-    if (typeof vote_store.reserve !== 'function') throw new Error('ha_vote_store_invalid');
-    vote_store.reserve({ proposal: p, node_id: nodeId, signer_key_binding_sha256: keyBinding, signed_at: envelope.signed_at });
-  }
   const signature = crypto.sign(null, Buffer.from(payload, 'utf8'), private_key).toString('base64');
   return Object.freeze({
     ...envelope,
@@ -170,6 +180,7 @@ function verifyQuorumCertificate({ cluster, proposal: p, signatures, now = Date.
       node_id: nodeId,
       signed_at: sig.signed_at,
       signer_key_binding_sha256: node.public_key_binding_sha256,
+      vote_reservation_sha256: sig.vote_reservation_sha256,
     });
     for (const [key, value] of Object.entries(expectedEnvelope)) {
       if (sig?.[key] !== value) throw new Error(`ha_signature_envelope_mismatch:${key}`);
