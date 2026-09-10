@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { canonicalJson, sha256 } = require('../g-bank-live-v1/canonical');
+const { canonicalJson, sha256 } = require('./canonical');
 
 function assertAccountId(value) {
   const id = String(value || '');
@@ -43,7 +43,9 @@ class SovereignLedger {
   verify() {
     const records = this._records();
     let prev = 'GENESIS';
-    for (const record of records) {
+    for (let i = 0; i < records.length; i += 1) {
+      const record = records[i];
+      if (record.sequence !== i + 1) throw new Error('ledger_sequence_invalid');
       if (record.previous_record_sha256 !== prev) throw new Error('ledger_hash_chain_broken');
       const supplied = record.record_sha256;
       const copy = { ...record };
@@ -52,7 +54,7 @@ class SovereignLedger {
       if (supplied !== expected) throw new Error('ledger_record_hash_mismatch');
       prev = supplied;
     }
-    return { verified: true, record_count: records.length, head_sha256: prev };
+    return Object.freeze({ verified: true, record_count: records.length, head_sha256: prev });
   }
 
   balance(accountId, currency) {
