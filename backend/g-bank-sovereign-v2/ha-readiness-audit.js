@@ -3,7 +3,12 @@
 const { canonicalJson, sha256 } = require('./canonical');
 const { normalizeCluster } = require('./ha-quorum');
 
-function assessHAReadiness({ cluster, fenceStore, commitStore, checkpoint, now = Date.now(), max_commit_age_ms = 120000 } = {}) {
+function storeFor(voteStores, nodeId) {
+  if (voteStores instanceof Map) return voteStores.get(nodeId) || null;
+  return voteStores?.[nodeId] || null;
+}
+
+function assessHAReadiness({ cluster, fenceStore, commitStore, voteStores = null, checkpoint, now = Date.now(), max_commit_age_ms = 120000 } = {}) {
   const c = normalizeCluster(cluster);
   if (!fenceStore || !commitStore) throw new Error('ha_stores_required');
   if (!checkpoint || checkpoint.schema !== 'g-bank-sovereign-state-checkpoint/v2') throw new Error('ha_checkpoint_required');
@@ -23,6 +28,40 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, checkpoint, now =
   if (fence && fence.cluster_sha256 !== c.cluster_sha256) reasons.push('FENCE_CLUSTER_MISMATCH');
   if (commit && commit.cluster_sha256 !== c.cluster_sha256) reasons.push('COMMIT_CLUSTER_MISMATCH');
 
+  const activeVoters = c.nodes.filter(node => node.role === 'VOTER' && node.status === 'ACTIVE');
+  const journalHeads = {};
+  const journalProofs = new Map();
+  for (const node of activeVoters) {
+    const store = storeFor(voteStores, node.node_id);
+    if (!store || typeof store.verify !== 'function') {
+      reasons.push(`VOTE_STORE_MISSING:${node.node_id}`);
+      journalHeads[node.node_id] = null;
+      continue;
+    }
+    if (store.nodeId !== node.node_id) {
+      reasons.push(`VOTE_STORE_NODE_MISMATCH:${node.node_id}`);
+      journalHeads[node.node_id] = null;
+      continue;
+    }
+    const proof = store.verify();
+    journalProofs.set(node.node_id, proof);
+    journalHeads[node.node_id] = proof.latest_record_sha256;
+  }
+
+  const requireDurableVotes = (record, label) => {
+    if (!record?.quorum_certificate?.signer_node_ids || !record?.proposal_sha256) return;
+    for (const signerId of record.quorum_certificate.signer_node_ids) {
+      const proof = journalProofs.get(signerId);
+      const durable = proof?.rows?.some(row => row.proposal_sha256 === record.proposal_sha256 && row.cluster_sha256 === c.cluster_sha256 && row.cluster_epoch === c.cluster_epoch);
+      if (!durable) reasons.push(`${label}_SIGNER_VOTE_NOT_DURABLE:${signerId}`);
+    }
+  };
+  requireDurableVotes(fence, 'FENCE');
+  requireDurableVotes(commit, 'COMMIT');
+
+  const orderedJournalHeads = Object.freeze(Object.fromEntries(Object.entries(journalHeads).sort(([a], [b]) => a.localeCompare(b))));
+  const voterJournalRoot = sha256(canonicalJson(orderedJournalHeads));
+
   const body = {
     schema: 'g-bank-ha-readiness-audit/v2',
     state: reasons.length ? 'BLOCK' : 'PASS',
@@ -38,6 +77,8 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, checkpoint, now =
     latest_commit_sha256: commit?.record_sha256 || null,
     replicated_state_root_sha256: commit?.state_root_sha256 || null,
     checkpoint_state_root_sha256: checkpoint.state_root_sha256,
+    voter_journal_heads: orderedJournalHeads,
+    voter_journal_root_sha256: voterJournalRoot,
     reasons,
     audited_at: new Date(now).toISOString(),
     grants_external_rights: false,
@@ -47,4 +88,4 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, checkpoint, now =
   return Object.freeze({ ...body, audit_sha256: sha256(canonicalJson(body)) });
 }
 
-module.exports = { assessHAReadiness };
+module.exports = { assessHAReadiness, storeFor };
