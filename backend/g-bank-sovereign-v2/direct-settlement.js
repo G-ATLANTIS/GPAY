@@ -61,14 +61,24 @@ class DirectSettlementAdapter {
     if (!instruction?.instruction_sha256) throw new Error('settlement_instruction_required');
     if (!idempotencyKey) throw new Error('settlement_idempotency_key_required');
 
-    // This is the final local gate before the external transport call. The one-time
-    // challenge is consumed here so a signed runtime witness cannot be replayed.
-    const runtimeGate = verifyRuntimePromotionGate({ env: this.env, now, consumeChallenge: true });
+    // Final local gate before the external transport call. It recomputes the exact
+    // payment-operation binding and atomically consumes the matching one-time HA challenge.
+    const runtimeGate = verifyRuntimePromotionGate({
+      env: this.env,
+      now,
+      consumeChallenge: true,
+      expectedOperation: {
+        message_sha256: message.document_sha256,
+        instruction_sha256: instruction.instruction_sha256,
+        idempotency_key: idempotencyKey,
+      },
+    });
     if (runtimeGate.ha_runtime_challenge_consumed !== true) throw new Error('runtime_ha_challenge_not_consumed');
 
     const response = await this.transport.submit({
       message_type: message.message_type, message_document: message.document, message_sha256: message.document_sha256,
       instruction, idempotency_key: idempotencyKey, authorization_sha256,
+      settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256,
       runtime_promotion_gate_sha256: runtimeGate.gate_sha256,
       promotion_certificate_sha256: runtimeGate.promotion_certificate_sha256,
       recovery_audit_sha256: runtimeGate.recovery_audit_sha256,
@@ -80,6 +90,7 @@ class DirectSettlementAdapter {
       ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
       ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
       ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256,
+      ha_runtime_challenge_operation_binding_sha256: runtimeGate.ha_runtime_challenge_operation_binding_sha256,
       ha_runtime_challenge_issue_record_sha256: runtimeGate.ha_runtime_challenge_issue_record_sha256,
       ha_runtime_challenge_consume_record_sha256: runtimeGate.ha_runtime_challenge_consume_record_sha256,
       ha_runtime_challenge_store_head_sha256: runtimeGate.ha_runtime_challenge_store_head_sha256,
@@ -93,6 +104,7 @@ class DirectSettlementAdapter {
       schema: 'g-bank-direct-settlement-submission/v2', provider: this.name, environment: 'LIVE',
       submission_id: String(response.submission_id), status: String(response.status || 'SUBMITTED'),
       message_type: message.message_type, message_sha256: message.document_sha256, instruction_sha256: instruction.instruction_sha256,
+      settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256,
       runtime_promotion_gate_sha256: runtimeGate.gate_sha256, promotion_certificate_sha256: runtimeGate.promotion_certificate_sha256,
       recovery_audit_sha256: runtimeGate.recovery_audit_sha256, customer_monitoring_audit_sha256: runtimeGate.customer_monitoring_audit_sha256,
       ha_audit_sha256: runtimeGate.ha_audit_sha256, ha_deployment_audit_sha256: runtimeGate.ha_deployment_audit_sha256,
@@ -101,6 +113,7 @@ class DirectSettlementAdapter {
       ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
       ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
       ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256,
+      ha_runtime_challenge_operation_binding_sha256: runtimeGate.ha_runtime_challenge_operation_binding_sha256,
       ha_runtime_challenge_issue_record_sha256: runtimeGate.ha_runtime_challenge_issue_record_sha256,
       ha_runtime_challenge_consume_record_sha256: runtimeGate.ha_runtime_challenge_consume_record_sha256,
       ha_runtime_challenge_store_head_sha256: runtimeGate.ha_runtime_challenge_store_head_sha256,
