@@ -12,6 +12,7 @@ const { assessLiquidity } = require('../g-bank-sovereign-v2/liquidity');
 const { auditSovereignInvariants } = require('../g-bank-sovereign-v2/invariant-auditor');
 const { assessOperationalResilience } = require('../g-bank-sovereign-v2/operational-resilience');
 const { assessTreasuryPosition, verifySettlementLiquidityEvidence } = require('../g-bank-sovereign-v2/treasury-position');
+const { reconcileSettlementStatement } = require('../g-bank-sovereign-v2/settlement-statement-reconciliation');
 const { snapshotState } = require('../g-bank-sovereign-v2/checkpoint');
 const { createEndOfDayClose } = require('../g-bank-sovereign-v2/eod-close');
 const { EndOfDayStore } = require('../g-bank-sovereign-v2/eod-store');
@@ -31,6 +32,20 @@ function liquidityEvidence(available_minor) {
     observed_at: new Date(NOW - 30000).toISOString(),
   };
   return Object.freeze({ ...body, evidence_sha256: sha256(canonicalJson(body)) });
+}
+
+function emptySettlementReconciliation() {
+  const body = {
+    schema: 'g-bank-settlement-statement/v2',
+    source: 'VERIFIED_EXTERNAL_STATEMENT',
+    business_date: '2026-09-10',
+    currency: 'EUR',
+    settlement_system: 'AUTHORIZED-TEST-BOUNDARY',
+    entries: [],
+    observed_at: new Date(NOW - 1000).toISOString(),
+  };
+  const statement = { ...body, statement_sha256: sha256(canonicalJson(body)) };
+  return reconcileSettlementStatement({ receiptRows: [], statement, now: NOW });
 }
 
 function setup() {
@@ -126,6 +141,8 @@ function setup() {
     now: NOW,
   });
   assert.equal(resilience.state, 'PASS');
+  const settlementReconciliation = emptySettlementReconciliation();
+  assert.equal(settlementReconciliation.state, 'PASS');
 
   const close = createEndOfDayClose({
     business_date: '2026-09-10',
@@ -135,6 +152,7 @@ function setup() {
     liquidityAssessment: liquidity,
     treasuryAssessment: treasury,
     resilienceAssessment: resilience,
+    settlementReconciliation,
     now: NOW,
   });
   assert.equal(close.state, 'CLOSED');
@@ -173,11 +191,32 @@ function setup() {
     liquidityAssessment: liquidity,
     treasuryAssessment: constrained,
     resilienceAssessment: resilience,
+    settlementReconciliation,
     now: NOW,
   });
   assert.equal(blockedClose.state, 'BLOCK');
   assert(blockedClose.reasons.includes('TREASURY_BLOCKED'));
   assert.throws(() => eodStore.commit(blockedClose), /eod_close_not_closed/);
+
+  const blockedReconciliationBody = { ...settlementReconciliation, state: 'BLOCK', reasons: ['TEST_MISMATCH'] };
+  delete blockedReconciliationBody.reconciliation_sha256;
+  const blockedReconciliation = {
+    ...blockedReconciliationBody,
+    reconciliation_sha256: sha256(canonicalJson(blockedReconciliationBody)),
+  };
+  const reconBlockedClose = createEndOfDayClose({
+    business_date: '2026-09-10',
+    checkpoint,
+    invariantAudit: invariant,
+    safeguardingAssessment: safeguarding,
+    liquidityAssessment: liquidity,
+    treasuryAssessment: treasury,
+    resilienceAssessment: resilience,
+    settlementReconciliation: blockedReconciliation,
+    now: NOW,
+  });
+  assert.equal(reconBlockedClose.state, 'BLOCK');
+  assert(reconBlockedClose.reasons.includes('SETTLEMENT_RECONCILIATION_BLOCKED'));
 
   const tamperedEvidence = { ...evidence, available_minor: 999999 };
   assert.throws(() => verifySettlementLiquidityEvidence(tamperedEvidence, { currency: 'EUR', now: NOW }), /hash_mismatch/);
@@ -197,6 +236,7 @@ function setup() {
     liquidityAssessment: liquidity,
     treasuryAssessment: treasury,
     resilienceAssessment: frozen,
+    settlementReconciliation,
     now: NOW,
   });
   assert.equal(frozenClose.state, 'BLOCK');
