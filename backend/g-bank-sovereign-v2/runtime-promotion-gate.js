@@ -5,6 +5,7 @@ const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
 const { verifyTechnicalPromotionCertificate, verifyReadiness } = require('./promotion-certificate');
 const { verifyHARuntimeObservation } = require('./ha-runtime-attestation');
+const { HARuntimeChallengeStore } = require('./ha-runtime-challenge-store');
 
 function hash64(name, value) {
   const hash = String(value || '').toLowerCase();
@@ -37,11 +38,14 @@ const RUNTIME_BINDINGS = Object.freeze([
   ['ha_deployment_audit_sha256', 'G_BANK_HA_DEPLOYMENT_AUDIT_SHA256'],
 ]);
 
-function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}) {
+function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consumeChallenge = false } = {}) {
   const readinessFile = readJsonFile('runtime_readiness', env.G_BANK_RUNTIME_READINESS_FILE);
   const promotionFile = readJsonFile('runtime_promotion_certificate', env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE);
   const runtimeHAFile = readJsonFile('runtime_ha_attestation', env.G_BANK_RUNTIME_HA_ATTESTATION_FILE);
   const runtimeHAObserverFile = readJsonFile('runtime_ha_observer', env.G_BANK_RUNTIME_HA_OBSERVER_FILE);
+  const challengeStorePath = String(env.G_BANK_RUNTIME_HA_CHALLENGE_STORE || '');
+  if (!challengeStorePath) throw new Error('runtime_ha_challenge_store_required');
+  const challengeStore = new HARuntimeChallengeStore(challengeStorePath);
   const readiness = readinessFile.value;
   const certificate = promotionFile.value;
 
@@ -78,6 +82,13 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
     now,
   });
 
+  const challengeUsable = challengeStore.assertUsable({ nonce_sha256: runtimeHAFile.value.nonce_sha256, now });
+  const challengeConsumption = consumeChallenge ? challengeStore.consume({
+    nonce_sha256: runtimeHAFile.value.nonce_sha256,
+    observation_sha256: runtimeHAAudit.observation_sha256,
+    now,
+  }) : null;
+
   const body = {
     schema: 'g-bank-runtime-promotion-gate/v2',
     state: 'PASS',
@@ -90,6 +101,11 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
     ha_cluster_authority_root_sha256: certificate.ha_cluster_authority_root_sha256,
     ha_runtime_attestation_audit_sha256: runtimeHAAudit.audit_sha256,
     ha_runtime_observation_sha256: runtimeHAAudit.observation_sha256,
+    ha_runtime_challenge_nonce_sha256: challengeUsable.nonce_sha256,
+    ha_runtime_challenge_issue_record_sha256: challengeUsable.issue_record_sha256,
+    ha_runtime_challenge_consumed: Boolean(challengeConsumption),
+    ha_runtime_challenge_consume_record_sha256: challengeConsumption?.consume_record_sha256 || null,
+    ha_runtime_challenge_store_head_sha256: challengeConsumption?.challenge_store_head_sha256 || challengeUsable.challenge_store_head_sha256,
     customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
     recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
     ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
