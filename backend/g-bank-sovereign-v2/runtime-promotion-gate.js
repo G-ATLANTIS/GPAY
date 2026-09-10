@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson, sha256 } = require('./canonical');
 const { verifyTechnicalPromotionCertificate, verifyReadiness } = require('./promotion-certificate');
+const { verifyExternalPromotionSignatureEvidence } = require('./promotion-signing');
 const { verifyHARuntimeObservation } = require('./ha-runtime-attestation');
 const { HARuntimeChallengeStore } = require('./ha-runtime-challenge-store');
 const { settlementOperationBinding } = require('./settlement-operation-binding');
@@ -42,6 +43,8 @@ const RUNTIME_BINDINGS = Object.freeze([
 function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consumeChallenge = false, expectedOperation } = {}) {
   const readinessFile = readJsonFile('runtime_readiness', env.G_BANK_RUNTIME_READINESS_FILE);
   const promotionFile = readJsonFile('runtime_promotion_certificate', env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE);
+  const promotionSigningRequestFile = readJsonFile('runtime_promotion_signing_request', env.G_BANK_RUNTIME_PROMOTION_SIGNING_REQUEST_FILE);
+  const promotionSignatureFile = readJsonFile('runtime_promotion_signature_evidence', env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_EVIDENCE_FILE);
   const runtimeHAFile = readJsonFile('runtime_ha_attestation', env.G_BANK_RUNTIME_HA_ATTESTATION_FILE);
   const runtimeHAObserverFile = readJsonFile('runtime_ha_observer', env.G_BANK_RUNTIME_HA_OBSERVER_FILE);
   const challengeStorePath = String(env.G_BANK_RUNTIME_HA_CHALLENGE_STORE || '');
@@ -52,6 +55,12 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
 
   verifyReadiness(readiness, { now });
   verifyTechnicalPromotionCertificate(certificate, { readiness, now });
+  const promotionSignatureProof = verifyExternalPromotionSignatureEvidence({
+    request: promotionSigningRequestFile.value,
+    certificate,
+    evidence: promotionSignatureFile.value,
+    now,
+  });
 
   const configuredCertificate = hash64('promotion_certificate_sha256', env.G_BANK_PROMOTION_CERTIFICATE_SHA256);
   if (configuredCertificate !== String(certificate.certificate_sha256 || '').toLowerCase()) throw new Error('runtime_promotion_certificate_binding_mismatch');
@@ -93,23 +102,17 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
     now,
   });
 
-  const challengeUsable = challengeStore.assertUsable({
-    nonce_sha256: runtimeHAFile.value.nonce_sha256,
-    operation_binding_sha256: operationBinding.operation_binding_sha256,
-    now,
-  });
-  const challengeConsumption = consumeChallenge ? challengeStore.consume({
-    nonce_sha256: runtimeHAFile.value.nonce_sha256,
-    operation_binding_sha256: operationBinding.operation_binding_sha256,
-    observation_sha256: runtimeHAAudit.observation_sha256,
-    now,
-  }) : null;
+  const challengeUsable = challengeStore.assertUsable({ nonce_sha256: runtimeHAFile.value.nonce_sha256, operation_binding_sha256: operationBinding.operation_binding_sha256, now });
+  const challengeConsumption = consumeChallenge ? challengeStore.consume({ nonce_sha256: runtimeHAFile.value.nonce_sha256, operation_binding_sha256: operationBinding.operation_binding_sha256, observation_sha256: runtimeHAAudit.observation_sha256, now }) : null;
 
   const body = {
-    schema: 'g-bank-runtime-promotion-gate/v2',
-    state: 'PASS',
+    schema: 'g-bank-runtime-promotion-gate/v2', state: 'PASS',
     readiness_snapshot_sha256: sha256(canonicalJson(readiness)),
     promotion_certificate_sha256: certificate.certificate_sha256,
+    promotion_signature_proof_sha256: promotionSignatureProof.proof_sha256,
+    promotion_signing_request_sha256: promotionSignatureProof.signing_request_sha256,
+    promotion_signer_key_binding_sha256: promotionSignatureProof.key_binding_sha256,
+    promotion_signer_receipt_sha256: promotionSignatureProof.signer_receipt_sha256,
     trusted_runtime_ha_observer_sha256: certificate.trusted_runtime_ha_observer_sha256,
     settlement_operation_binding_sha256: operationBinding.operation_binding_sha256,
     settlement_message_sha256: operationBinding.message_sha256,
@@ -133,9 +136,7 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
     ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
     ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256,
     ha_fence_valid_until: certificate.ha_fence_valid_until,
-    grants_external_rights: false,
-    permits_value_movement_by_itself: false,
-    runtime_submit_gate_satisfied: true,
+    grants_external_rights: false, permits_value_movement_by_itself: false, runtime_submit_gate_satisfied: true,
     checked_at: new Date(now).toISOString(),
   };
   return Object.freeze({ ...body, gate_sha256: sha256(canonicalJson(body)) });
