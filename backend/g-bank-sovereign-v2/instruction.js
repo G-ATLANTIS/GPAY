@@ -1,6 +1,6 @@
 'use strict';
 
-const { canonicalJson, sha256 } = require('../g-bank-live-v1/canonical');
+const { canonicalJson, sha256 } = require('./canonical');
 const { assertAccountId, assertCurrency, assertMinor } = require('./ledger');
 const { normalizeIban, isValidIban } = require('./accounts');
 
