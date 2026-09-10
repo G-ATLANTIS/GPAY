@@ -1,0 +1,123 @@
+name: G-BANK sovereign v2 safety
+
+on:
+  push:
+    branches:
+      - feature/g-bank-sovereign-core-v2
+  pull_request:
+    paths:
+      - 'backend/g-bank-sovereign-v2/**'
+      - 'backend/tests/g-bank-sovereign-v2*.test.js'
+      - 'scripts/g-bank-sovereign-v2.js'
+      - '.github/workflows/g-bank-sovereign-v2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  sovereign-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks
+        run: |
+          node --check backend/g-bank-sovereign-v2/canonical.js
+          node --check backend/g-bank-sovereign-v2/receipt-ledger.js
+          node --check backend/g-bank-sovereign-v2/ledger.js
+          node --check backend/g-bank-sovereign-v2/customer-registry.js
+          node --check backend/g-bank-sovereign-v2/customer-onboarding.js
+          node --check backend/g-bank-sovereign-v2/customer-account-provisioning.js
+          node --check backend/g-bank-sovereign-v2/customer-controls.js
+          node --check backend/g-bank-sovereign-v2/monitoring-evidence.js
+          node --check backend/g-bank-sovereign-v2/evidence-revocation-store.js
+          node --check backend/g-bank-sovereign-v2/monitoring-case-store.js
+          node --check backend/g-bank-sovereign-v2/monitoring-policy.js
+          node --check backend/g-bank-sovereign-v2/monitoring-policy-store.js
+          node --check backend/g-bank-sovereign-v2/monitoring-case-sla.js
+          node --check backend/g-bank-sovereign-v2/monitoring-fleet-audit.js
+          node --check backend/g-bank-sovereign-v2/transaction-monitoring.js
+          node --check backend/g-bank-sovereign-v2/transaction-activity-source.js
+          node --check backend/g-bank-sovereign-v2/continuous-customer-monitoring.js
+          node --check backend/g-bank-sovereign-v2/monitoring-cycle.js
+          node --check backend/g-bank-sovereign-v2/recovery-manifest.js
+          node --check backend/g-bank-sovereign-v2/recovery-anchor-store.js
+          node --check backend/g-bank-sovereign-v2/recovery-snapshot.js
+          node --check backend/g-bank-sovereign-v2/restore-verifier.js
+          node --check backend/g-bank-sovereign-v2/recovery-readiness-audit.js
+          node --check backend/g-bank-sovereign-v2/ha-runtime-attestation.js
+          node --check backend/g-bank-sovereign-v2/ha-runtime-challenge-store.js
+          node --check backend/g-bank-sovereign-v2/settlement-operation-binding.js
+          node --check backend/g-bank-sovereign-v2/promotion-signing.js
+          node --check backend/g-bank-sovereign-v2/promotion-signer-authority.js
+          node --check backend/g-bank-sovereign-v2/runtime-promotion-gate.js
+          node --check backend/g-bank-sovereign-v2/accounts.js
+          node --check backend/g-bank-sovereign-v2/account-operation-lock.js
+          node --check backend/g-bank-sovereign-v2/account-lifecycle.js
+          node --check backend/g-bank-sovereign-v2/account-balance-view.js
+          node --check backend/g-bank-sovereign-v2/account-statements.js
+          node --check backend/g-bank-sovereign-v2/inbound-store.js
+          node --check backend/g-bank-sovereign-v2/inbound-payments.js
+          node --check backend/g-bank-sovereign-v2/inbound-exceptions.js
+          node --check backend/g-bank-sovereign-v2/inbound-statement-reconciliation.js
+          node --check backend/g-bank-sovereign-v2/compliance.js
+          node --check backend/g-bank-sovereign-v2/instruction.js
+          node --check backend/g-bank-sovereign-v2/iso20022.js
+          node --check backend/g-bank-sovereign-v2/scheme-validation.js
+          node --check backend/g-bank-sovereign-v2/approval.js
+          node --check backend/g-bank-sovereign-v2/risk-policy.js
+          node --check backend/g-bank-sovereign-v2/authority.js
+          node --check backend/g-bank-sovereign-v2/governance.js
+          node --check backend/g-bank-sovereign-v2/checkpoint.js
+          node --check backend/g-bank-sovereign-v2/velocity-store.js
+          node --check backend/g-bank-sovereign-v2/safeguarding.js
+          node --check backend/g-bank-sovereign-v2/liquidity.js
+          node --check backend/g-bank-sovereign-v2/invariant-auditor.js
+          node --check backend/g-bank-sovereign-v2/operational-resilience.js
+          node --check backend/g-bank-sovereign-v2/treasury-position.js
+          node --check backend/g-bank-sovereign-v2/settlement-statement-reconciliation.js
+          node --check backend/g-bank-sovereign-v2/eod-close.js
+          node --check backend/g-bank-sovereign-v2/eod-store.js
+          node --check backend/g-bank-sovereign-v2/external-signing.js
+          node --check backend/g-bank-sovereign-v2/promotion-certificate.js
+          node --check backend/g-bank-sovereign-v2/execution-store.js
+          node --check backend/g-bank-sovereign-v2/direct-settlement.js
+          node --check backend/g-bank-sovereign-v2/readiness.js
+          node --check backend/g-bank-sovereign-v2/sovereign-core.js
+          node --check backend/tests/g-bank-sovereign-v2-runtime-ha-fixture.js
+          node --check backend/tests/g-bank-sovereign-v2-operation-binding.test.js
+          node --check backend/tests/g-bank-sovereign-v2-promotion-signing.test.js
+          node --check backend/tests/g-bank-sovereign-v2-promotion-quorum-signing.test.js
+          node --check backend/tests/g-bank-sovereign-v2-cli.test.js
+          node --check scripts/g-bank-sovereign-v2.js
+      - name: No-network sovereign safety tests
+        run: |
+          node backend/tests/g-bank-sovereign-v2.test.js
+          node backend/tests/g-bank-sovereign-v2-operation-binding.test.js
+          node backend/tests/g-bank-sovereign-v2-readiness.test.js
+          node backend/tests/g-bank-sovereign-v2-integrity.test.js
+          node backend/tests/g-bank-sovereign-v2-governance.test.js
+          node backend/tests/g-bank-sovereign-v2-velocity.test.js
+          node backend/tests/g-bank-sovereign-v2-prudential.test.js
+          node backend/tests/g-bank-sovereign-v2-resilience.test.js
+          node backend/tests/g-bank-sovereign-v2-treasury.test.js
+          node backend/tests/g-bank-sovereign-v2-settlement-reconciliation.test.js
+          node backend/tests/g-bank-sovereign-v2-signing.test.js
+          node backend/tests/g-bank-sovereign-v2-promotion-certificate.test.js
+          node backend/tests/g-bank-sovereign-v2-promotion-signing.test.js
+          node backend/tests/g-bank-sovereign-v2-promotion-quorum-signing.test.js
+          node backend/tests/g-bank-sovereign-v2-inbound.test.js
+          node backend/tests/g-bank-sovereign-v2-inbound-reconciliation.test.js
+          node backend/tests/g-bank-sovereign-v2-customer-onboarding.test.js
+          node backend/tests/g-bank-sovereign-v2-customer-controls.test.js
+          node backend/tests/g-bank-sovereign-v2-monitoring.test.js
+          node backend/tests/g-bank-sovereign-v2-monitoring-source.test.js
+          node backend/tests/g-bank-sovereign-v2-monitoring-fleet.test.js
+          node backend/tests/g-bank-sovereign-v2-monitoring-policy-store.test.js
+          node backend/tests/g-bank-sovereign-v2-monitoring-cycle.test.js
+          node backend/tests/g-bank-sovereign-v2-recovery.test.js
+          node backend/tests/g-bank-sovereign-v2-runtime-gate.test.js
+          node backend/tests/g-bank-sovereign-v2-cli.test.js
