@@ -41,7 +41,7 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
   const readiness = readinessFile.value;
   const certificate = promotionFile.value;
 
-  verifyReadiness(readiness);
+  verifyReadiness(readiness, { now });
   verifyTechnicalPromotionCertificate(certificate, { readiness, now });
 
   const configuredCertificate = hash64('promotion_certificate_sha256', env.G_BANK_PROMOTION_CERTIFICATE_SHA256);
@@ -71,6 +71,7 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
     customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
     recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
     ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
+    ha_fence_valid_until: certificate.ha_fence_valid_until,
     grants_external_rights: false,
     permits_value_movement_by_itself: false,
     runtime_submit_gate_satisfied: true,
