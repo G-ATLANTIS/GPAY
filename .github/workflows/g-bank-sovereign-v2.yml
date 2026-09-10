@@ -52,6 +52,7 @@ jobs:
           node --check backend/g-bank-sovereign-v2/ha-runtime-challenge-store.js
           node --check backend/g-bank-sovereign-v2/settlement-operation-binding.js
           node --check backend/g-bank-sovereign-v2/promotion-signing.js
+          node --check backend/g-bank-sovereign-v2/promotion-signer-authority.js
           node --check backend/g-bank-sovereign-v2/runtime-promotion-gate.js
           node --check backend/g-bank-sovereign-v2/accounts.js
           node --check backend/g-bank-sovereign-v2/account-operation-lock.js
@@ -89,6 +90,7 @@ jobs:
           node --check backend/tests/g-bank-sovereign-v2-runtime-ha-fixture.js
           node --check backend/tests/g-bank-sovereign-v2-operation-binding.test.js
           node --check backend/tests/g-bank-sovereign-v2-promotion-signing.test.js
+          node --check backend/tests/g-bank-sovereign-v2-promotion-quorum-signing.test.js
           node --check backend/tests/g-bank-sovereign-v2-cli.test.js
           node --check scripts/g-bank-sovereign-v2.js
       - name: No-network sovereign safety tests
@@ -106,6 +108,7 @@ jobs:
           node backend/tests/g-bank-sovereign-v2-signing.test.js
           node backend/tests/g-bank-sovereign-v2-promotion-certificate.test.js
           node backend/tests/g-bank-sovereign-v2-promotion-signing.test.js
+          node backend/tests/g-bank-sovereign-v2-promotion-quorum-signing.test.js
           node backend/tests/g-bank-sovereign-v2-inbound.test.js
           node backend/tests/g-bank-sovereign-v2-inbound-reconciliation.test.js
           node backend/tests/g-bank-sovereign-v2-customer-onboarding.test.js
