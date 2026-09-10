@@ -58,6 +58,12 @@ function createTechnicalPromotionCertificate({
     customer_monitoring_audit_sha256: hash64('customer_monitoring_audit_sha256', evidence.customer_monitoring_audit_sha256),
     recovery_audit_sha256: hash64('recovery_audit_sha256', evidence.recovery_audit_sha256),
   };
+  if (!readiness.evidence_bindings || typeof readiness.evidence_bindings !== 'object') throw new Error('readiness_evidence_bindings_required');
+  for (const [key, value] of Object.entries(bindings)) {
+    if (String(readiness.evidence_bindings[key] || '').toLowerCase() !== value) {
+      throw new Error(`promotion_readiness_evidence_binding_mismatch:${key}`);
+    }
+  }
   const ttl = Number(ttl_seconds);
   if (!Number.isSafeInteger(ttl) || ttl < 30 || ttl > 300) throw new Error('promotion_certificate_ttl_invalid');
 
@@ -96,6 +102,12 @@ function verifyTechnicalPromotionCertificate(certificate, { readiness, now = Dat
   if (readiness) {
     verifyReadiness(readiness);
     if (certificate.readiness_snapshot_sha256 !== sha256(canonicalJson(readiness))) throw new Error('promotion_certificate_readiness_mismatch');
+    if (!readiness.evidence_bindings || typeof readiness.evidence_bindings !== 'object') throw new Error('readiness_evidence_bindings_required');
+    for (const [key, value] of Object.entries(certificate.evidence_bindings || {})) {
+      if (String(readiness.evidence_bindings[key] || '').toLowerCase() !== String(value || '').toLowerCase()) {
+        throw new Error(`promotion_readiness_evidence_binding_mismatch:${key}`);
+      }
+    }
   }
   return true;
 }
