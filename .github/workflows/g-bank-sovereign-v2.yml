@@ -48,6 +48,7 @@ jobs:
           node --check backend/g-bank-sovereign-v2/eod-close.js
           node --check backend/g-bank-sovereign-v2/eod-store.js
           node --check backend/g-bank-sovereign-v2/external-signing.js
+          node --check backend/g-bank-sovereign-v2/promotion-certificate.js
           node --check backend/g-bank-sovereign-v2/execution-store.js
           node --check backend/g-bank-sovereign-v2/direct-settlement.js
           node --check backend/g-bank-sovereign-v2/readiness.js
@@ -65,3 +66,4 @@ jobs:
           node backend/tests/g-bank-sovereign-v2-treasury.test.js
           node backend/tests/g-bank-sovereign-v2-settlement-reconciliation.test.js
           node backend/tests/g-bank-sovereign-v2-signing.test.js
+          node backend/tests/g-bank-sovereign-v2-promotion-certificate.test.js
