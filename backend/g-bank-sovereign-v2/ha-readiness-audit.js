@@ -31,6 +31,7 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, voteStores = null
   const activeVoters = c.nodes.filter(node => node.role === 'VOTER' && node.status === 'ACTIVE');
   const journalHeads = {};
   const journalProofs = new Map();
+  let verifiedVoteStoreCount = 0;
   for (const node of activeVoters) {
     const store = storeFor(voteStores, node.node_id);
     if (!store || typeof store.verify !== 'function') {
@@ -46,18 +47,24 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, voteStores = null
     const proof = store.verify();
     journalProofs.set(node.node_id, proof);
     journalHeads[node.node_id] = proof.latest_record_sha256;
+    verifiedVoteStoreCount += 1;
   }
 
-  const requireDurableVotes = (record, label) => {
-    if (!record?.quorum_certificate?.signer_node_ids || !record?.proposal_sha256) return;
+  const durableVoteCount = (record, label) => {
+    if (!record?.quorum_certificate?.signer_node_ids || !record?.proposal_sha256) return 0;
+    let count = 0;
     for (const signerId of record.quorum_certificate.signer_node_ids) {
       const proof = journalProofs.get(signerId);
       const durable = proof?.rows?.some(row => row.proposal_sha256 === record.proposal_sha256 && row.cluster_sha256 === c.cluster_sha256 && row.cluster_epoch === c.cluster_epoch);
       if (!durable) reasons.push(`${label}_SIGNER_VOTE_NOT_DURABLE:${signerId}`);
+      else count += 1;
     }
+    return count;
   };
-  requireDurableVotes(fence, 'FENCE');
-  requireDurableVotes(commit, 'COMMIT');
+  const durableFenceSignerCount = durableVoteCount(fence, 'FENCE');
+  const durableCommitSignerCount = durableVoteCount(commit, 'COMMIT');
+  if (fence && durableFenceSignerCount < c.quorum) reasons.push('FENCE_DURABLE_QUORUM_NOT_MET');
+  if (commit && durableCommitSignerCount < c.quorum) reasons.push('COMMIT_DURABLE_QUORUM_NOT_MET');
 
   const orderedJournalHeads = Object.freeze(Object.fromEntries(Object.entries(journalHeads).sort(([a], [b]) => a.localeCompare(b))));
   const voterJournalRoot = sha256(canonicalJson(orderedJournalHeads));
@@ -77,8 +84,11 @@ function assessHAReadiness({ cluster, fenceStore, commitStore, voteStores = null
     latest_commit_sha256: commit?.record_sha256 || null,
     replicated_state_root_sha256: commit?.state_root_sha256 || null,
     checkpoint_state_root_sha256: checkpoint.state_root_sha256,
+    voter_journal_store_count: verifiedVoteStoreCount,
     voter_journal_heads: orderedJournalHeads,
     voter_journal_root_sha256: voterJournalRoot,
+    durable_fence_signer_count: durableFenceSignerCount,
+    durable_commit_signer_count: durableCommitSignerCount,
     reasons,
     audited_at: new Date(now).toISOString(),
     grants_external_rights: false,
