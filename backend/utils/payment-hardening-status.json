@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -13,6 +13,7 @@
     "payment_processing_timestamp_reused_across_retries": true,
     "payment_stage_rollback_denied": true,
     "local_state_atomic_replace_and_fsync": true,
+    "local_crash_recovery_state_machine_only": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
