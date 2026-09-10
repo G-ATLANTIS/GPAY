@@ -13,6 +13,7 @@ const { normalizePolicy } = require('../backend/g-bank-sovereign-v2/risk-policy'
 const { normalizeAuthoritySet } = require('../backend/g-bank-sovereign-v2/authority');
 const { assessSovereignReadiness } = require('../backend/g-bank-sovereign-v2/readiness');
 const { createTechnicalPromotionCertificate } = require('../backend/g-bank-sovereign-v2/promotion-certificate');
+const { createPromotionSigningRequest } = require('../backend/g-bank-sovereign-v2/promotion-signing');
 const { verifyRuntimePromotionGate } = require('../backend/g-bank-sovereign-v2/runtime-promotion-gate');
 const { HARuntimeChallengeStore } = require('../backend/g-bank-sovereign-v2/ha-runtime-challenge-store');
 const { settlementOperationBinding } = require('../backend/g-bank-sovereign-v2/settlement-operation-binding');
@@ -122,11 +123,13 @@ function operationFromPrepared(prepared, idempotencyKey, promotionCertificateSha
 }
 
 function configureRuntimePromotionArtifacts(a, env = process.env) {
-  if (!a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) {
-    throw new Error('--readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
+  if (!a.readiness || !a.promotion || !a['promotion-sha256'] || !a['promotion-signing-request'] || !a['promotion-signature-evidence'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) {
+    throw new Error('--readiness --promotion --promotion-sha256 --promotion-signing-request --promotion-signature-evidence --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
   }
   env.G_BANK_RUNTIME_READINESS_FILE = path.resolve(a.readiness);
   env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = path.resolve(a.promotion);
+  env.G_BANK_RUNTIME_PROMOTION_SIGNING_REQUEST_FILE = path.resolve(a['promotion-signing-request']);
+  env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_EVIDENCE_FILE = path.resolve(a['promotion-signature-evidence']);
   env.G_BANK_RUNTIME_HA_ATTESTATION_FILE = path.resolve(a['runtime-ha-attestation']);
   env.G_BANK_RUNTIME_HA_OBSERVER_FILE = path.resolve(a['runtime-ha-observer']);
   env.G_BANK_RUNTIME_HA_CHALLENGE_STORE = path.resolve(a['runtime-ha-challenge-store']);
@@ -134,6 +137,8 @@ function configureRuntimePromotionArtifacts(a, env = process.env) {
   return Object.freeze({
     readiness_file: env.G_BANK_RUNTIME_READINESS_FILE,
     promotion_file: env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE,
+    promotion_signing_request_file: env.G_BANK_RUNTIME_PROMOTION_SIGNING_REQUEST_FILE,
+    promotion_signature_evidence_file: env.G_BANK_RUNTIME_PROMOTION_SIGNATURE_EVIDENCE_FILE,
     runtime_ha_attestation_file: env.G_BANK_RUNTIME_HA_ATTESTATION_FILE,
     runtime_ha_observer_file: env.G_BANK_RUNTIME_HA_OBSERVER_FILE,
     runtime_ha_challenge_store: env.G_BANK_RUNTIME_HA_CHALLENGE_STORE,
@@ -170,9 +175,7 @@ async function main() {
   }
 
   if (command === 'issue-ha-challenge') {
-    if (!a['challenge-store'] || !a.prepared || !a.promotion || !a['idempotency-key'] || !a.out) {
-      throw new Error('--challenge-store --prepared --promotion --idempotency-key --out_required');
-    }
+    if (!a['challenge-store'] || !a.prepared || !a.promotion || !a['idempotency-key'] || !a.out) throw new Error('--challenge-store --prepared --promotion --idempotency-key --out_required');
     const prepared = readJson(a.prepared);
     const promotion = readJson(a.promotion);
     const promotionSha256 = sha256Arg('promotion_certificate_sha256', promotion.certificate_sha256);
@@ -236,15 +239,24 @@ async function main() {
     return;
   }
 
+  if (command === 'promotion-signing-request') {
+    if (!a.promotion || !a.out) throw new Error('--promotion --out_required');
+    const certificate = readJson(a.promotion);
+    const request = createPromotionSigningRequest({ certificate });
+    const output = writePrivate(a.out, request);
+    console.log(JSON.stringify({ state: 'PROMOTION_SIGNING_REQUEST_CREATED', certificate_sha256: request.certificate_sha256, signing_request_sha256: request.signing_request_sha256, trusted_signing_key_binding_sha256: request.trusted_signing_key_binding_sha256, output, grants_external_rights: false, permits_value_movement_by_itself: false }, null, 2));
+    return;
+  }
+
   if (command === 'execute') {
-    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
+    if (!a.prepared || !a.validation || !a.approval || !a.signatures || !a['idempotency-key'] || !a.readiness || !a.promotion || !a['promotion-sha256'] || !a['promotion-signing-request'] || !a['promotion-signature-evidence'] || !a['runtime-ha-attestation'] || !a['runtime-ha-observer'] || !a['runtime-ha-challenge-store']) throw new Error('--prepared --validation --approval --signatures --idempotency-key --readiness --promotion --promotion-sha256 --promotion-signing-request --promotion-signature-evidence --runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required');
     configureRuntimePromotionArtifacts(a, process.env);
     const prepared = readJson(a.prepared);
     const expectedOperation = { message_sha256: prepared?.iso20022?.document_sha256, instruction_sha256: prepared?.instruction?.instruction_sha256, idempotency_key: a['idempotency-key'] };
     const { core } = coreFor(a, { live: true, governanceRequired: true });
     const runtimeGate = verifyRuntimePromotionGate({ env: process.env, consumeChallenge: false, expectedOperation });
     const result = await core.execute({ prepared, schemeValidationEvidence: readJson(a.validation), approvalToken: fs.readFileSync(path.resolve(a.approval), 'utf8').trim(), authoritySignatures: readJson(a.signatures), idempotencyKey: a['idempotency-key'] });
-    console.log(JSON.stringify({ ...result, settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256, runtime_promotion_gate_sha256: runtimeGate.gate_sha256, trusted_runtime_ha_observer_sha256: runtimeGate.trusted_runtime_ha_observer_sha256, ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256, ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256, ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256 }, null, 2));
+    console.log(JSON.stringify({ ...result, settlement_operation_binding_sha256: runtimeGate.settlement_operation_binding_sha256, runtime_promotion_gate_sha256: runtimeGate.gate_sha256, promotion_signature_proof_sha256: runtimeGate.promotion_signature_proof_sha256, promotion_signer_key_binding_sha256: runtimeGate.promotion_signer_key_binding_sha256, trusted_runtime_ha_observer_sha256: runtimeGate.trusted_runtime_ha_observer_sha256, ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256, ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256, ha_runtime_challenge_nonce_sha256: runtimeGate.ha_runtime_challenge_nonce_sha256 }, null, 2));
     return;
   }
 
