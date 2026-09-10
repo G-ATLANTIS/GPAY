@@ -1,5 +1,7 @@
 'use strict';
 
+const { canonicalJson, sha256 } = require('./canonical');
+
 function sha256Present(value) {
   return /^[0-9a-f]{64}$/i.test(String(value || ''));
 }
@@ -10,12 +12,10 @@ function positiveInt(value) {
 }
 
 function assessmentValid(value, schema, hashField) {
-  return Boolean(
-    value &&
-    value.schema === schema &&
-    value.state === 'PASS' &&
-    sha256Present(value[hashField])
-  );
+  if (!value || value.schema !== schema || value.state !== 'PASS' || !sha256Present(value[hashField])) return false;
+  const supplied = String(value[hashField]).toLowerCase();
+  const { [hashField]: omitted, ...body } = value;
+  return sha256(canonicalJson(body)) === supplied;
 }
 
 function assessSovereignReadiness({ env = process.env, transportPreflight = null, governance = null, prudential = null } = {}) {
@@ -23,8 +23,10 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
   const liquidity = prudential?.liquidity || null;
   const invariantAudit = prudential?.invariant_audit || null;
   const operational = prudential?.operational_resilience || null;
+  const treasury = prudential?.treasury || null;
   const configuredPrudentialHash = String(env.G_BANK_PRUDENTIAL_AUDIT_SHA256 || '').toLowerCase();
   const configuredOperationalHash = String(env.G_BANK_OPERATIONAL_RESILIENCE_SHA256 || '').toLowerCase();
+  const configuredTreasuryHash = String(env.G_BANK_TREASURY_ASSESSMENT_SHA256 || '').toLowerCase();
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -47,6 +49,9 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     operational_resilience_binding_present: sha256Present(configuredOperationalHash),
     operational_resilience_pass: assessmentValid(operational, 'g-bank-operational-resilience-assessment/v2', 'assessment_sha256'),
     operational_resilience_binding_matches: sha256Present(configuredOperationalHash) && configuredOperationalHash === String(operational?.assessment_sha256 || '').toLowerCase(),
+    treasury_binding_present: sha256Present(configuredTreasuryHash),
+    treasury_pass: assessmentValid(treasury, 'g-bank-treasury-position/v2', 'assessment_sha256'),
+    treasury_binding_matches: sha256Present(configuredTreasuryHash) && configuredTreasuryHash === String(treasury?.assessment_sha256 || '').toLowerCase(),
     transport_module_present: Boolean(String(env.G_BANK_SETTLEMENT_TRANSPORT_MODULE || '')),
     settlement_authorization_binding_present: sha256Present(env.G_BANK_SETTLEMENT_AUTHORIZATION_SHA256),
     legal_authorization_evidence_binding_present: sha256Present(env.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256),
@@ -73,6 +78,9 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     'liquidity_pass',
     'invariant_audit_pass',
     'prudential_audit_binding_matches',
+    'treasury_binding_present',
+    'treasury_pass',
+    'treasury_binding_matches',
   ]);
   const operationalKeys = new Set([
     'operational_resilience_binding_present',
