@@ -1,5 +1,5 @@
 {
-  "version": "1.13.0",
+  "version": "1.14.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -50,6 +50,12 @@
     "email_completed_effect_suppresses_later_duplicate_send": true,
     "postgres_payment_effect_unique_provider_payment_type": true,
     "postgres_payment_effect_ledger_verified_in_ci": true,
+    "postgres_atomic_payment_preparation_transaction_implemented": true,
+    "postgres_atomic_preparation_rechecks_locked_intent_provenance": true,
+    "postgres_atomic_preparation_advances_state_and_reserves_effects_together": true,
+    "postgres_atomic_preparation_rollback_verified_in_ci": true,
+    "postgres_atomic_preparation_commit_verified_in_ci": true,
+    "webhook_uses_atomic_postgres_preparation_path": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -84,7 +90,11 @@
     "per_effect_idempotency_ci": "passed",
     "per_effect_idempotency_commit": "4bec5250c5b821529dbcce20cc2e2b92f55d6102",
     "per_effect_idempotency_run_id": 34523800774,
-    "per_effect_idempotency_run_number": 151
+    "per_effect_idempotency_run_number": 151,
+    "atomic_postgres_preparation_ci": "passed",
+    "atomic_postgres_preparation_commit": "37f561776114bd9147236a77d628deea2e87c89d",
+    "atomic_postgres_preparation_run_id": 34524290999,
+    "atomic_postgres_preparation_run_number": 159
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -96,8 +106,8 @@
   },
   "not_yet_guaranteed": {
     "crash_safe_exactly_once_external_side_effects": true,
-    "multi_process_distributed_locking": true,
-    "atomic_cross_table_intent_and_payment_state_transaction": true,
+    "multi_process_distributed_locking_for_non_database_local_effects": true,
+    "external_provider_creation_atomic_with_local_intent_binding": true,
     "email_exactly_once_across_crash_after_provider_acceptance": true,
     "invoice_external_storage_exactly_once": true,
     "postgres_production_database_provisioned": true,
