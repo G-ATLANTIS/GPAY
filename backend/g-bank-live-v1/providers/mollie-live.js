@@ -1,6 +1,11 @@
 'use strict';
 
 const https = require('node:https');
+const crypto = require('node:crypto');
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
 
 function requestJson({ method, path, apiKey, body, headers = {}, timeoutMs = 10000 }) {
   return new Promise((resolve, reject) => {
@@ -26,11 +31,7 @@ function requestJson({ method, path, apiKey, body, headers = {}, timeoutMs = 100
         if (text) {
           try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 2048) }; }
         }
-        resolve({
-          status: res.statusCode,
-          headers: res.headers,
-          data,
-        });
+        resolve({ status: res.statusCode, headers: res.headers, data });
       });
     });
     req.on('timeout', () => req.destroy(new Error('mollie_timeout')));
@@ -82,9 +83,8 @@ class MollieLiveAdapter {
   async createPayment({ intent, idempotencyKey }) {
     this.assertConfigured();
     if (!intent.redirect_url || !intent.webhook_url) throw new Error('mollie_redirect_and_webhook_required');
-    const value = (intent.amount_minor / 100).toFixed(2);
     const body = {
-      amount: { currency: intent.currency, value },
+      amount: { currency: intent.currency, value: (intent.amount_minor / 100).toFixed(2) },
       description: intent.description,
       redirectUrl: intent.redirect_url,
       webhookUrl: intent.webhook_url,
@@ -92,7 +92,7 @@ class MollieLiveAdapter {
         ...intent.metadata,
         g_intent_id: intent.intent_id,
         g_intent_sha256: intent.intent_sha256,
-        g_destination_binding: intent.destination_binding,
+        g_destination_binding_sha256: sha256(intent.destination_binding),
       },
     };
     const response = await requestJson({
