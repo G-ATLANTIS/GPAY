@@ -52,8 +52,6 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Install PostgreSQL driver for integration proof only
-        run: npm install --no-save --package-lock=false pg@8.23.0
       - name: Run real PostgreSQL CAS integration test
         env:
           GPAY_POSTGRES_URL: postgresql://gpay:gpay@127.0.0.1:5432/gpay
