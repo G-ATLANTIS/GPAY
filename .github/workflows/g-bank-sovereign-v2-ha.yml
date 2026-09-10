@@ -27,14 +27,17 @@ jobs:
           node --check backend/g-bank-sovereign-v2/ha-quorum.js
           node --check backend/g-bank-sovereign-v2/ha-vote-store.js
           node --check backend/g-bank-sovereign-v2/ha-durable-signer.js
+          node --check backend/g-bank-sovereign-v2/ha-cluster-authority.js
           node --check backend/g-bank-sovereign-v2/ha-replication-store.js
           node --check backend/g-bank-sovereign-v2/ha-readiness-audit.js
           node --check backend/g-bank-sovereign-v2/ha-deployment-attestation.js
           node --check backend/tests/g-bank-sovereign-v2-ha.test.js
           node --check backend/tests/g-bank-sovereign-v2-ha-signer.test.js
+          node --check backend/tests/g-bank-sovereign-v2-ha-reconfiguration.test.js
           node --check backend/tests/g-bank-sovereign-v2-ha-deployment.test.js
       - name: No-network HA safety tests
         run: |
           node backend/tests/g-bank-sovereign-v2-ha.test.js
           node backend/tests/g-bank-sovereign-v2-ha-signer.test.js
+          node backend/tests/g-bank-sovereign-v2-ha-reconfiguration.test.js
           node backend/tests/g-bank-sovereign-v2-ha-deployment.test.js
