@@ -28,6 +28,9 @@ jobs:
           node --check backend/g-bank-sovereign-v2/canonical.js
           node --check backend/g-bank-sovereign-v2/receipt-ledger.js
           node --check backend/g-bank-sovereign-v2/ledger.js
+          node --check backend/g-bank-sovereign-v2/customer-registry.js
+          node --check backend/g-bank-sovereign-v2/customer-onboarding.js
+          node --check backend/g-bank-sovereign-v2/customer-account-provisioning.js
           node --check backend/g-bank-sovereign-v2/accounts.js
           node --check backend/g-bank-sovereign-v2/account-operation-lock.js
           node --check backend/g-bank-sovereign-v2/account-lifecycle.js
@@ -77,3 +80,4 @@ jobs:
           node backend/tests/g-bank-sovereign-v2-promotion-certificate.test.js
           node backend/tests/g-bank-sovereign-v2-inbound.test.js
           node backend/tests/g-bank-sovereign-v2-inbound-reconciliation.test.js
+          node backend/tests/g-bank-sovereign-v2-customer-onboarding.test.js
