@@ -57,4 +57,4 @@ jobs:
       - name: Run real PostgreSQL CAS integration test
         env:
           GPAY_POSTGRES_URL: postgresql://gpay:gpay@127.0.0.1:5432/gpay
-        run: node --test tests/payment-state-postgres-integration.test.js
+        run: node --test integration/payment-state-postgres.test.js
