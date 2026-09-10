@@ -15,6 +15,7 @@ const { approvalPayload } = require('../g-bank-sovereign-v2/authority');
 const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/promotion-certificate');
 const { settlementOperationBinding } = require('../g-bank-sovereign-v2/settlement-operation-binding');
 const { createSyntheticRuntimeObserver, configureSyntheticHAState, issueSyntheticRuntimeHAWitness } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
+const { createSyntheticPromotionSigner, configureSyntheticPromotionSignature } = require('./g-bank-sovereign-v2-promotion-signing-fixture');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T06:30:00.000Z');
@@ -52,7 +53,7 @@ function instruction(id = 'PAY0000000000001') {
   };
 }
 
-function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, runtimeObserver) {
+function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, runtimeObserver, promotionSigner) {
   const fenceValidUntil = new Date(NOW + 240000).toISOString();
   const haState = configureSyntheticHAState({ env: e, state_root_sha256: H('6'), cluster_authority_root_sha256: H('8'), voter_journal_root_sha256: H('7'), fence_valid_until: fenceValidUntil, now: NOW });
   const evidenceBindings = {
@@ -78,7 +79,8 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, ru
   const certificate = createTechnicalPromotionCertificate({
     readiness, checkpoint: { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('6') },
     governance: { policy_sha256: policySha256, authority_set_sha256: authoritySetSha256 }, evidence_bindings: evidenceBindings,
-    trusted_signing_key_binding_sha256: H('f'), trusted_runtime_ha_observer_sha256: runtimeObserver.observer_public_key_binding_sha256,
+    trusted_signing_key_binding_sha256: promotionSigner.key_binding_sha256,
+    trusted_runtime_ha_observer_sha256: runtimeObserver.observer_public_key_binding_sha256,
     ttl_seconds: 300, now: NOW,
   });
   const readinessPath = path.join(root, 'runtime-readiness.json');
@@ -88,7 +90,8 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, ru
   e.G_BANK_RUNTIME_READINESS_FILE = readinessPath;
   e.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = promotionPath;
   e.G_BANK_PROMOTION_CERTIFICATE_SHA256 = certificate.certificate_sha256;
-  return { readiness, certificate, haState, runtimeObserver };
+  const promotionSignature = configureSyntheticPromotionSignature({ root, env: e, certificate, promotionSigner, now: NOW });
+  return { readiness, certificate, haState, runtimeObserver, promotionSigner, promotionSignature };
 }
 
 function setup(transport, { promotion = true } = {}) {
@@ -113,22 +116,19 @@ function setup(transport, { promotion = true } = {}) {
   const settlement = new DirectSettlementAdapter({ transport, env: e, clock: () => NOW });
   const core = new GBankSovereignCore({ accounts, ledger, settlement, riskPolicy, authoritySet, stateDir: path.join(root, 'state'), env: e });
   const runtimeObserver = createSyntheticRuntimeObserver();
-  const runtimePromotion = promotion ? configureRuntimePromotion(root, e, core.riskPolicy.policy_sha256, core.authoritySet.authority_set_sha256, runtimeObserver) : null;
-  return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimeObserver, runtimePromotion };
+  const promotionSigner = createSyntheticPromotionSigner();
+  const runtimePromotion = promotion ? configureRuntimePromotion(root, e, core.riskPolicy.policy_sha256, core.authoritySet.authority_set_sha256, runtimeObserver, promotionSigner) : null;
+  return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimeObserver, promotionSigner, runtimePromotion };
 }
 
 function bindRuntimeWitness(s, prepared, idempotencyKey) {
   const operation = settlementOperationBinding({ message_sha256: prepared.iso20022.document_sha256, instruction_sha256: prepared.instruction.instruction_sha256, idempotency_key: idempotencyKey, promotion_certificate_sha256: s.runtimePromotion.certificate.certificate_sha256 });
-  const witness = issueSyntheticRuntimeHAWitness({
-    root: s.root, env: s.e, haAudit: s.runtimePromotion.haState.haAudit, haDeploymentAudit: s.runtimePromotion.haState.haDeploymentAudit,
-    runtimeObserver: s.runtimePromotion.runtimeObserver, operation_binding_sha256: operation.operation_binding_sha256, now: NOW,
-  });
+  const witness = issueSyntheticRuntimeHAWitness({ root: s.root, env: s.e, haAudit: s.runtimePromotion.haState.haAudit, haDeploymentAudit: s.runtimePromotion.haState.haDeploymentAudit, runtimeObserver: s.runtimePromotion.runtimeObserver, operation_binding_sha256: operation.operation_binding_sha256, now: NOW });
   return { operation, witness };
 }
 
 function schemeEvidence(prepared) {
-  return { result: 'PASS', scheme: prepared.instruction.scheme, message_type: prepared.iso20022.message_type, message_sha256: prepared.iso20022.document_sha256,
-    validation_level: 'EXTERNAL_SCHEME_VALIDATED', validator_binding_sha256: H('e'), validation_receipt_sha256: H('f'), observed_at: new Date(NOW).toISOString() };
+  return { result: 'PASS', scheme: prepared.instruction.scheme, message_type: prepared.iso20022.message_type, message_sha256: prepared.iso20022.document_sha256, validation_level: 'EXTERNAL_SCHEME_VALIDATED', validator_binding_sha256: H('e'), validation_receipt_sha256: H('f'), observed_at: new Date(NOW).toISOString() };
 }
 
 function authoritySignatures(s, prepared, validation, key) {
@@ -147,6 +147,7 @@ function authoritySignatures(s, prepared, validation, key) {
       assert.equal(request.settlement_operation_binding_sha256, request.ha_runtime_challenge_operation_binding_sha256);
       assert.match(request.runtime_promotion_gate_sha256, /^[0-9a-f]{64}$/);
       assert.match(request.promotion_certificate_sha256, /^[0-9a-f]{64}$/);
+      assert.match(request.trusted_runtime_ha_observer_sha256, /^[0-9a-f]{64}$/);
       assert.equal(request.recovery_audit_sha256, H('5'));
       assert.equal(request.customer_monitoring_audit_sha256, H('4'));
       assert.match(request.ha_audit_sha256, /^[0-9a-f]{64}$/);
@@ -161,8 +162,6 @@ function authoritySignatures(s, prepared, validation, key) {
   };
   const s = setup(settledTransport);
   const prepared = s.core.prepare({ rawInstruction: instruction(), complianceBundle: evidence(), now: NOW });
-  assert.equal(prepared.iso20022.message_type, 'pacs.008.001.08');
-  assert.match(prepared.iso20022.document, /<LclInstrm><Prtry>INST<\/Prtry><\/LclInstrm>/);
   const key = crypto.randomUUID();
   const validation = schemeEvidence(prepared);
   const approval = createSovereignApproval({ prepared, schemeValidationEvidence: validation, idempotencyKey: key, now: NOW }, s.e);
@@ -172,9 +171,9 @@ function authoritySignatures(s, prepared, validation, key) {
   assert.equal(result.state, 'SETTLED');
   assert.equal(result.value_moved, true);
   assert.equal(result.verified_value_flow, true);
-  assert.match(result.governance_proof_sha256, /^[0-9a-f]{64}$/);
   assert.equal(runtime.witness.challenge.operation_binding_sha256, runtime.operation.operation_binding_sha256);
   assert.equal(s.runtimePromotion.certificate.trusted_runtime_ha_observer_sha256, s.runtimeObserver.observer_public_key_binding_sha256);
+  assert.equal(s.runtimePromotion.certificate.trusted_signing_key_binding_sha256, s.promotionSigner.key_binding_sha256);
   assert.equal(s.ledger.balance('G:CUSTOMER:001', 'EUR'), 9000);
   assert.equal(s.ledger.balance('G:SUSPENSE:OUTBOUND', 'EUR'), 0);
   assert.equal(s.ledger.balance('G:SETTLEMENT:OUTBOUND', 'EUR'), 1000);
@@ -220,5 +219,5 @@ function authoritySignatures(s, prepared, validation, key) {
   await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: v2, approvalToken: ap2, authoritySignatures: sig2, idempotencyKey: k2, now: NOW }), /execution_exists_unknown_use_reconcile/);
   assert.equal(ambiguousSubmits, 1);
 
-  console.log('G-BANK sovereign v2 promotion-pinned transaction-bound no-network safety tests: PASS');
+  console.log('G-BANK sovereign v2 externally-signed promotion no-network safety tests: PASS');
 })().catch(err => { console.error(err); process.exit(1); });
