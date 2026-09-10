@@ -32,7 +32,15 @@ function verifyInboundSettlementEvidence(event, { now = Date.now(), max_age_ms =
   if (!settlementSystem || settlementSystem.length > 128) throw new Error('inbound_settlement_system_invalid');
   const externalReceipt = String(event.external_receipt_sha256 || '').toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(externalReceipt)) throw new Error('inbound_external_receipt_sha256_invalid');
-  return Object.freeze({ inbound_id: inboundId, amount_minor: amount, currency, creditor_iban: iban, scheme, event_sha256: event.event_sha256 });
+  return Object.freeze({
+    inbound_id: inboundId,
+    amount_minor: amount,
+    currency,
+    creditor_iban: iban,
+    scheme,
+    event_sha256: event.event_sha256,
+    settlement_business_date: new Date(observed).toISOString().slice(0, 10),
+  });
 }
 
 function verifyReleaseEvidence(evidence, current, { now = Date.now(), max_age_ms = 15 * 60 * 1000 } = {}) {
@@ -136,6 +144,7 @@ class InboundPaymentProcessor {
       target_account_id: customer.account_id,
       amount_minor: verified.amount_minor,
       currency: verified.currency,
+      settlement_business_date: verified.settlement_business_date,
       now,
     });
     if (!claim.owner && claim.record.state !== 'CLAIMED') return claim.record;
@@ -156,6 +165,7 @@ class InboundPaymentProcessor {
         kind: 'INBOUND_SETTLEMENT_PENDING',
         inbound_id: verified.inbound_id,
         inbound_event_sha256: verified.event_sha256,
+        settlement_business_date: verified.settlement_business_date,
         target_account_id: customer.account_id,
       },
     }, verifyBooking);
@@ -196,6 +206,7 @@ class InboundPaymentProcessor {
         kind: 'INBOUND_SETTLEMENT_AVAILABLE',
         inbound_id: current.inbound_id,
         inbound_event_sha256: current.event_sha256,
+        settlement_business_date: current.settlement_business_date,
         release_sha256: releaseEvidence.release_sha256,
         target_account_id: customer.account_id,
       },
