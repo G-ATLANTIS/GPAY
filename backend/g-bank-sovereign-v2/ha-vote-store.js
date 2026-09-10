@@ -68,7 +68,10 @@ class HAVoteStore {
     const rows = readRows(this.filePath);
     let prior = null;
     const slots = new Map();
-    let maxTerm = 0;
+    const epochCluster = new Map();
+    const maxTermByEpoch = new Map();
+    let maxClusterEpoch = 0;
+
     for (let i = 0; i < rows.length; i += 1) {
       const row = rows[i];
       if (row?.schema !== 'g-bank-ha-vote-reservation/v2' || row.sequence !== i + 1) throw new Error('ha_vote_record_invalid');
@@ -77,14 +80,35 @@ class HAVoteStore {
       const supplied = hash64('ha_vote_record_sha256', row.record_sha256);
       const copy = { ...row }; delete copy.record_sha256;
       if (sha256(canonicalJson(copy)) !== supplied) throw new Error('ha_vote_record_hash_mismatch');
-      const expectedSlot = proposalSlot({ schema: row.proposal_schema, cluster_epoch: row.cluster_epoch, term: row.term, commit_index: row.commit_index });
+
+      const epoch = positiveInt('ha_vote_record_cluster_epoch', row.cluster_epoch);
+      const clusterHash = hash64('ha_vote_record_cluster_sha256', row.cluster_sha256);
+      if (epoch < maxClusterEpoch) throw new Error('ha_vote_cluster_epoch_rollback_record');
+      if (epochCluster.has(epoch) && epochCluster.get(epoch) !== clusterHash) throw new Error('ha_vote_cluster_changed_without_epoch_bump');
+      epochCluster.set(epoch, clusterHash);
+      maxClusterEpoch = Math.max(maxClusterEpoch, epoch);
+
+      const expectedSlot = proposalSlot({ schema: row.proposal_schema, cluster_epoch: epoch, term: row.term, commit_index: row.commit_index });
       if (row.slot_key !== expectedSlot) throw new Error('ha_vote_slot_mismatch');
       if (slots.has(row.slot_key)) throw new Error('ha_vote_duplicate_slot_record');
       slots.set(row.slot_key, row);
-      maxTerm = Math.max(maxTerm, positiveInt('ha_vote_record_term', row.term));
+
+      const term = positiveInt('ha_vote_record_term', row.term);
+      const priorMaxTerm = maxTermByEpoch.get(epoch) || 0;
+      if (term < priorMaxTerm) throw new Error('ha_vote_term_rollback_record');
+      maxTermByEpoch.set(epoch, Math.max(priorMaxTerm, term));
       prior = supplied;
     }
-    return Object.freeze({ verified: true, count: rows.length, latest_record_sha256: prior, max_term: maxTerm, rows: Object.freeze(rows.map(row => Object.freeze({ ...row }))) });
+
+    return Object.freeze({
+      verified: true,
+      count: rows.length,
+      latest_record_sha256: prior,
+      max_cluster_epoch: maxClusterEpoch,
+      epoch_cluster_sha256: Object.freeze(Object.fromEntries([...epochCluster.entries()].map(([epoch, hash]) => [String(epoch), hash]))),
+      max_term_by_epoch: Object.freeze(Object.fromEntries([...maxTermByEpoch.entries()].map(([epoch, term]) => [String(epoch), term]))),
+      rows: Object.freeze(rows.map(row => Object.freeze({ ...row }))),
+    });
   }
 
   reserve({ proposal, node_id, signer_key_binding_sha256, signed_at }) {
@@ -95,6 +119,8 @@ class HAVoteStore {
     const proposalHash = hash64('ha_vote_proposal_sha256', p.proposal_sha256);
     const clusterHash = hash64('ha_vote_cluster_sha256', p.cluster_sha256);
     const keyHash = hash64('ha_vote_signer_key_binding_sha256', signer_key_binding_sha256);
+    const epoch = positiveInt('ha_vote_cluster_epoch', p.cluster_epoch);
+    const term = positiveInt('ha_vote_term', p.term);
     const signedAtMs = Date.parse(signed_at);
     if (!Number.isFinite(signedAtMs)) throw new Error('ha_vote_signed_at_invalid');
     const signedAt = new Date(signedAtMs).toISOString();
@@ -107,17 +133,22 @@ class HAVoteStore {
         if (existing.signer_key_binding_sha256 !== keyHash || existing.signed_at !== signedAt) throw new Error('ha_vote_replay_envelope_mismatch');
         return existing;
       }
-      if (positiveInt('ha_vote_term', p.term) < verified.max_term) throw new Error('ha_vote_term_rollback');
+
+      if (epoch < verified.max_cluster_epoch) throw new Error('ha_vote_cluster_epoch_rollback');
+      const knownClusterHash = verified.epoch_cluster_sha256[String(epoch)] || null;
+      if (knownClusterHash && knownClusterHash !== clusterHash) throw new Error('ha_vote_cluster_changed_without_epoch_bump');
+      const maxTerm = Number(verified.max_term_by_epoch[String(epoch)] || 0);
+      if (term < maxTerm) throw new Error('ha_vote_term_rollback');
 
       const record = {
         schema: 'g-bank-ha-vote-reservation/v2',
         sequence: verified.count + 1,
         node_id: this.nodeId,
         cluster_sha256: clusterHash,
-        cluster_epoch: positiveInt('ha_vote_cluster_epoch', p.cluster_epoch),
+        cluster_epoch: epoch,
         proposal_schema: p.schema,
         slot_key: slotKey,
-        term: positiveInt('ha_vote_term', p.term),
+        term,
         commit_index: p.schema === 'g-bank-ha-commit-proposal/v2' ? positiveInt('ha_vote_commit_index', p.commit_index) : null,
         proposal_sha256: proposalHash,
         signer_key_binding_sha256: keyHash,
