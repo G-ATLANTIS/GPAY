@@ -53,6 +53,7 @@ function assessSovereignReadiness({
     customer_monitoring_audit_sha256: configuredMonitoringHash,
     recovery_audit_sha256: configuredRecoveryHash,
   });
+  const recoveryCheckpointRoot = normalizedHash(recoveryAudit?.checkpoint_state_root_sha256);
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -84,6 +85,7 @@ function assessSovereignReadiness({
     recovery_audit_binding_present: sha256Present(configuredRecoveryHash),
     recovery_audit_pass: assessmentValid(recoveryAudit, 'g-bank-recovery-readiness-audit/v2', 'audit_sha256'),
     recovery_audit_binding_matches: sha256Present(configuredRecoveryHash) && configuredRecoveryHash === String(recoveryAudit?.audit_sha256 || '').toLowerCase(),
+    recovery_checkpoint_root_present: sha256Present(recoveryCheckpointRoot),
     recovery_no_external_rights: recoveryAudit?.grants_external_rights === false,
     recovery_no_live_activation: recoveryAudit?.activates_live_execution === false,
     recovery_no_value_movement: recoveryAudit?.permits_value_movement === false,
@@ -131,6 +133,7 @@ function assessSovereignReadiness({
     'recovery_audit_binding_present',
     'recovery_audit_pass',
     'recovery_audit_binding_matches',
+    'recovery_checkpoint_root_present',
     'recovery_no_external_rights',
     'recovery_no_live_activation',
     'recovery_no_value_movement',
@@ -156,6 +159,7 @@ function assessSovereignReadiness({
     direct_live_ready,
     checks,
     evidence_bindings,
+    recovery_checkpoint_state_root_sha256: recoveryCheckpointRoot,
     transport_scheme: transportPreflight?.scheme || null,
     settlement_system: transportPreflight?.settlement_system || null,
     value_movement_permitted_by_readiness: direct_live_ready,
