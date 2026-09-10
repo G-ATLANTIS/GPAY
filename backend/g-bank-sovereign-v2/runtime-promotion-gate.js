@@ -69,6 +69,8 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
     state_root_sha256: certificate.state_root_sha256,
     policy_sha256: certificate.policy_sha256,
     authority_set_sha256: certificate.authority_set_sha256,
+    ha_voter_journal_root_sha256: certificate.ha_voter_journal_root_sha256,
+    ha_cluster_authority_root_sha256: certificate.ha_cluster_authority_root_sha256,
     customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
     recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
     ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
