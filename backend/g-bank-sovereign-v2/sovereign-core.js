@@ -8,12 +8,14 @@ const { buildPacs008 } = require('./iso20022');
 const { verifyComplianceBundle } = require('./compliance');
 const { verifySchemeValidationEvidence } = require('./scheme-validation');
 const { verifySovereignApproval } = require('./approval');
+const { createGovernanceProof } = require('./governance');
 const { SovereignExecutionStore } = require('./execution-store');
 
 function requireSovereignLive(env = process.env) {
   if (env.G_BANK_ENABLE_LIVE !== 'true') throw new Error('g_bank_live_execution_disabled');
   if (env.G_BANK_EXTERNAL_ACTIONS_ENABLED !== 'true') throw new Error('g_bank_external_actions_disabled');
   if (env.G_BANK_DIRECT_SETTLEMENT_ENABLED !== 'true') throw new Error('direct_settlement_disabled');
+  if (env.G_BANK_GOVERNANCE_REQUIRED !== 'true') throw new Error('sovereign_governance_must_be_required');
   if (env.G_BANK_SIMULATED_LIVE_SUCCESS === 'true') throw new Error('simulated_live_success_forbidden');
   return true;
 }
@@ -27,11 +29,13 @@ function verifyPrepared(prepared) {
 }
 
 class GBankSovereignCore {
-  constructor({ accounts, ledger, settlement, stateDir = '.secrets/g-bank-sovereign-v2', env = process.env } = {}) {
-    if (!accounts || !ledger || !settlement) throw new Error('sovereign_core_dependencies_required');
+  constructor({ accounts, ledger, settlement, riskPolicy, authoritySet, stateDir = '.secrets/g-bank-sovereign-v2', env = process.env } = {}) {
+    if (!accounts || !ledger || !settlement || !riskPolicy || !authoritySet) throw new Error('sovereign_core_dependencies_required');
     this.accounts = accounts;
     this.ledger = ledger;
     this.settlement = settlement;
+    this.riskPolicy = riskPolicy;
+    this.authoritySet = authoritySet;
     this.env = env;
     const root = path.resolve(stateDir);
     this.executions = new SovereignExecutionStore(path.join(root, 'executions'));
@@ -72,6 +76,7 @@ class GBankSovereignCore {
     const prepared = { ...body, preparation_sha256: sha256(canonicalJson(body)) };
     this.receipts.append({
       event: 'SOVEREIGN_PAYMENT_PREPARED',
+      source_account_id: instruction.source_account_id,
       instruction_sha256: instruction.instruction_sha256,
       preparation_sha256: prepared.preparation_sha256,
       message_sha256: iso20022.document_sha256,
@@ -84,7 +89,7 @@ class GBankSovereignCore {
     return Object.freeze(prepared);
   }
 
-  _request(prepared, schemeProof, approval) {
+  _request(prepared, schemeProof, approval, governance) {
     const { suspense, settlementOut } = this._systemAccounts(prepared.instruction.currency);
     return {
       schema: 'g-bank-sovereign-execution-request/v2',
@@ -93,6 +98,13 @@ class GBankSovereignCore {
       message_sha256: prepared.iso20022.document_sha256,
       compliance_proof_sha256: prepared.compliance_proof.proof_sha256,
       scheme_validation_proof_sha256: schemeProof.proof_sha256,
+      governance_proof_sha256: governance.governance_proof_sha256,
+      risk_decision_sha256: governance.risk_decision_sha256,
+      policy_sha256: governance.policy_sha256,
+      policy_epoch: governance.policy_epoch,
+      authority_set_sha256: governance.authority_set_sha256,
+      authority_epoch: governance.authority_epoch,
+      required_quorum: governance.required_quorum,
       approval_id: approval.approval_id,
       source_account_id: prepared.instruction.source_account_id,
       suspense_account_id: suspense,
@@ -120,7 +132,7 @@ class GBankSovereignCore {
   }
 
   _release({ request, key, reason }) {
-    return this.ledger.post({
+    const release = this.ledger.post({
       transaction_id: `RELEASE-${sha256(String(key)).slice(0, 24)}`,
       reference: request.instruction_sha256,
       entries: [
@@ -129,6 +141,17 @@ class GBankSovereignCore {
       ],
       metadata: { kind: 'OUTBOUND_HOLD_RELEASE', reason },
     });
+    this.receipts.append({
+      event: 'SOVEREIGN_VALUE_HOLD_RELEASED',
+      source_account_id: request.source_account_id,
+      instruction_sha256: request.instruction_sha256,
+      amount_minor: request.amount_minor,
+      currency: request.currency,
+      release_record_sha256: release.record_sha256,
+      reason,
+      value_moved: false,
+    });
+    return release;
   }
 
   _bookSettled({ request, key, settlementReference }) {
@@ -148,6 +171,7 @@ class GBankSovereignCore {
       schema: 'g-bank-sovereign-execution-result/v2',
       instruction_sha256: request.instruction_sha256,
       preparation_sha256: request.preparation_sha256,
+      governance_proof_sha256: request.governance_proof_sha256,
       amount_minor: request.amount_minor,
       currency: request.currency,
       scheme: request.scheme,
@@ -157,16 +181,28 @@ class GBankSovereignCore {
     return { ...body, result_sha256: sha256(canonicalJson(body)) };
   }
 
-  async execute({ prepared, schemeValidationEvidence, approvalToken, idempotencyKey }) {
+  async execute({ prepared, schemeValidationEvidence, approvalToken, authoritySignatures, idempotencyKey, now = Date.now() }) {
     requireSovereignLive(this.env);
     verifyPrepared(prepared);
     if (!idempotencyKey) throw new Error('idempotency_key_required');
     const schemeProof = verifySchemeValidationEvidence(schemeValidationEvidence, prepared.iso20022, {
       require_external: true,
+      now,
     });
     if (schemeProof.scheme !== prepared.instruction.scheme) throw new Error('scheme_validation_scheme_mismatch');
-    const approval = verifySovereignApproval(approvalToken, { prepared, schemeValidationEvidence, idempotencyKey }, this.env);
-    const request = this._request(prepared, schemeProof, approval);
+
+    const governance = createGovernanceProof({
+      prepared,
+      schemeValidationEvidence,
+      idempotencyKey,
+      policy: this.riskPolicy,
+      authoritySet: this.authoritySet,
+      signatures: authoritySignatures,
+      receiptRows: this.receipts.readAll(),
+      now,
+    });
+    const approval = verifySovereignApproval(approvalToken, { prepared, schemeValidationEvidence, idempotencyKey, now }, this.env);
+    const request = this._request(prepared, schemeProof, approval, governance);
 
     const preflight = await this.settlement.preflight();
     if (preflight.scheme !== prepared.instruction.scheme) throw new Error('settlement_preflight_scheme_mismatch');
@@ -205,7 +241,9 @@ class GBankSovereignCore {
 
     this.receipts.append({
       event: 'SOVEREIGN_VALUE_HELD',
+      source_account_id: request.source_account_id,
       instruction_sha256: request.instruction_sha256,
+      governance_proof_sha256: request.governance_proof_sha256,
       hold_record_sha256: hold.record_sha256,
       amount_minor: request.amount_minor,
       currency: request.currency,
@@ -231,8 +269,11 @@ class GBankSovereignCore {
       this.executions.transition({ key: idempotencyKey, request, to: 'SUBMITTED', result: submittedResult });
       this.receipts.append({
         event: 'SOVEREIGN_SETTLEMENT_SUBMITTED',
+        source_account_id: request.source_account_id,
         instruction_sha256: request.instruction_sha256,
         submission_id: submission.submission_id,
+        amount_minor: request.amount_minor,
+        currency: request.currency,
         external_receipt_sha256: submission.external_receipt_sha256,
         value_moved: false,
       });
@@ -272,7 +313,17 @@ class GBankSovereignCore {
         value_moved: true, verified_value_flow: true,
       });
       this.executions.transitionExisting({ key, to: 'SETTLED', result });
-      this.receipts.append({ event: 'SOVEREIGN_SETTLEMENT_VERIFIED', instruction_sha256: request.instruction_sha256, submission_id: submissionId, settlement_ledger_record_sha256: booking.record_sha256, external_receipt_sha256: readback.external_receipt_sha256, value_moved: true });
+      this.receipts.append({
+        event: 'SOVEREIGN_SETTLEMENT_VERIFIED',
+        source_account_id: request.source_account_id,
+        instruction_sha256: request.instruction_sha256,
+        submission_id: submissionId,
+        amount_minor: request.amount_minor,
+        currency: request.currency,
+        settlement_ledger_record_sha256: booking.record_sha256,
+        external_receipt_sha256: readback.external_receipt_sha256,
+        value_moved: true,
+      });
       return Object.freeze(result);
     }
     if (status === 'REJECTED') {
@@ -285,7 +336,16 @@ class GBankSovereignCore {
     const current = this.executions.read(key);
     const result = this._result(request, { state: next, submission_id: submissionId, external_receipt_sha256: readback.external_receipt_sha256, provider_status: status, value_moved: false });
     if (current.state !== next) this.executions.transitionExisting({ key, to: next, result });
-    this.receipts.append({ event: 'SOVEREIGN_SETTLEMENT_PENDING', instruction_sha256: request.instruction_sha256, submission_id: submissionId, provider_status: status, value_moved: false });
+    this.receipts.append({
+      event: 'SOVEREIGN_SETTLEMENT_PENDING',
+      source_account_id: request.source_account_id,
+      instruction_sha256: request.instruction_sha256,
+      submission_id: submissionId,
+      amount_minor: request.amount_minor,
+      currency: request.currency,
+      provider_status: status,
+      value_moved: false,
+    });
     return Object.freeze(result);
   }
 
