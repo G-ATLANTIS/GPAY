@@ -1,9 +1,11 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
     "mollie_public_https_callbacks_required": true,
+    "mollie_webhook_route_mounted_at_advertised_path": true,
+    "mollie_webhook_client_initialized_after_config_validation": true,
     "provider_state_reread_on_webhook": true,
     "duplicate_completed_webhooks_return_existing_receipt": true,
     "deterministic_receipt_hash": true,
