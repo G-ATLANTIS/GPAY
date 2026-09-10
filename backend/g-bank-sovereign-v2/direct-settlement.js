@@ -73,6 +73,8 @@ class DirectSettlementAdapter {
       ha_deployment_audit_sha256: runtimeGate.ha_deployment_audit_sha256,
       ha_voter_journal_root_sha256: runtimeGate.ha_voter_journal_root_sha256,
       ha_cluster_authority_root_sha256: runtimeGate.ha_cluster_authority_root_sha256,
+      ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
+      ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
       runtime_preflight_receipt_sha256: preflight.external_receipt_sha256,
     });
     if (!response?.submission_id) throw new Error('settlement_submission_id_missing');
@@ -88,6 +90,8 @@ class DirectSettlementAdapter {
       ha_audit_sha256: runtimeGate.ha_audit_sha256, ha_deployment_audit_sha256: runtimeGate.ha_deployment_audit_sha256,
       ha_voter_journal_root_sha256: runtimeGate.ha_voter_journal_root_sha256,
       ha_cluster_authority_root_sha256: runtimeGate.ha_cluster_authority_root_sha256,
+      ha_runtime_attestation_audit_sha256: runtimeGate.ha_runtime_attestation_audit_sha256,
+      ha_runtime_observation_sha256: runtimeGate.ha_runtime_observation_sha256,
       runtime_preflight_receipt_sha256: preflight.external_receipt_sha256,
       external_receipt_sha256: response.external_receipt_sha256, provider_request_id: response.provider_request_id || null,
       observed_at: new Date(now).toISOString(),
