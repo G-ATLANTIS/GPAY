@@ -41,6 +41,11 @@ const prudential = {
     state: 'PASS',
     audit_sha256: H('9'),
   },
+  operational_resilience: {
+    schema: 'g-bank-operational-resilience-assessment/v2',
+    state: 'PASS',
+    assessment_sha256: H('0'),
+  },
 };
 
 const blocked = assessSovereignReadiness({
@@ -63,6 +68,7 @@ const completeEnv = {
   G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256: H('e'),
   G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256: H('f'),
   G_BANK_PRUDENTIAL_AUDIT_SHA256: prudential.invariant_audit.audit_sha256,
+  G_BANK_OPERATIONAL_RESILIENCE_SHA256: prudential.operational_resilience.assessment_sha256,
 };
 const ready = assessSovereignReadiness({
   env: completeEnv,
@@ -76,8 +82,10 @@ const ready = assessSovereignReadiness({
 assert.equal(ready.direct_live_ready, true);
 assert.equal(ready.external_transport_verified, true);
 assert.equal(ready.prudential_controls_verified, true);
+assert.equal(ready.operational_controls_verified, true);
 assert.equal(ready.checks.high_value_quorum_dual_control, true);
 assert.equal(ready.checks.prudential_audit_binding_matches, true);
+assert.equal(ready.checks.operational_resilience_binding_matches, true);
 
 const noPrudential = assessSovereignReadiness({
   env: completeEnv,
@@ -90,6 +98,7 @@ const noPrudential = assessSovereignReadiness({
 });
 assert.equal(noPrudential.direct_live_ready, false);
 assert.equal(noPrudential.prudential_controls_verified, false);
+assert.equal(noPrudential.operational_controls_verified, false);
 assert.equal(noPrudential.checks.safeguarding_pass, false);
 
 const failedSafeguarding = assessSovereignReadiness({
@@ -106,6 +115,22 @@ const failedSafeguarding = assessSovereignReadiness({
 });
 assert.equal(failedSafeguarding.direct_live_ready, false);
 assert.equal(failedSafeguarding.checks.safeguarding_pass, false);
+
+const frozen = assessSovereignReadiness({
+  env: completeEnv,
+  governance,
+  prudential: {
+    ...prudential,
+    operational_resilience: { ...prudential.operational_resilience, state: 'BLOCK' },
+  },
+  transportPreflight: {
+    environment: 'LIVE', authenticated: true, connected: true, scheme: 'SCT_INST',
+    settlement_system: 'TIPS', external_receipt_sha256: H('2'),
+  },
+});
+assert.equal(frozen.direct_live_ready, false);
+assert.equal(frozen.operational_controls_verified, false);
+assert.equal(frozen.checks.operational_resilience_pass, false);
 
 const noGovernance = assessSovereignReadiness({
   env: completeEnv,
