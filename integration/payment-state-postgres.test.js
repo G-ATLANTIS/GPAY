@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const { Pool } = require('pg');
 const { PostgresPaymentStateAdapter } = require('../backend/utils/payment-state-postgres');
+const { PostgresPaymentIntentAdapter } = require('../backend/utils/payment-intent-postgres');
+const { SharedPaymentIntentRuntime } = require('../backend/utils/payment-intent-runtime');
+const { normalizeEmailHash } = require('../backend/utils/payment-intent-store');
 
 const connectionString = process.env.GPAY_POSTGRES_URL;
 
@@ -53,6 +56,64 @@ if (!connectionString) {
         'DELETE FROM gpay_payment_state WHERE provider=$1 AND provider_payment_id=$2',
         [provider, paymentId]
       ).catch(() => {});
+      await pool.end();
+    }
+  });
+
+  test('real postgres stores and verifies immutable GPAY payment intent provenance', async () => {
+    const pool = new Pool({ connectionString, max: 4 });
+    const adapter = new PostgresPaymentIntentAdapter(pool);
+    const runtime = new SharedPaymentIntentRuntime(adapter);
+    const intentId = `gpi_${crypto.randomUUID()}`;
+    const paymentId = `tr_ci_${crypto.randomUUID().replace(/-/g, '')}`;
+    const email = 'ci-intent@example.invalid';
+
+    try {
+      await runtime.ensureReady();
+      const created = await adapter.create({
+        intentId,
+        provider: 'mollie',
+        orderId: 'ci-order-1',
+        amount: '1.00',
+        currency: 'EUR',
+        emailHash: normalizeEmailHash(email),
+      });
+      assert.equal(created.intentId, intentId);
+      assert.equal(created.providerPaymentId, null);
+      assert.equal(created.status, 'CREATED');
+
+      const bound = await runtime.bind(intentId, paymentId);
+      assert.equal(bound.providerPaymentId, paymentId);
+      assert.equal(bound.status, 'PROVIDER_BOUND');
+      assert.equal(bound.version, 1);
+
+      const verified = await runtime.verify({
+        intentId,
+        providerPaymentId: paymentId,
+        orderId: 'ci-order-1',
+        amount: '1.00',
+        currency: 'EUR',
+        email,
+      });
+      assert.equal(verified.ok, true);
+
+      const wrongAmount = await runtime.verify({
+        intentId,
+        providerPaymentId: paymentId,
+        orderId: 'ci-order-1',
+        amount: '2.00',
+        currency: 'EUR',
+        email,
+      });
+      assert.equal(wrongAmount.ok, false);
+      assert.equal(wrongAmount.reason, 'amount_mismatch');
+
+      await assert.rejects(
+        () => runtime.bind(intentId, `${paymentId}_other`),
+        (error) => error?.code === 'PAYMENT_INTENT_REBIND_DENIED'
+      );
+    } finally {
+      await pool.query('DELETE FROM gpay_payment_intent WHERE intent_id=$1', [intentId]).catch(() => {});
       await pool.end();
     }
   });
