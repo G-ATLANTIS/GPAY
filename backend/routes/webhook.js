@@ -8,6 +8,7 @@ const sendMail = require('../utils/mailer');
 const { createReceipt } = require('../utils/payment-receipt');
 const { getProcessed, recordProcessed } = require('../utils/payment-idempotency-store');
 const { acquirePaymentLock } = require('../utils/payment-lock');
+const { createGcoinSettlementIntent } = require('../utils/gcoin-settlement-intent');
 const router = express.Router();
 
 function requireMollieConfig() {
@@ -28,10 +29,7 @@ router.post('/mollie/webhook', async (req, res) => {
 
     lock = acquirePaymentLock('mollie', id);
     if (!lock.acquired) {
-      return res.status(202).json({
-        status: 'processing',
-        providerPaymentId: id,
-      });
+      return res.status(202).json({ status: 'processing', providerPaymentId: id });
     }
 
     const alreadyProcessed = getProcessed('mollie', id);
@@ -40,6 +38,8 @@ router.post('/mollie/webhook', async (req, res) => {
         status: 'already_processed',
         providerPaymentId: id,
         receiptHash: alreadyProcessed.receiptHash,
+        settlementEventId: alreadyProcessed.settlementEventId || null,
+        settlementExecutionStatus: alreadyProcessed.settlementExecutionStatus || null,
       });
     }
 
@@ -60,15 +60,28 @@ router.post('/mollie/webhook', async (req, res) => {
     }
 
     const processedAt = new Date().toISOString();
+    const currency = payment.amount?.currency || 'EUR';
     const rewardEventId = crypto
       .createHash('sha256')
       .update(`mollie:${id}:${orderId}:reward`)
       .digest('hex');
 
-    // Current rewardTokens is a deterministic calculation/log, not an external token transfer.
+    // This computes the current reward amount only. It does not transfer tokens.
     const tokens = rewardTokens(amount, email, { eventId: rewardEventId });
 
-    // Invoice generation is deterministic for orderId and resolves only after the PDF is durable.
+    // Bind the verified payment to canonical GCOIN metadata without signing/broadcasting.
+    const settlementIntent = createGcoinSettlementIntent({
+      provider: 'mollie',
+      providerPaymentId: id,
+      orderId,
+      amount: String(amount),
+      currency,
+      rewardEventId,
+      gcoinAmount: String(tokens),
+      broadcast: false,
+    });
+
+    // Invoice resolves only after the PDF is durably written.
     const invoicePath = await generateInvoice(orderId, amount, email);
 
     const receipt = createReceipt({
@@ -76,34 +89,40 @@ router.post('/mollie/webhook', async (req, res) => {
       providerPaymentId: id,
       orderId,
       amount: String(amount),
-      currency: payment.amount?.currency || 'EUR',
+      currency,
       status: payment.status,
       processedAt,
       rewardEventId,
       tokens,
+      settlementEventId: settlementIntent.settlementEventId,
+      settlementMode: settlementIntent.mode,
+      settlementExecutionStatus: settlementIntent.executionStatus,
+      settlementContractAddress: settlementIntent.contractAddress,
+      settlementChainId: settlementIntent.chainId,
     });
 
-    // Commit financial processing before best-effort notification. Duplicate callbacks stop here.
+    // Commit local processing before best-effort notification. No blockchain execution occurs here.
     const result = recordProcessed('mollie', id, receipt);
     if (!result.created) {
       return res.status(200).json({
         status: 'already_processed',
         providerPaymentId: id,
         receiptHash: result.record.receiptHash,
+        settlementEventId: result.record.settlementEventId || null,
+        settlementExecutionStatus: result.record.settlementExecutionStatus || null,
       });
     }
 
     fs.mkdirSync('logs', { recursive: true });
     fs.appendFileSync(
       'logs/payments.log',
-      `[OK] ${orderId} provider=mollie payment=${id} status=paid receipt=${receipt.receiptHash}\n`
+      `[OK] ${orderId} provider=mollie payment=${id} status=paid receipt=${receipt.receiptHash} gcoin_intent=${settlementIntent.settlementEventId} execution=not_attempted\n`
     );
 
     let notification = 'sent';
     try {
       await sendMail(email, invoicePath);
     } catch (mailErr) {
-      // Notification is deliberately non-transactional: payment processing stays committed.
       notification = 'failed';
       console.error('Payment confirmation email failed:', mailErr.message);
     }
@@ -112,11 +131,17 @@ router.post('/mollie/webhook', async (req, res) => {
       status: 'processed',
       providerPaymentId: id,
       receiptHash: receipt.receiptHash,
+      settlementEventId: settlementIntent.settlementEventId,
+      settlementMode: settlementIntent.mode,
+      settlementExecutionStatus: settlementIntent.executionStatus,
       notification,
     });
   } catch (err) {
     if (err.code === 'CONFIG_ERROR') {
       return res.status(503).json({ error: err.message });
+    }
+    if (err.code === 'GCOIN_BROADCAST_DENIED') {
+      return res.status(403).json({ error: err.message });
     }
     console.error('Mollie webhook error:', err.message);
     return res.status(500).json({ error: 'Webhook processing failed' });
