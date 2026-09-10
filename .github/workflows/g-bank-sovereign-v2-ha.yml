@@ -1,0 +1,32 @@
+name: G-BANK sovereign v2 HA safety
+
+on:
+  push:
+    branches:
+      - feature/g-bank-sovereign-core-v2
+  pull_request:
+    paths:
+      - 'backend/g-bank-sovereign-v2/ha-*.js'
+      - 'backend/tests/g-bank-sovereign-v2-ha.test.js'
+      - '.github/workflows/g-bank-sovereign-v2-ha.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ha-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks
+        run: |
+          node --check backend/g-bank-sovereign-v2/ha-quorum.js
+          node --check backend/g-bank-sovereign-v2/ha-replication-store.js
+          node --check backend/g-bank-sovereign-v2/ha-readiness-audit.js
+          node --check backend/tests/g-bank-sovereign-v2-ha.test.js
+      - name: No-network HA safety tests
+        run: node backend/tests/g-bank-sovereign-v2-ha.test.js
