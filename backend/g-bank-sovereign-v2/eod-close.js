@@ -20,6 +20,7 @@ function createEndOfDayClose({
   treasuryAssessment,
   resilienceAssessment,
   settlementReconciliation,
+  inboundSettlementReconciliation,
   now = Date.now(),
 }) {
   const date = String(business_date || '');
@@ -34,8 +35,11 @@ function createEndOfDayClose({
   const treasury = verifyHashed('treasury', treasuryAssessment, 'assessment_sha256');
   const resilience = verifyHashed('resilience', resilienceAssessment, 'assessment_sha256');
   const reconciliation = verifyHashed('settlement_reconciliation', settlementReconciliation, 'reconciliation_sha256');
+  const inboundReconciliation = verifyHashed('inbound_settlement_reconciliation', inboundSettlementReconciliation, 'reconciliation_sha256');
   if (reconciliation.schema !== 'g-bank-settlement-reconciliation/v2') throw new Error('settlement_reconciliation_schema_invalid');
+  if (inboundReconciliation.schema !== 'g-bank-inbound-settlement-reconciliation/v2') throw new Error('inbound_settlement_reconciliation_schema_invalid');
   if (reconciliation.business_date !== date) throw new Error('settlement_reconciliation_business_date_mismatch');
+  if (inboundReconciliation.business_date !== date) throw new Error('inbound_settlement_reconciliation_business_date_mismatch');
 
   const reasons = [];
   if (invariant.state !== 'PASS') reasons.push('INVARIANT_AUDIT_BLOCKED');
@@ -44,6 +48,7 @@ function createEndOfDayClose({
   if (treasury.state !== 'PASS') reasons.push('TREASURY_BLOCKED');
   if (resilience.state !== 'PASS') reasons.push('RESILIENCE_BLOCKED');
   if (reconciliation.state !== 'PASS') reasons.push('SETTLEMENT_RECONCILIATION_BLOCKED');
+  if (inboundReconciliation.state !== 'PASS') reasons.push('INBOUND_SETTLEMENT_RECONCILIATION_BLOCKED');
 
   const checkpointTime = Date.parse(checkpoint.checkpointed_at);
   if (!Number.isFinite(checkpointTime)) reasons.push('CHECKPOINT_TIME_INVALID');
@@ -55,6 +60,7 @@ function createEndOfDayClose({
     business_date: date,
     reasons,
     state_root_sha256: checkpoint.state_root_sha256,
+    inbound_state_sha256: checkpoint.inbound_state_sha256 || null,
     invariant_audit_sha256: invariant.audit_sha256,
     safeguarding_assessment_sha256: safeguarding.assessment_sha256,
     liquidity_assessment_sha256: liquidity.assessment_sha256,
@@ -62,6 +68,8 @@ function createEndOfDayClose({
     resilience_assessment_sha256: resilience.assessment_sha256,
     settlement_reconciliation_sha256: reconciliation.reconciliation_sha256,
     settlement_statement_sha256: reconciliation.statement_sha256,
+    inbound_settlement_reconciliation_sha256: inboundReconciliation.reconciliation_sha256,
+    inbound_settlement_statement_sha256: inboundReconciliation.statement_sha256,
     closed_at: new Date(now).toISOString(),
   };
   return Object.freeze({ ...body, close_sha256: sha256(canonicalJson(body)) });
