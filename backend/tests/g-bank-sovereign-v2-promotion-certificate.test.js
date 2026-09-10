@@ -7,6 +7,7 @@ const { createTechnicalPromotionCertificate, verifyTechnicalPromotionCertificate
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T22:30:00.000Z');
 const FENCE = new Date(NOW + 180000).toISOString();
+const TRUSTED_OBSERVER = H('6');
 
 const evidence_bindings = {
   legal_authorization_evidence_sha256: H('d'), scheme_participation_evidence_sha256: H('e'), settlement_access_evidence_sha256: H('f'),
@@ -31,12 +32,14 @@ function readiness(overrides = {}) {
 const checkpoint = { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('a') };
 const governance = { policy_sha256: H('b'), authority_set_sha256: H('c') };
 const ready = readiness();
-const cert = createTechnicalPromotionCertificate({ readiness: ready, checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), ttl_seconds: 120, now: NOW });
+const baseArgs = { readiness: ready, checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), trusted_runtime_ha_observer_sha256: TRUSTED_OBSERVER };
+const cert = createTechnicalPromotionCertificate({ ...baseArgs, ttl_seconds: 120, now: NOW });
 
 assert.equal(cert.state, 'TECHNICAL_GATES_SATISFIED');
 assert.equal(cert.grants_external_rights, false);
 assert.equal(cert.permits_value_movement_by_itself, false);
 assert.equal(cert.requires_runtime_reverification, true);
+assert.equal(cert.trusted_runtime_ha_observer_sha256, TRUSTED_OBSERVER);
 assert.equal(cert.evidence_bindings.recovery_audit_sha256, H('8'));
 assert.equal(cert.evidence_bindings.ha_audit_sha256, H('9'));
 assert.equal(cert.evidence_bindings.ha_deployment_audit_sha256, H('0'));
@@ -47,28 +50,31 @@ assert.equal(cert.expires_at, new Date(NOW + 120000).toISOString());
 assert.match(cert.certificate_sha256, /^[0-9a-f]{64}$/);
 assert.equal(verifyTechnicalPromotionCertificate(cert, { readiness: ready, now: NOW + 1000 }), true);
 
-const fenceCapped = createTechnicalPromotionCertificate({
-  readiness: readiness({ ha_fence_valid_until: new Date(NOW + 90000).toISOString() }), checkpoint, governance,
-  evidence_bindings, trusted_signing_key_binding_sha256: H('7'), ttl_seconds: 300, now: NOW,
-});
+const fenceReady = readiness({ ha_fence_valid_until: new Date(NOW + 90000).toISOString() });
+const fenceCapped = createTechnicalPromotionCertificate({ ...baseArgs, readiness: fenceReady, ttl_seconds: 300, now: NOW });
 assert.equal(fenceCapped.expires_at, new Date(NOW + 90000).toISOString());
-assert.throws(() => verifyTechnicalPromotionCertificate(fenceCapped, { readiness: readiness({ ha_fence_valid_until: new Date(NOW + 90000).toISOString() }), now: NOW + 90000 }), /readiness_ha_fence_expired_or_invalid|expired_or_invalid/);
+assert.throws(() => verifyTechnicalPromotionCertificate(fenceCapped, { readiness: fenceReady, now: NOW + 90000 }), /readiness_ha_fence_expired_or_invalid|expired_or_invalid/);
 
-assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ ha_fence_valid_until: new Date(NOW + 29000).toISOString() }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), ttl_seconds: 120, now: NOW }), /promotion_ha_fence_too_close_to_expiry/);
-assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ ha_cluster_authority_root_sha256: null }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /readiness_ha_cluster_authority_root_sha256_invalid/);
-assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ ha_voter_journal_root_sha256: null }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /readiness_ha_voter_journal_root_sha256_invalid/);
+assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, readiness: readiness({ ha_fence_valid_until: new Date(NOW + 29000).toISOString() }), ttl_seconds: 120, now: NOW }), /promotion_ha_fence_too_close_to_expiry/);
+assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, readiness: readiness({ ha_cluster_authority_root_sha256: null }), now: NOW }), /readiness_ha_cluster_authority_root_sha256_invalid/);
+assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, readiness: readiness({ ha_voter_journal_root_sha256: null }), now: NOW }), /readiness_ha_voter_journal_root_sha256_invalid/);
+assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, trusted_runtime_ha_observer_sha256: null, now: NOW }), /trusted_runtime_ha_observer_sha256_invalid/);
+assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, trusted_runtime_ha_observer_sha256: 'not-a-hash', now: NOW }), /trusted_runtime_ha_observer_sha256_invalid/);
 assert.throws(() => verifyTechnicalPromotionCertificate({ ...cert, state_root_sha256: H('f') }, { readiness: ready, now: NOW + 1000 }), /hash_mismatch/);
 assert.throws(() => verifyTechnicalPromotionCertificate(cert, { readiness: ready, now: NOW + 121000 }), /expired_or_invalid/);
 
 for (const field of ['customer_monitoring_verified', 'recovery_controls_verified', 'ha_controls_verified', 'ha_deployment_verified']) {
-  assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ [field]: false }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /direct_live_readiness_not_satisfied/);
+  assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, readiness: readiness({ [field]: false }), now: NOW }), /direct_live_readiness_not_satisfied/);
 }
 
-assert.throws(() => createTechnicalPromotionCertificate({ readiness: ready, checkpoint: { ...checkpoint, state_root_sha256: H('f') }, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /promotion_recovery_checkpoint_state_root_mismatch/);
-assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ ha_checkpoint_state_root_sha256: H('f') }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /readiness_ha_recovery_checkpoint_mismatch/);
-assert.throws(() => createTechnicalPromotionCertificate({ readiness: ready, checkpoint, governance, evidence_bindings: { ...evidence_bindings, ha_deployment_audit_sha256: H('1') }, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /promotion_readiness_evidence_binding_mismatch:ha_deployment_audit_sha256/);
+assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, checkpoint: { ...checkpoint, state_root_sha256: H('f') }, now: NOW }), /promotion_recovery_checkpoint_state_root_mismatch/);
+assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, readiness: readiness({ ha_checkpoint_state_root_sha256: H('f') }), now: NOW }), /readiness_ha_recovery_checkpoint_mismatch/);
+assert.throws(() => createTechnicalPromotionCertificate({ ...baseArgs, evidence_bindings: { ...evidence_bindings, ha_deployment_audit_sha256: H('1') }, now: NOW }), /promotion_readiness_evidence_binding_mismatch:ha_deployment_audit_sha256/);
 assert.throws(() => verifyTechnicalPromotionCertificate(cert, { readiness: readiness({ ha_cluster_authority_root_sha256: H('3') }), now: NOW + 1000 }), /promotion_ha_cluster_authority_root_mismatch|readiness_mismatch/);
 assert.throws(() => verifyTechnicalPromotionCertificate(cert, { readiness: readiness({ ha_voter_journal_root_sha256: H('3') }), now: NOW + 1000 }), /promotion_ha_voter_journal_root_mismatch|readiness_mismatch/);
+
+const observerTamper = { ...cert, trusted_runtime_ha_observer_sha256: H('f') };
+assert.throws(() => verifyTechnicalPromotionCertificate(observerTamper, { readiness: ready, now: NOW + 1000 }), /promotion_certificate_hash_mismatch/);
 
 const boundaryBody = { ...cert, grants_external_rights: true };
 delete boundaryBody.certificate_sha256;
@@ -80,4 +86,4 @@ function stable(value) {
 const boundaryTamper = { ...boundaryBody, certificate_sha256: crypto.createHash('sha256').update(JSON.stringify(stable(boundaryBody))).digest('hex') };
 assert.throws(() => verifyTechnicalPromotionCertificate(boundaryTamper, { readiness: ready, now: NOW + 1000 }), /boundary_invalid/);
 
-console.log('G-BANK sovereign v2 promotion certificate tests: PASS');
+console.log('G-BANK sovereign v2 promotion certificate observer-pin tests: PASS');
