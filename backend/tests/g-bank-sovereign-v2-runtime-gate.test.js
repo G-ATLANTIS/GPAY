@@ -12,7 +12,7 @@ const { runtimeHAObservationPayload, signHARuntimeObservation } = require('../g-
 const { HARuntimeChallengeStore } = require('../g-bank-sovereign-v2/ha-runtime-challenge-store');
 const { settlementOperationBinding } = require('../g-bank-sovereign-v2/settlement-operation-binding');
 const { createSyntheticRuntimeObserver } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
-const { createSyntheticPromotionSigner, configureSyntheticPromotionSignature } = require('./g-bank-sovereign-v2-promotion-signing-fixture');
+const { createSyntheticPromotionSigner, configureSyntheticPromotionSignature, configureSyntheticPromotionQuorum } = require('./g-bank-sovereign-v2-promotion-signing-fixture');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T09:30:00.000Z');
@@ -30,10 +30,11 @@ function fixture() {
   const promotionSigner = createSyntheticPromotionSigner('SIGNER:PROMOTION:A');
   const promotionSignerB = createSyntheticPromotionSigner('SIGNER:PROMOTION:B');
   const promotionSignerC = createSyntheticPromotionSigner('SIGNER:PROMOTION:C');
+  const promotionSigners = [promotionSigner, promotionSignerB, promotionSignerC];
   const promotionSignerAuthority = normalizePromotionSignerAuthority({
     authority_epoch: 1,
     quorum: 2,
-    signers: [promotionSigner, promotionSignerB, promotionSignerC].map(s => ({ signer_id: s.signer_id, status: 'ACTIVE', public_key_pem: s.public_key_pem })),
+    signers: promotionSigners.map(s => ({ signer_id: s.signer_id, status: 'ACTIVE', public_key_pem: s.public_key_pem })),
   });
   const haAudit = hashed('g-bank-ha-readiness-audit/v2', 'audit_sha256', {
     cluster_sha256: H('1'), cluster_epoch: 1, cluster_authority_root_sha256: H('2'), cluster_transition_count: 0,
@@ -108,7 +109,11 @@ function fixture() {
     G_BANK_HA_DEPLOYMENT_AUDIT_SHA256: evidence_bindings.ha_deployment_audit_sha256,
   };
   const promotionSignature = configureSyntheticPromotionSignature({ root, env, certificate, promotionSigner, now: NOW + 1000 });
-  return { root, haAudit, haDeploymentAudit, readiness, certificate, operation, pinnedObserver, promotionSigner, promotionSignerAuthority, promotionSignature, runtimeObservation, challengeStore, challenge, readinessFile, promotionFile, runtimeHAFile, runtimeHAObserverFile, env };
+  const promotionQuorum = configureSyntheticPromotionQuorum({
+    root, env, certificate, authority: promotionSignerAuthority, promotionSigners,
+    request: promotionSignature.request, now: NOW + 1000,
+  });
+  return { root, haAudit, haDeploymentAudit, readiness, certificate, operation, pinnedObserver, promotionSigner, promotionSignerB, promotionSignerC, promotionSigners, promotionSignerAuthority, promotionSignature, promotionQuorum, runtimeObservation, challengeStore, challenge, readinessFile, promotionFile, runtimeHAFile, runtimeHAObserverFile, env };
 }
 
 (() => {
@@ -116,7 +121,10 @@ function fixture() {
   const gate = verifyRuntimePromotionGate({ env: f.env, now: NOW + 3000, expectedOperation: EXPECTED_OPERATION });
   assert.equal(gate.state, 'PASS');
   assert.equal(f.certificate.promotion_signer_authority_root_sha256, f.promotionSignerAuthority.authority_root_sha256);
-  assert.equal(f.certificate.promotion_signature_quorum, 2);
+  assert.equal(gate.promotion_signer_authority_root_sha256, f.promotionSignerAuthority.authority_root_sha256);
+  assert.equal(gate.promotion_signature_quorum, 2);
+  assert.equal(gate.promotion_signature_valid_signer_count, 2);
+  assert.match(gate.promotion_signature_quorum_proof_sha256, /^[0-9a-f]{64}$/);
   assert.equal(gate.promotion_signer_key_binding_sha256, f.promotionSigner.key_binding_sha256);
   assert.match(gate.promotion_signature_proof_sha256, /^[0-9a-f]{64}$/);
   assert.equal(gate.trusted_runtime_ha_observer_sha256, f.pinnedObserver.observer_public_key_binding_sha256);
@@ -126,6 +134,20 @@ function fixture() {
   const submitGate = verifyRuntimePromotionGate({ env: f.env, now: NOW + 3000, consumeChallenge: true, expectedOperation: EXPECTED_OPERATION });
   assert.equal(submitGate.ha_runtime_challenge_consumed, true);
   assert.equal(f.challengeStore.verify().consumed_count, 1);
+})();
+
+(() => {
+  const f = fixture();
+  const oneSignerBundle = { ...f.promotionQuorum.bundle, signatures: [f.promotionQuorum.bundle.signatures[0]] };
+  fs.writeFileSync(f.promotionQuorum.bundle_path, JSON.stringify(oneSignerBundle) + '\n');
+  assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 3000, expectedOperation: EXPECTED_OPERATION }), /promotion_signature_quorum_not_met/);
+  assert.equal(f.challengeStore.verify().consumed_count, 0, 'insufficient promotion quorum must not consume challenge');
+})();
+
+(() => {
+  const f = fixture();
+  assert.throws(() => verifyRuntimePromotionGate({ env: { ...f.env, G_BANK_RUNTIME_PROMOTION_SIGNATURE_BUNDLE_FILE: '' }, now: NOW + 3000, expectedOperation: EXPECTED_OPERATION }), /runtime_promotion_signature_bundle_file_required/);
+  assert.equal(f.challengeStore.verify().consumed_count, 0, 'missing promotion quorum bundle must not consume challenge');
 })();
 
 (() => {
@@ -173,4 +195,4 @@ for (const [field, value, pattern] of [
   assert.throws(() => verifyRuntimePromotionGate({ env: { ...f.env, G_BANK_RUNTIME_PROMOTION_SIGNATURE_EVIDENCE_FILE: '' }, now: NOW + 3000, expectedOperation: EXPECTED_OPERATION }), /runtime_promotion_signature_evidence_file_required/);
 })();
 
-console.log('G-BANK sovereign v2 externally-signed quorum-bound promotion runtime gate tests: PASS');
+console.log('G-BANK sovereign v2 externally-signed promotion quorum runtime gate tests: PASS');
