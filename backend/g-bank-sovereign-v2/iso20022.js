@@ -82,9 +82,10 @@ function transferFields(input) {
   };
 }
 
-function wrapResult(messageType, document) {
+function wrapResult(messageType, document, scheme) {
   return Object.freeze({
     schema: 'g-bank-iso20022-message/v2',
+    scheme,
     message_type: messageType,
     iso20022_version: '2019',
     document,
@@ -112,10 +113,10 @@ function buildPain001(input, { instant = false, now = new Date() } = {}) {
     `${partyXml('Cdtr', creditor)}<CdtrAcct><Id><IBAN>${f.creditor_iban}</IBAN></Id></CdtrAcct>` +
     (f.remittance ? `<RmtInf><Ustrd>${xml(f.remittance)}</Ustrd></RmtInf>` : '') +
     `</CdtTrfTxInf></PmtInf></CstmrCdtTrfInitn></Document>`;
-  return wrapResult('pain.001.001.09', doc);
+  return wrapResult('pain.001.001.09', doc, instant ? 'SCT_INST' : 'SCT');
 }
 
-function buildPacs008SctInst(input, { now = new Date() } = {}) {
+function buildPacs008(input, { instant = false, now = new Date() } = {}) {
   const f = transferFields(input);
   const debtorBic = assertBic(input.debtor_agent_bic);
   const creditorBic = assertBic(input.creditor_agent_bic);
@@ -123,18 +124,23 @@ function buildPacs008SctInst(input, { now = new Date() } = {}) {
   const creditor = { ...input.creditor, name: f.creditor_name };
   const creation = now.toISOString();
   const txId = assertId('transaction_id', input.transaction_id || f.instruction_id);
+  const localInstrument = instant ? '<LclInstrm><Prtry>INST</Prtry></LclInstrm>' : '';
   const doc = `<?xml version="1.0" encoding="UTF-8"?>` +
     `<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">` +
     `<FIToFICstmrCdtTrf>` +
     `<GrpHdr><MsgId>${xml(f.message_id)}</MsgId><CreDtTm>${xml(creation)}</CreDtTm><NbOfTxs>1</NbOfTxs><SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf></GrpHdr>` +
     `<CdtTrfTxInf><PmtId><InstrId>${xml(f.instruction_id)}</InstrId><EndToEndId>${xml(f.end_to_end_id)}</EndToEndId><TxId>${xml(txId)}</TxId></PmtId>` +
-    `<PmtTpInf><SvcLvl><Cd>SEPA</Cd></SvcLvl><LclInstrm><Prtry>INST</Prtry></LclInstrm></PmtTpInf>` +
+    `<PmtTpInf><SvcLvl><Cd>SEPA</Cd></SvcLvl>${localInstrument}</PmtTpInf>` +
     `<IntrBkSttlmAmt Ccy="EUR">${f.amount}</IntrBkSttlmAmt><ChrgBr>SLEV</ChrgBr>` +
     `<DbtrAgt><FinInstnId><BICFI>${xml(debtorBic)}</BICFI></FinInstnId></DbtrAgt>${partyXml('Dbtr', debtor)}<DbtrAcct><Id><IBAN>${f.debtor_iban}</IBAN></Id></DbtrAcct>` +
     `<CdtrAgt><FinInstnId><BICFI>${xml(creditorBic)}</BICFI></FinInstnId></CdtrAgt>${partyXml('Cdtr', creditor)}<CdtrAcct><Id><IBAN>${f.creditor_iban}</IBAN></Id></CdtrAcct>` +
     (f.remittance ? `<RmtInf><Ustrd>${xml(f.remittance)}</Ustrd></RmtInf>` : '') +
     `</CdtTrfTxInf></FIToFICstmrCdtTrf></Document>`;
-  return wrapResult('pacs.008.001.08', doc);
+  return wrapResult('pacs.008.001.08', doc, instant ? 'SCT_INST' : 'SCT');
 }
 
-module.exports = { buildPain001, buildPacs008SctInst, xml, assertBic };
+function buildPacs008SctInst(input, options = {}) {
+  return buildPacs008(input, { ...options, instant: true });
+}
+
+module.exports = { buildPain001, buildPacs008, buildPacs008SctInst, xml, assertBic };
