@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const checkFraud = require('../utils/g-fraud');
 const { createMolliePaymentWithEvidence } = require('../utils/provider-evidence-client');
+const { createPaymentIntent, bindProviderPayment } = require('../utils/payment-intent-store');
 const router = express.Router();
 
 function requireEnv(name) {
@@ -58,12 +59,25 @@ router.post('/create-payment', async (req, res) => {
   try {
     const publicBaseUrl = getPublicBaseUrl();
     const encodedOrderId = encodeURIComponent(orderId);
+    const canonicalAmount = numericAmount.toFixed(2);
+    const intent = createPaymentIntent({
+      orderId,
+      amount: canonicalAmount,
+      currency: 'EUR',
+      email,
+    });
+
     const paymentRequest = {
-      amount: { currency: 'EUR', value: numericAmount.toFixed(2) },
+      amount: { currency: 'EUR', value: canonicalAmount },
       description: `Order ${orderId}`,
       redirectUrl: `${publicBaseUrl}/success/${encodedOrderId}`,
       webhookUrl: `${publicBaseUrl}/api/mollie/webhook`,
-      metadata: { orderId, amount: numericAmount.toFixed(2), email },
+      metadata: {
+        gpayIntentId: intent.intentId,
+        orderId,
+        amount: canonicalAmount,
+        email,
+      },
       ...(method ? { method } : {}),
     };
 
@@ -85,11 +99,15 @@ router.post('/create-payment', async (req, res) => {
         idempotency_key: providerEvidence.idempotency_key,
         production_binding_verified: providerEvidence.production_binding_verified,
         payment_id: payment.id || null,
+        gpay_intent_id: intent.intentId,
       });
     } else {
       const mollieClient = getMollieClient();
       payment = await mollieClient.payments.create(paymentRequest);
     }
+
+    if (!payment?.id) throw new Error('Mollie payment id missing');
+    bindProviderPayment(intent.intentId, payment.id);
 
     const checkoutUrl = payment.getCheckoutUrl ? payment.getCheckoutUrl() : payment?._links?.checkout?.href;
     if (!checkoutUrl) throw new Error('Mollie checkout URL missing');
@@ -97,12 +115,13 @@ router.post('/create-payment', async (req, res) => {
     ensurePaymentLogDir();
     fs.appendFileSync(
       path.join(process.cwd(), 'logs', 'payments.log'),
-      `[INIT] ${new Date().toISOString()} order=${orderId} provider=mollie payment=${payment.id}\n`
+      `[INIT] ${new Date().toISOString()} order=${orderId} provider=mollie payment=${payment.id} intent=${intent.intentId}\n`
     );
 
     return res.json({
       provider: 'mollie',
       paymentId: payment.id,
+      paymentIntentId: intent.intentId,
       paymentUrl: checkoutUrl,
       ...(providerEvidence ? {
         providerRequestId: providerEvidence.provider_request_id,
@@ -127,6 +146,10 @@ router.post('/create-payment', async (req, res) => {
 
     if (err?.code === 'GPAY_CONFIG_MISSING' || err?.code === 'GPAY_INVALID_PUBLIC_URL') {
       return res.status(503).json({ error: 'Payment provider unavailable', code: err.code });
+    }
+
+    if (err?.code?.startsWith('PAYMENT_INTENT_')) {
+      return res.status(503).json({ error: 'Payment intent persistence unavailable', code: err.code });
     }
 
     console.error('Mollie payment creation error:', err.message);
