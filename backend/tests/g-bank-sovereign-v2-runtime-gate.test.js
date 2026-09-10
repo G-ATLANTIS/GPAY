@@ -9,6 +9,7 @@ const { verifyRuntimePromotionGate } = require('../g-bank-sovereign-v2/runtime-p
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T09:30:00.000Z');
+const FENCE = new Date(NOW + 120000).toISOString();
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-runtime-gate-v2-'));
@@ -26,7 +27,7 @@ function fixture() {
     ha_controls_verified: true, direct_live_ready: true,
     checks: { live_flag: true, recovery_audit_pass: true, customer_monitoring_pass: true, ha_audit_pass: true },
     evidence_bindings,
-    recovery_checkpoint_state_root_sha256: H('b'), ha_checkpoint_state_root_sha256: H('b'),
+    recovery_checkpoint_state_root_sha256: H('b'), ha_checkpoint_state_root_sha256: H('b'), ha_fence_valid_until: FENCE,
     transport_scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT', value_movement_permitted_by_readiness: true,
     note: 'runtime gate test fixture',
   };
@@ -69,8 +70,10 @@ function fixture() {
   assert.equal(gate.permits_value_movement_by_itself, false);
   assert.equal(gate.recovery_audit_sha256, H('a'));
   assert.equal(gate.ha_audit_sha256, H('f'));
+  assert.equal(gate.ha_fence_valid_until, FENCE);
   assert.equal(gate.policy_sha256, H('c'));
   assert.equal(gate.authority_set_sha256, H('d'));
+  assert.equal(f.certificate.expires_at, FENCE, 'certificate lifetime must be capped to leader fence');
   assert.match(gate.gate_sha256, /^[0-9a-f]{64}$/);
 })();
 
@@ -93,7 +96,7 @@ for (const [field, value, pattern] of [
 
 (() => {
   const f = fixture();
-  assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 301000 }), /promotion_certificate_expired_or_invalid/);
+  assert.throws(() => verifyRuntimePromotionGate({ env: f.env, now: NOW + 120000 }), /readiness_ha_fence_expired_or_invalid|promotion_certificate_expired_or_invalid/);
 })();
 
 (() => {
