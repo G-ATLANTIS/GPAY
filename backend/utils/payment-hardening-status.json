@@ -1,5 +1,5 @@
 {
-  "version": "1.6.1",
+  "version": "1.6.2",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -30,6 +30,10 @@
     "evidence_signature_verification_implemented": true,
     "evidence_signing_private_key_runtime_only": true,
     "evidence_signing_key_separate_from_blockchain_keys": true
+  },
+  "verification": {
+    "webhook_mount_and_lazy_client_ci": "passed",
+    "recovery_state_machine_ci": "pending"
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
