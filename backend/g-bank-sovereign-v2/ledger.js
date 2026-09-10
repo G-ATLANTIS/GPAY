@@ -70,6 +70,31 @@ class SovereignLedger {
     return balance;
   }
 
+  trialBalance(currency) {
+    const ccy = assertCurrency(currency);
+    const balances = {};
+    for (const record of this._records()) {
+      for (const entry of record.entries || []) {
+        if (entry.currency !== ccy) continue;
+        const account = assertAccountId(entry.account_id);
+        balances[account] = (balances[account] || 0) + (entry.side === 'CREDIT' ? entry.amount_minor : -entry.amount_minor);
+        if (!Number.isSafeInteger(balances[account])) throw new Error('ledger_balance_overflow');
+      }
+    }
+    const total = Object.values(balances).reduce((sum, value) => sum + value, 0);
+    if (!Number.isSafeInteger(total)) throw new Error('ledger_trial_balance_overflow');
+    const verification = this.verify();
+    return Object.freeze({
+      schema: 'g-bank-sovereign-trial-balance/v2',
+      currency: ccy,
+      balances: Object.freeze({ ...balances }),
+      total_minor: total,
+      balanced: total === 0,
+      ledger_record_count: verification.record_count,
+      ledger_head_sha256: verification.head_sha256,
+    });
+  }
+
   post({ transaction_id = crypto.randomUUID(), reference, entries, metadata = {} }) {
     if (!Array.isArray(entries) || entries.length < 2) throw new Error('ledger_entries_invalid');
     const normalized = entries.map(entry => ({
