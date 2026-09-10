@@ -40,6 +40,8 @@ class GBankSovereignCore {
     this.riskPolicy = normalizePolicy(riskPolicy);
     this.authoritySet = normalizeAuthoritySet(authoritySet);
     this.env = env;
+    this.env.G_BANK_ACTIVE_POLICY_SHA256 = this.riskPolicy.policy_sha256;
+    this.env.G_BANK_ACTIVE_AUTHORITY_SET_SHA256 = this.authoritySet.authority_set_sha256;
     const root = path.resolve(stateDir);
     this.executions = new SovereignExecutionStore(path.join(root, 'executions'));
     this.receipts = new SovereignReceiptLedger(path.join(root, 'receipts.jsonl'));
