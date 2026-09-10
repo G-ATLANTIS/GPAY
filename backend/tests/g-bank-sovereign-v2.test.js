@@ -9,7 +9,7 @@ const { SovereignLedger } = require('../g-bank-sovereign-v2/ledger');
 const { AccountRegistry } = require('../g-bank-sovereign-v2/accounts');
 const { DirectSettlementAdapter } = require('../g-bank-sovereign-v2/direct-settlement');
 const { GBankSovereignCore } = require('../g-bank-sovereign-v2/sovereign-core');
-const { createSovereignApproval } = require('../g-bank-sovereign-v2/approval');
+const { createSovereignApproval, verifySovereignApproval } = require('../g-bank-sovereign-v2/approval');
 
 const H = c => c.repeat(64);
 
@@ -104,8 +104,9 @@ function schemeEvidence(prepared) {
   assert.equal(prepared.iso20022.message_type, 'pacs.008.001.08');
   assert.match(prepared.iso20022.document, /<LclInstrm><Prtry>INST<\/Prtry><\/LclInstrm>/);
   const key = crypto.randomUUID();
-  const approval = createSovereignApproval({ prepared, idempotencyKey: key }, s.e);
-  const result = await s.core.execute({ prepared, schemeValidationEvidence: schemeEvidence(prepared), approvalToken: approval, idempotencyKey: key });
+  const validation = schemeEvidence(prepared);
+  const approval = createSovereignApproval({ prepared, schemeValidationEvidence: validation, idempotencyKey: key }, s.e);
+  const result = await s.core.execute({ prepared, schemeValidationEvidence: validation, approvalToken: approval, idempotencyKey: key });
   assert.equal(result.state, 'SETTLED');
   assert.equal(result.value_moved, true);
   assert.equal(result.verified_value_flow, true);
@@ -115,14 +116,16 @@ function schemeEvidence(prepared) {
   assert.equal(s.ledger.verify().verified, true);
   assert.equal(s.core.receipts.verify().valid, true);
 
-  const replay = await s.core.execute({ prepared, schemeValidationEvidence: schemeEvidence(prepared), approvalToken: approval, idempotencyKey: key });
+  const replay = await s.core.execute({ prepared, schemeValidationEvidence: validation, approvalToken: approval, idempotencyKey: key });
   assert.equal(replay.result_sha256, result.result_sha256);
   assert.equal(submitCount, 1, 'idempotent replay must not submit again');
   assert.equal(s.ledger.balance('G:CUSTOMER:001', 'EUR'), 9000);
 
-  assert.throws(() => createSovereignApproval({ prepared, idempotencyKey: '' }, s.e), /idempotency_key_required/);
+  assert.throws(() => createSovereignApproval({ prepared, schemeValidationEvidence: validation, idempotencyKey: '' }, s.e), /idempotency_key_required/);
   const wrongKey = crypto.randomUUID();
-  assert.throws(() => require('../g-bank-sovereign-v2/approval').verifySovereignApproval(approval, { prepared, idempotencyKey: wrongKey }, s.e), /approval_idempotency_mismatch/);
+  assert.throws(() => verifySovereignApproval(approval, { prepared, schemeValidationEvidence: validation, idempotencyKey: wrongKey }, s.e), /approval_idempotency_mismatch/);
+  const wrongValidation = { ...validation, validation_receipt_sha256: H('9') };
+  assert.throws(() => verifySovereignApproval(approval, { prepared, schemeValidationEvidence: wrongValidation, idempotencyKey: key }, s.e), /approval_scheme_validation_receipt_mismatch/);
 
   let ambiguousSubmits = 0;
   const ambiguousTransport = {
@@ -133,12 +136,13 @@ function schemeEvidence(prepared) {
   const a = setup(ambiguousTransport);
   const p2 = a.core.prepare({ rawInstruction: instruction('PAY0000000000002'), complianceBundle: evidence() });
   const k2 = crypto.randomUUID();
-  const ap2 = createSovereignApproval({ prepared: p2, idempotencyKey: k2 }, a.e);
-  await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: schemeEvidence(p2), approvalToken: ap2, idempotencyKey: k2 }), /transport_connection_dropped_after_submit/);
+  const v2 = schemeEvidence(p2);
+  const ap2 = createSovereignApproval({ prepared: p2, schemeValidationEvidence: v2, idempotencyKey: k2 }, a.e);
+  await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: v2, approvalToken: ap2, idempotencyKey: k2 }), /transport_connection_dropped_after_submit/);
   assert.equal(a.core.executions.read(k2).state, 'UNKNOWN');
   assert.equal(a.ledger.balance('G:CUSTOMER:001', 'EUR'), 9000, 'ambiguous submit keeps funds held');
   assert.equal(a.ledger.balance('G:SUSPENSE:OUTBOUND', 'EUR'), 1000);
-  await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: schemeEvidence(p2), approvalToken: ap2, idempotencyKey: k2 }), /execution_exists_unknown_use_reconcile/);
+  await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: v2, approvalToken: ap2, idempotencyKey: k2 }), /execution_exists_unknown_use_reconcile/);
   assert.equal(ambiguousSubmits, 1, 'ambiguous payment must never auto-resubmit');
 
   console.log('G-BANK sovereign v2 no-network safety tests: PASS');
