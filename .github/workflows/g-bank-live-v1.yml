@@ -1,0 +1,42 @@
+name: G-BANK LIVE v1 safety
+
+on:
+  pull_request:
+    paths:
+      - 'backend/g-bank-live-v1/**'
+      - 'backend/tests/g-bank-live-v1.test.js'
+      - 'scripts/g-bank-live-v1.js'
+      - '.github/workflows/g-bank-live-v1.yml'
+  push:
+    branches:
+      - 'feature/g-bank-live-core-v1'
+    paths:
+      - 'backend/g-bank-live-v1/**'
+      - 'backend/tests/g-bank-live-v1.test.js'
+      - 'scripts/g-bank-live-v1.js'
+      - '.github/workflows/g-bank-live-v1.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  core-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks
+        run: |
+          node --check backend/g-bank-live-v1/canonical.js
+          node --check backend/g-bank-live-v1/approval.js
+          node --check backend/g-bank-live-v1/idempotency-store.js
+          node --check backend/g-bank-live-v1/receipt-ledger.js
+          node --check backend/g-bank-live-v1/live-core.js
+          node --check backend/g-bank-live-v1/providers/mollie-live.js
+          node --check scripts/g-bank-live-v1.js
+          node --check backend/tests/g-bank-live-v1.test.js
+      - name: Fail-closed no-network tests
+        run: node backend/tests/g-bank-live-v1.test.js
