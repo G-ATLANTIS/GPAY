@@ -10,6 +10,7 @@ const { AccountRegistry } = require('../g-bank-sovereign-v2/accounts');
 const { CustomerControlService } = require('../g-bank-sovereign-v2/customer-controls');
 const { EvidenceRevocationStore } = require('../g-bank-sovereign-v2/evidence-revocation-store');
 const { MonitoringCaseStore } = require('../g-bank-sovereign-v2/monitoring-case-store');
+const { createMonitoringPolicy } = require('../g-bank-sovereign-v2/monitoring-policy');
 const { assessTransactionActivity } = require('../g-bank-sovereign-v2/transaction-monitoring');
 const { ContinuousCustomerMonitoringService } = require('../g-bank-sovereign-v2/continuous-customer-monitoring');
 
@@ -48,7 +49,7 @@ function monitoringEvidence({ kycObserved = NOW - 1000, screenObserved = NOW - 1
   };
 }
 
-const policy = {
+const transactionPolicy = {
   review_single_minor: 100000,
   suspend_single_minor: 500000,
   review_window_outbound_minor: 250000,
@@ -59,6 +60,20 @@ const policy = {
   suspend_rapid_sequence_count: 20,
   review_return_or_recall_count: 3,
 };
+
+const monitoringPolicy = createMonitoringPolicy({
+  epoch: 1,
+  effective_from: new Date(NOW - 24 * 60 * 60 * 1000).toISOString(),
+  max_kyc_age_ms: 365 * 24 * 60 * 60 * 1000,
+  max_screen_age_ms: 24 * 60 * 60 * 1000,
+  transaction: transactionPolicy,
+  case_review_sla_ms: {
+    LOW: 4 * 60 * 60 * 1000,
+    MEDIUM: 60 * 60 * 1000,
+    HIGH: 15 * 60 * 1000,
+    CRITICAL: 5 * 60 * 1000,
+  },
+});
 
 function txAssessment({ max = 1000, outbound = 1000, count = 1, rapid = 0 } = {}) {
   return assessTransactionActivity({
@@ -75,12 +90,12 @@ function txAssessment({ max = 1000, outbound = 1000, count = 1, rapid = 0 } = {}
     rapid_sequence_count: rapid,
     return_or_recall_count: 0,
     source_root_sha256: H('9'),
-    policy,
+    policy: transactionPolicy,
     now: NOW,
   });
 }
 
-function setup() {
+function setup({ policy = monitoringPolicy } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-monitor-v2-'));
   const customers = new CustomerRegistry(path.join(root, 'customers.jsonl'));
   const accounts = new AccountRegistry(path.join(root, 'accounts.json'));
@@ -101,7 +116,7 @@ function setup() {
   });
 
   const controls = new CustomerControlService({ customers, accounts });
-  const monitor = new ContinuousCustomerMonitoringService({ customers, customerControls: controls, revocations, cases });
+  const monitor = new ContinuousCustomerMonitoringService({ customers, customerControls: controls, revocations, cases, monitoringPolicy: policy });
   return { root, customers, accounts, revocations, cases, controls, monitor };
 }
 
@@ -111,6 +126,8 @@ function setup() {
 
   const clear = s.monitor.assess({ customer_id: CUSTOMER, monitoringEvidence: evidence, transactionAssessment: txAssessment(), now: NOW });
   assert.equal(clear.state, 'CLEAR');
+  assert.equal(clear.policy_sha256, monitoringPolicy.policy_sha256);
+  assert.equal(clear.policy_epoch, 1);
   const clearEnforcement = s.monitor.enforce(clear, { now: NOW });
   assert.equal(clearEnforcement.customer_suspension_performed, false);
   assert.equal(clearEnforcement.monitoring_case_id, null);
@@ -191,6 +208,26 @@ function setup() {
   assert.equal(reviewed.status, 'UNDER_REVIEW');
   assert.equal(reviewed.regulatory_suspicion_determined, false);
   assert.equal(reviewed.external_report_submitted, false);
+})();
+
+(() => {
+  const s = setup();
+  s.cases.open({
+    customer_id: CUSTOMER,
+    signal_sha256: H('d'),
+    severity: 'HIGH',
+    reason_code: 'HIGH_CASE_FOR_SLA',
+    now: NOW - (16 * 60 * 1000),
+  });
+  const assessment = s.monitor.assess({ customer_id: CUSTOMER, monitoringEvidence: monitoringEvidence(), now: NOW });
+  assert.equal(assessment.state, 'SUSPEND_REQUIRED');
+  assert(assessment.reasons.includes('MONITORING_CASE_SLA_SUSPEND_REQUIRED'));
+})();
+
+(() => {
+  const tampered = { ...monitoringPolicy, epoch: 2 };
+  const s = setup({ policy: tampered });
+  assert.throws(() => s.monitor.assess({ customer_id: CUSTOMER, monitoringEvidence: monitoringEvidence(), now: NOW }), /policy_hash_mismatch/);
 })();
 
 console.log('G-BANK sovereign v2 continuous monitoring tests: PASS');
