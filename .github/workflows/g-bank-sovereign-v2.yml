@@ -34,6 +34,10 @@ jobs:
           node --check backend/g-bank-sovereign-v2/iso20022.js
           node --check backend/g-bank-sovereign-v2/scheme-validation.js
           node --check backend/g-bank-sovereign-v2/approval.js
+          node --check backend/g-bank-sovereign-v2/risk-policy.js
+          node --check backend/g-bank-sovereign-v2/authority.js
+          node --check backend/g-bank-sovereign-v2/governance.js
+          node --check backend/g-bank-sovereign-v2/checkpoint.js
           node --check backend/g-bank-sovereign-v2/execution-store.js
           node --check backend/g-bank-sovereign-v2/direct-settlement.js
           node --check backend/g-bank-sovereign-v2/readiness.js
@@ -44,3 +48,4 @@ jobs:
           node backend/tests/g-bank-sovereign-v2.test.js
           node backend/tests/g-bank-sovereign-v2-readiness.test.js
           node backend/tests/g-bank-sovereign-v2-integrity.test.js
+          node backend/tests/g-bank-sovereign-v2-governance.test.js
