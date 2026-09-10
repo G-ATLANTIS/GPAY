@@ -22,7 +22,9 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
   const safeguarding = prudential?.safeguarding || null;
   const liquidity = prudential?.liquidity || null;
   const invariantAudit = prudential?.invariant_audit || null;
+  const operational = prudential?.operational_resilience || null;
   const configuredPrudentialHash = String(env.G_BANK_PRUDENTIAL_AUDIT_SHA256 || '').toLowerCase();
+  const configuredOperationalHash = String(env.G_BANK_OPERATIONAL_RESILIENCE_SHA256 || '').toLowerCase();
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -42,6 +44,9 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     liquidity_pass: assessmentValid(liquidity, 'g-bank-liquidity-assessment/v2', 'assessment_sha256'),
     invariant_audit_pass: assessmentValid(invariantAudit, 'g-bank-sovereign-invariant-audit/v2', 'audit_sha256'),
     prudential_audit_binding_matches: sha256Present(configuredPrudentialHash) && configuredPrudentialHash === String(invariantAudit?.audit_sha256 || '').toLowerCase(),
+    operational_resilience_binding_present: sha256Present(configuredOperationalHash),
+    operational_resilience_pass: assessmentValid(operational, 'g-bank-operational-resilience-assessment/v2', 'assessment_sha256'),
+    operational_resilience_binding_matches: sha256Present(configuredOperationalHash) && configuredOperationalHash === String(operational?.assessment_sha256 || '').toLowerCase(),
     transport_module_present: Boolean(String(env.G_BANK_SETTLEMENT_TRANSPORT_MODULE || '')),
     settlement_authorization_binding_present: sha256Present(env.G_BANK_SETTLEMENT_AUTHORIZATION_SHA256),
     legal_authorization_evidence_binding_present: sha256Present(env.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256),
@@ -69,11 +74,17 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     'invariant_audit_pass',
     'prudential_audit_binding_matches',
   ]);
-  const staticKeys = Object.keys(checks).filter(k => !transportKeys.has(k) && !prudentialKeys.has(k));
+  const operationalKeys = new Set([
+    'operational_resilience_binding_present',
+    'operational_resilience_pass',
+    'operational_resilience_binding_matches',
+  ]);
+  const staticKeys = Object.keys(checks).filter(k => !transportKeys.has(k) && !prudentialKeys.has(k) && !operationalKeys.has(k));
   const static_configuration_ready = staticKeys.every(k => checks[k] === true);
   const external_transport_verified = [...transportKeys].every(k => checks[k] === true);
   const prudential_controls_verified = [...prudentialKeys].every(k => checks[k] === true);
-  const direct_live_ready = static_configuration_ready && external_transport_verified && prudential_controls_verified;
+  const operational_controls_verified = [...operationalKeys].every(k => checks[k] === true);
+  const direct_live_ready = static_configuration_ready && external_transport_verified && prudential_controls_verified && operational_controls_verified;
 
   return Object.freeze({
     schema: 'g-bank-sovereign-readiness/v2',
@@ -81,6 +92,7 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     static_configuration_ready,
     external_transport_verified,
     prudential_controls_verified,
+    operational_controls_verified,
     direct_live_ready,
     checks,
     value_movement_permitted_by_readiness: direct_live_ready,
