@@ -140,18 +140,33 @@ function fenceProposal(f, overrides = {}) {
   assert.throws(() => f.commitStore.commit({ proposal: gap, signatures: signatures(gap, f.nodes, 2, null, NOW + 2000), now: NOW + 2000 }), /ha_commit_next_index_required/);
 
   const checkpoint = { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('a') };
-  const audit = assessHAReadiness({ cluster: f.clusterInput, fenceStore: f.fenceStore, commitStore: f.commitStore, checkpoint, now: NOW + 2000 });
+  const audit = assessHAReadiness({ cluster: f.clusterInput, fenceStore: f.fenceStore, commitStore: f.commitStore, voteStores: f.voteStores, checkpoint, now: NOW + 2000 });
   assert.equal(audit.state, 'PASS');
   assert.equal(audit.latest_commit_index, 1);
   assert.equal(audit.distributed_network_verified, false);
   assert.equal(audit.grants_external_rights, false);
+  assert.match(audit.voter_journal_root_sha256, /^[0-9a-f]{64}$/);
+  assert.match(audit.voter_journal_heads['NODE:A'], /^[0-9a-f]{64}$/);
+  assert.match(audit.voter_journal_heads['NODE:B'], /^[0-9a-f]{64}$/);
+  assert.equal(audit.voter_journal_heads['NODE:C'], null);
   assert.match(audit.audit_sha256, /^[0-9a-f]{64}$/);
 
-  const mismatch = assessHAReadiness({ cluster: f.clusterInput, fenceStore: f.fenceStore, commitStore: f.commitStore, checkpoint: { ...checkpoint, state_root_sha256: H('c') }, now: NOW + 2000 });
+  const missingJournals = assessHAReadiness({ cluster: f.clusterInput, fenceStore: f.fenceStore, commitStore: f.commitStore, voteStores: {}, checkpoint, now: NOW + 2000 });
+  assert.equal(missingJournals.state, 'BLOCK');
+  assert.ok(missingJournals.reasons.includes('VOTE_STORE_MISSING:NODE:A'));
+  assert.ok(missingJournals.reasons.includes('FENCE_SIGNER_VOTE_NOT_DURABLE:NODE:A'));
+
+  const onlyA = { 'NODE:A': f.voteStores['NODE:A'] };
+  const partialJournals = assessHAReadiness({ cluster: f.clusterInput, fenceStore: f.fenceStore, commitStore: f.commitStore, voteStores: onlyA, checkpoint, now: NOW + 2000 });
+  assert.equal(partialJournals.state, 'BLOCK');
+  assert.ok(partialJournals.reasons.includes('VOTE_STORE_MISSING:NODE:B'));
+  assert.ok(partialJournals.reasons.includes('COMMIT_SIGNER_VOTE_NOT_DURABLE:NODE:B'));
+
+  const mismatch = assessHAReadiness({ cluster: f.clusterInput, fenceStore: f.fenceStore, commitStore: f.commitStore, voteStores: f.voteStores, checkpoint: { ...checkpoint, state_root_sha256: H('c') }, now: NOW + 2000 });
   assert.equal(mismatch.state, 'BLOCK');
   assert.ok(mismatch.reasons.includes('CHECKPOINT_NOT_REPLICATED'));
 
-  const stale = assessHAReadiness({ cluster: f.clusterInput, fenceStore: f.fenceStore, commitStore: f.commitStore, checkpoint, now: NOW + 130000, max_commit_age_ms: 120000 });
+  const stale = assessHAReadiness({ cluster: f.clusterInput, fenceStore: f.fenceStore, commitStore: f.commitStore, voteStores: f.voteStores, checkpoint, now: NOW + 130000, max_commit_age_ms: 120000 });
   assert.equal(stale.state, 'BLOCK');
   assert.ok(stale.reasons.includes('COMMIT_STALE'));
 
