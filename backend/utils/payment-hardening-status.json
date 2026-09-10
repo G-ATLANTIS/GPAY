@@ -1,5 +1,5 @@
 {
-  "version": "1.8.0",
+  "version": "1.8.1",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -43,8 +43,9 @@
   "verification": {
     "webhook_mount_and_lazy_client_ci": "passed",
     "recovery_state_machine_ci": "passed",
-    "postgres_adapter_contract_ci": "pending",
-    "shared_runtime_contention_ci": "pending"
+    "v1_8_ci": "failed_only_on_webhook_structured_error_assertion",
+    "v1_8_assertion_fix_commit": "165dfeaf35637edd5fd5b7e97208aef9ab9a47d3",
+    "v1_8_1_ci": "pending"
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
