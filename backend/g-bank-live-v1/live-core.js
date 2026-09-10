@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('node:path');
-const { normalizeIntent, canonicalJson, sha256, newIdempotencyKey } = require('./canonical');
+const { normalizeIntent, canonicalJson, sha256 } = require('./canonical');
 const { verifyApproval } = require('./approval');
 const { IdempotencyStore } = require('./idempotency-store');
 const { ReceiptLedger } = require('./receipt-ledger');
@@ -43,19 +43,21 @@ class GBankLiveCore {
     return result;
   }
 
-  async execute({ rawIntent, provider, approvalToken, idempotencyKey = newIdempotencyKey() }) {
+  async execute({ rawIntent, provider, approvalToken, idempotencyKey }) {
     requireLiveExecution(this.env);
+    if (!idempotencyKey) throw new Error('explicit_idempotency_key_required');
+
     const intent = normalizeIntent(rawIntent);
-    const approval = verifyApproval(approvalToken, { intent, provider }, this.env);
+    const approval = verifyApproval(
+      approvalToken,
+      { intent, provider, idempotencyKey },
+      this.env,
+    );
     const adapter = this.adapter(provider);
 
-    // A fresh read-only provider capability proof is deliberately performed
-    // before ownership of an idempotent side-effect request is claimed.
-    const preflight = await adapter.preflight();
-    if (preflight.authenticated !== true || preflight.environment !== 'LIVE') {
-      throw new Error('provider_live_preflight_not_verified');
-    }
-
+    // Check an already completed identical request before touching the provider.
+    // The approval itself is bound to this exact idempotency key, so it cannot
+    // authorize a second execution under a different key.
     const request = {
       schema: 'g-bank-live-execution-request/v1',
       provider,
@@ -63,12 +65,25 @@ class GBankLiveCore {
       approval_id: approval.approval_id,
       idempotency_key_sha256: sha256(idempotencyKey),
     };
+    const existing = this.idempotency.read(idempotencyKey);
+    if (existing) {
+      const requestSha = sha256(canonicalJson(request));
+      if (existing.request_sha256 !== requestSha) {
+        throw new Error('idempotency_key_reused_for_different_request');
+      }
+      if (existing.state === 'SUCCEEDED') return existing.result;
+      throw new Error(`idempotency_request_not_replayable_in_state_${existing.state}`);
+    }
+
+    // Fresh provider capability proof. It is read-only and happens before the
+    // side-effect claim. A failed preflight cannot create a payment.
+    const preflight = await adapter.preflight();
+    if (preflight.authenticated !== true || preflight.environment !== 'LIVE') {
+      throw new Error('provider_live_preflight_not_verified');
+    }
 
     const claim = this.idempotency.claim({ key: idempotencyKey, request });
-    if (!claim.owner) {
-      if (claim.record.state === 'SUCCEEDED') return claim.record.result;
-      throw new Error(`idempotency_request_not_replayable_in_state_${claim.record.state}`);
-    }
+    if (!claim.owner) throw new Error(`idempotency_request_not_replayable_in_state_${claim.record.state}`);
 
     this.ledger.append({
       event: 'LIVE_EXECUTION_AUTHORIZED',
@@ -86,8 +101,9 @@ class GBankLiveCore {
     try {
       created = await adapter.createPayment({ intent, idempotencyKey });
     } catch (err) {
-      // A network error after POST can be ambiguous. Never fail over to another
-      // provider automatically: doing so could duplicate a real payment.
+      // Any transport ambiguity after POST is quarantined. Never fail over to
+      // a second provider automatically because the first provider may have
+      // accepted the payment despite the missing local response.
       const finalState = err.provider_http_status
         ? 'FAILED_FINAL'
         : 'UNKNOWN_REQUIRES_RECONCILIATION';
@@ -111,12 +127,42 @@ class GBankLiveCore {
       throw err;
     }
 
-    if (!created.payment_id) throw new Error('provider_receipt_missing_payment_id');
+    if (!created.payment_id) {
+      this.idempotency.finalize({
+        key: idempotencyKey,
+        request,
+        state: 'UNKNOWN_REQUIRES_RECONCILIATION',
+        result: { error: 'provider_receipt_missing_payment_id' },
+      });
+      throw new Error('provider_receipt_missing_payment_id');
+    }
 
-    const readback = await adapter.getPayment(created.payment_id);
-    if (readback.mode && readback.mode !== 'live') throw new Error('provider_readback_not_live');
-    if (readback.metadata?.g_intent_sha256 && readback.metadata.g_intent_sha256 !== intent.intent_sha256) {
-      throw new Error('provider_readback_intent_binding_mismatch');
+    let readback;
+    try {
+      readback = await adapter.getPayment(created.payment_id);
+      if (readback.mode && readback.mode !== 'live') throw new Error('provider_readback_not_live');
+      if (readback.metadata?.g_intent_sha256 && readback.metadata.g_intent_sha256 !== intent.intent_sha256) {
+        throw new Error('provider_readback_intent_binding_mismatch');
+      }
+    } catch (err) {
+      this.idempotency.finalize({
+        key: idempotencyKey,
+        request,
+        state: 'UNKNOWN_REQUIRES_RECONCILIATION',
+        result: {
+          error: err.message,
+          payment_id: created.payment_id,
+          provider_http_status: err.provider_http_status || null,
+        },
+      });
+      this.ledger.append({
+        event: 'LIVE_WRITE_CREATED_READBACK_UNCERTAIN',
+        provider,
+        intent_id: intent.intent_id,
+        payment_id: created.payment_id,
+        state: 'UNKNOWN_REQUIRES_RECONCILIATION',
+      });
+      throw err;
     }
 
     const result = {
