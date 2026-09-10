@@ -46,6 +46,11 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
   const configuredCertificate = hash64('promotion_certificate_sha256', env.G_BANK_PROMOTION_CERTIFICATE_SHA256);
   if (configuredCertificate !== String(certificate.certificate_sha256 || '').toLowerCase()) throw new Error('runtime_promotion_certificate_binding_mismatch');
 
+  const activePolicy = hash64('g_bank_active_policy_sha256', env.G_BANK_ACTIVE_POLICY_SHA256);
+  const activeAuthority = hash64('g_bank_active_authority_set_sha256', env.G_BANK_ACTIVE_AUTHORITY_SET_SHA256);
+  if (activePolicy !== String(certificate.policy_sha256 || '').toLowerCase()) throw new Error('runtime_promotion_policy_binding_mismatch');
+  if (activeAuthority !== String(certificate.authority_set_sha256 || '').toLowerCase()) throw new Error('runtime_promotion_authority_binding_mismatch');
+
   const mismatches = [];
   for (const [certificateField, envField] of RUNTIME_BINDINGS) {
     const configured = hash64(envField.toLowerCase(), env[envField]);
@@ -60,6 +65,8 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now() } = {}
     readiness_snapshot_sha256: sha256(canonicalJson(readiness)),
     promotion_certificate_sha256: certificate.certificate_sha256,
     state_root_sha256: certificate.state_root_sha256,
+    policy_sha256: certificate.policy_sha256,
+    authority_set_sha256: certificate.authority_set_sha256,
     customer_monitoring_audit_sha256: certificate.evidence_bindings.customer_monitoring_audit_sha256,
     recovery_audit_sha256: certificate.evidence_bindings.recovery_audit_sha256,
     grants_external_rights: false,
