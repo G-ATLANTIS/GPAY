@@ -8,13 +8,14 @@ const { DirectSettlementAdapter } = require('../g-bank-sovereign-v2/direct-settl
 const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/promotion-certificate');
 const { settlementOperationBinding } = require('../g-bank-sovereign-v2/settlement-operation-binding');
 const { HARuntimeChallengeStore } = require('../g-bank-sovereign-v2/ha-runtime-challenge-store');
-const { configureSyntheticHAState, issueSyntheticRuntimeHAWitness } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
+const { createSyntheticRuntimeObserver, configureSyntheticHAState, issueSyntheticRuntimeHAWitness } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T12:00:00.000Z');
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'g-bank-operation-binding-v2-'));
+  const runtimeObserver = createSyntheticRuntimeObserver();
   const env = {
     G_BANK_ENABLE_LIVE: 'true', G_BANK_EXTERNAL_ACTIONS_ENABLED: 'true', G_BANK_DIRECT_SETTLEMENT_ENABLED: 'true',
     G_BANK_SIMULATED_LIVE_SUCCESS: 'false', G_BANK_SETTLEMENT_AUTHORIZATION_SHA256: H('a'),
@@ -49,7 +50,9 @@ function fixture() {
   const certificate = createTechnicalPromotionCertificate({
     readiness, checkpoint: { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('d') },
     governance: { policy_sha256: H('b'), authority_set_sha256: H('c') }, evidence_bindings,
-    trusted_signing_key_binding_sha256: H('a'), ttl_seconds: 120, now: NOW,
+    trusted_signing_key_binding_sha256: H('a'),
+    trusted_runtime_ha_observer_sha256: runtimeObserver.observer_public_key_binding_sha256,
+    ttl_seconds: 120, now: NOW,
   });
   const readinessPath = path.join(root, 'readiness.json');
   const promotionPath = path.join(root, 'promotion.json');
@@ -58,7 +61,7 @@ function fixture() {
   env.G_BANK_RUNTIME_READINESS_FILE = readinessPath;
   env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = promotionPath;
   env.G_BANK_PROMOTION_CERTIFICATE_SHA256 = certificate.certificate_sha256;
-  return { root, env, haState, certificate };
+  return { root, env, haState, certificate, runtimeObserver };
 }
 
 (async () => {
@@ -74,7 +77,7 @@ function fixture() {
   });
   const witness = issueSyntheticRuntimeHAWitness({
     root: f.root, env: f.env, haAudit: f.haState.haAudit, haDeploymentAudit: f.haState.haDeploymentAudit,
-    operation_binding_sha256: operationA.operation_binding_sha256, now: NOW,
+    runtimeObserver: f.runtimeObserver, operation_binding_sha256: operationA.operation_binding_sha256, now: NOW,
   });
   let submits = 0;
   const transport = {
@@ -95,5 +98,5 @@ function fixture() {
   assert.equal(receipt.ha_runtime_challenge_operation_binding_sha256, operationA.operation_binding_sha256);
   assert.equal(new HARuntimeChallengeStore(witness.challenge_store_path).verify().consumed_count, 1);
 
-  console.log('G-BANK sovereign v2 settlement operation-binding boundary tests: PASS');
+  console.log('G-BANK sovereign v2 promotion-pinned settlement operation-binding boundary tests: PASS');
 })().catch(err => { console.error(err); process.exit(1); });
