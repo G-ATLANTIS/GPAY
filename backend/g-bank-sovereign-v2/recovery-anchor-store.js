@@ -10,6 +10,29 @@ function hash64(name, value) {
   return hash;
 }
 
+function verifyRecoveryAnchorRecord(record) {
+  if (!record || record.schema !== 'g-bank-recovery-anchor/v2') throw new Error('recovery_anchor_record_required');
+  if (!Number.isSafeInteger(Number(record.sequence)) || Number(record.sequence) <= 0) throw new Error('recovery_anchor_sequence_invalid');
+  if (!Number.isSafeInteger(Number(record.generation)) || Number(record.generation) <= 0) throw new Error('recovery_anchor_generation_invalid');
+  hash64('recovery_anchor_manifest_sha256', record.manifest_sha256);
+  if (Number(record.generation) === 1) {
+    if (record.previous_manifest_sha256 !== null) throw new Error('recovery_anchor_genesis_manifest_chain_invalid');
+  } else {
+    hash64('recovery_anchor_previous_manifest_sha256', record.previous_manifest_sha256);
+  }
+  hash64('recovery_anchor_state_root_sha256', record.checkpoint_state_root_sha256);
+  hash64('recovery_anchor_evidence_sha256', record.evidence_sha256);
+  if (record.previous_record_sha256 !== 'GENESIS') hash64('recovery_anchor_previous_record_sha256', record.previous_record_sha256);
+  if (record.grants_external_rights !== false || record.permits_value_movement !== false) throw new Error('recovery_anchor_boundary_invalid');
+  const anchored = Date.parse(record.anchored_at);
+  if (!Number.isFinite(anchored)) throw new Error('recovery_anchor_time_invalid');
+  const supplied = hash64('recovery_anchor_record_sha256', record.record_sha256);
+  const copy = { ...record };
+  delete copy.record_sha256;
+  if (sha256(canonicalJson(copy)) !== supplied) throw new Error('recovery_anchor_record_hash_mismatch');
+  return true;
+}
+
 class RecoveryAnchorStore {
   constructor(filePath) {
     this.filePath = path.resolve(filePath);
@@ -34,15 +57,12 @@ class RecoveryAnchorStore {
     let priorManifest = null;
     for (let i = 0; i < rows.length; i += 1) {
       const row = rows[i];
+      verifyRecoveryAnchorRecord(row);
       if (row.sequence !== i + 1) throw new Error('recovery_anchor_sequence_invalid');
       if (row.previous_record_sha256 !== previousRecord) throw new Error('recovery_anchor_hash_chain_broken');
       if (row.generation !== priorGeneration + 1) throw new Error('recovery_anchor_generation_gap');
       if (row.previous_manifest_sha256 !== priorManifest) throw new Error('recovery_anchor_manifest_chain_broken');
-      const supplied = row.record_sha256;
-      const copy = { ...row };
-      delete copy.record_sha256;
-      if (sha256(canonicalJson(copy)) !== supplied) throw new Error('recovery_anchor_record_hash_mismatch');
-      previousRecord = supplied;
+      previousRecord = row.record_sha256;
       priorGeneration = row.generation;
       priorManifest = row.manifest_sha256;
     }
@@ -84,8 +104,11 @@ class RecoveryAnchorStore {
         evidence_sha256: evidence,
         anchored_at: new Date(now).toISOString(),
         previous_record_sha256: proof.head_sha256,
+        grants_external_rights: false,
+        permits_value_movement: false,
       };
       record.record_sha256 = sha256(canonicalJson(record));
+      verifyRecoveryAnchorRecord(record);
       const out = fs.openSync(this.filePath, 'a', 0o600);
       try {
         fs.writeSync(out, JSON.stringify(record) + '\n');
@@ -102,8 +125,10 @@ class RecoveryAnchorStore {
     const proof = this.verify();
     if (!proof.anchor_count) return null;
     const rows = this._rows();
-    return Object.freeze({ ...rows[rows.length - 1] });
+    const latest = rows[rows.length - 1];
+    verifyRecoveryAnchorRecord(latest);
+    return Object.freeze({ ...latest });
   }
 }
 
-module.exports = { RecoveryAnchorStore };
+module.exports = { RecoveryAnchorStore, verifyRecoveryAnchorRecord };
