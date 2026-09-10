@@ -23,6 +23,14 @@ function assertMinor(value) {
   return amount;
 }
 
+function freezeRecord(record) {
+  return Object.freeze({
+    ...record,
+    entries: Object.freeze((record.entries || []).map(entry => Object.freeze({ ...entry }))),
+    metadata: Object.freeze({ ...(record.metadata || {}) }),
+  });
+}
+
 class SovereignLedger {
   constructor(filePath) {
     this.filePath = path.resolve(filePath);
@@ -55,6 +63,11 @@ class SovereignLedger {
       prev = supplied;
     }
     return Object.freeze({ verified: true, record_count: records.length, head_sha256: prev });
+  }
+
+  records() {
+    this.verify();
+    return Object.freeze(this._records().map(freezeRecord));
   }
 
   balance(accountId, currency) {
@@ -142,7 +155,7 @@ class SovereignLedger {
       } finally {
         fs.closeSync(fd);
       }
-      return Object.freeze(record);
+      return freezeRecord(record);
     } finally {
       try { fs.closeSync(lockFd); } catch {}
       try { fs.unlinkSync(this.lockPath); } catch {}
