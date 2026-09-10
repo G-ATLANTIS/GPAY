@@ -88,7 +88,7 @@ function verifyHARuntimeObservation({ observation, trustedObserver, expected, no
 
   const fields = [
     'cluster_authority_root_sha256', 'voter_journal_root_sha256', 'state_root_sha256',
-    'ha_audit_sha256', 'ha_deployment_audit_sha256', 'operation_binding_sha256',
+    'ha_audit_sha256', 'ha_deployment_audit_sha256', 'operation_binding_sha256', 'observer_public_key_binding_sha256',
   ];
   for (const field of fields) {
     const actual = hash64(`ha_runtime_${field}`, observation[field]);
@@ -102,6 +102,7 @@ function verifyHARuntimeObservation({ observation, trustedObserver, expected, no
     state: 'PASS',
     observation_sha256: supplied,
     observer_id: observer.observer_id,
+    observer_public_key_binding_sha256: observer.public_key_binding_sha256,
     cluster_sha256: observation.cluster_sha256,
     cluster_epoch: observation.cluster_epoch,
     cluster_authority_root_sha256: observation.cluster_authority_root_sha256,
