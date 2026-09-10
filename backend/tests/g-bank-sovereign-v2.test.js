@@ -25,6 +25,7 @@ function env() {
     G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256: H('d'), G_BANK_PRODUCTION_IDENTITY_EVIDENCE_SHA256: H('e'),
     G_BANK_PRUDENTIAL_AUDIT_SHA256: H('1'), G_BANK_OPERATIONAL_RESILIENCE_SHA256: H('2'), G_BANK_TREASURY_ASSESSMENT_SHA256: H('3'),
     G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256: H('4'), G_BANK_RECOVERY_AUDIT_SHA256: H('5'), G_BANK_HA_AUDIT_SHA256: H('0'),
+    G_BANK_HA_DEPLOYMENT_AUDIT_SHA256: H('f'),
     G_BANK_SOVEREIGN_APPROVAL_SECRET: '0123456789abcdef0123456789abcdef0123456789abcdef',
     G_BANK_BIC: 'ABNANL2A', G_BANK_OUTBOUND_SUSPENSE_ACCOUNT: 'G:SUSPENSE:OUTBOUND', G_BANK_SETTLEMENT_OUT_ACCOUNT: 'G:SETTLEMENT:OUTBOUND',
   };
@@ -59,12 +60,13 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256) {
     transport_preflight_receipt_sha256: H('9'), prudential_audit_sha256: e.G_BANK_PRUDENTIAL_AUDIT_SHA256,
     operational_resilience_sha256: e.G_BANK_OPERATIONAL_RESILIENCE_SHA256, treasury_assessment_sha256: e.G_BANK_TREASURY_ASSESSMENT_SHA256,
     customer_monitoring_audit_sha256: e.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256, recovery_audit_sha256: e.G_BANK_RECOVERY_AUDIT_SHA256,
-    ha_audit_sha256: e.G_BANK_HA_AUDIT_SHA256,
+    ha_audit_sha256: e.G_BANK_HA_AUDIT_SHA256, ha_deployment_audit_sha256: e.G_BANK_HA_DEPLOYMENT_AUDIT_SHA256,
   };
   const readiness = {
     schema: 'g-bank-sovereign-readiness/v2', state: 'DIRECT_LIVE_READY', static_configuration_ready: true,
     external_transport_verified: true, prudential_controls_verified: true, operational_controls_verified: true,
-    customer_monitoring_verified: true, recovery_controls_verified: true, ha_controls_verified: true, direct_live_ready: true,
+    customer_monitoring_verified: true, recovery_controls_verified: true, ha_controls_verified: true,
+    ha_deployment_verified: true, direct_live_ready: true,
     checks: { synthetic_runtime_fixture_verified: true }, evidence_bindings: evidenceBindings,
     recovery_checkpoint_state_root_sha256: H('6'), ha_checkpoint_state_root_sha256: H('6'),
     ha_fence_valid_until: new Date(NOW + 240000).toISOString(),
@@ -135,6 +137,7 @@ function authoritySignatures(s, prepared, validation, key) {
       assert.equal(request.recovery_audit_sha256, H('5'));
       assert.equal(request.customer_monitoring_audit_sha256, H('4'));
       assert.equal(request.ha_audit_sha256, H('0'));
+      assert.equal(request.ha_deployment_audit_sha256, H('f'));
       return { submission_id: 'SUB-001', status: 'SUBMITTED', external_receipt_sha256: H('6'), provider_request_id: 'REQ-001' };
     },
     async readback() { return { status: 'SETTLED', settlement_reference: 'SETTLE-001', external_receipt_sha256: H('7') }; },
