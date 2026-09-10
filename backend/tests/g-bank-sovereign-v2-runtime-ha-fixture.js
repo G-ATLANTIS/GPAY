@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson, sha256 } = require('../g-bank-sovereign-v2/canonical');
 const { runtimeHAObservationPayload, signHARuntimeObservation } = require('../g-bank-sovereign-v2/ha-runtime-attestation');
+const { HARuntimeChallengeStore } = require('../g-bank-sovereign-v2/ha-runtime-challenge-store');
 
 function H(c) { return c.repeat(64); }
 
@@ -36,9 +37,14 @@ function configureSyntheticRuntimeHA({ root, env, state_root_sha256 = H('6'), cl
   env.G_BANK_HA_AUDIT_SHA256 = haAudit.audit_sha256;
   env.G_BANK_HA_DEPLOYMENT_AUDIT_SHA256 = haDeploymentAudit.audit_sha256;
 
+  const challengePath = path.join(root, 'runtime-ha-challenges.jsonl');
+  const challengeStore = new HARuntimeChallengeStore(challengePath);
+  const challenge = challengeStore.issue({ ttl_ms: 30000, now });
+  env.G_BANK_RUNTIME_HA_CHALLENGE_STORE = challengePath;
+
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const observer = { observer_id: 'OBSERVER:RUNTIME:TEST', public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }).toString() };
-  const payload = runtimeHAObservationPayload({ haAudit, haDeploymentAudit, observer, observed_at: new Date(now).toISOString(), nonce_sha256: H('5') });
+  const payload = runtimeHAObservationPayload({ haAudit, haDeploymentAudit, observer, observed_at: new Date(now).toISOString(), nonce_sha256: challenge.nonce_sha256 });
   const observation = signHARuntimeObservation({ payload, private_key: privateKey });
   const observationPath = path.join(root, 'runtime-ha-attestation.json');
   const observerPath = path.join(root, 'runtime-ha-observer.json');
@@ -47,7 +53,10 @@ function configureSyntheticRuntimeHA({ root, env, state_root_sha256 = H('6'), cl
   env.G_BANK_RUNTIME_HA_ATTESTATION_FILE = observationPath;
   env.G_BANK_RUNTIME_HA_OBSERVER_FILE = observerPath;
 
-  return Object.freeze({ haAudit, haDeploymentAudit, observation, observer, cluster_authority_root_sha256, voter_journal_root_sha256, fence_valid_until: fenceUntil });
+  return Object.freeze({
+    haAudit, haDeploymentAudit, observation, observer, challenge, challenge_store_path: challengePath,
+    cluster_authority_root_sha256, voter_journal_root_sha256, fence_valid_until: fenceUntil,
+  });
 }
 
 module.exports = { configureSyntheticRuntimeHA, hashed };
