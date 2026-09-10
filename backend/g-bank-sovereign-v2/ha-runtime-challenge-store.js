@@ -46,6 +46,17 @@ function appendDurable(filePath, record) {
   finally { fs.closeSync(fd); }
 }
 
+function usableFromProof(proof, nonce, now) {
+  const issue = proof.rows.find(row => row.event === 'ISSUED' && row.nonce_sha256 === nonce);
+  if (!issue) throw new Error('ha_runtime_challenge_not_issued');
+  if (proof.rows.some(row => row.event === 'CONSUMED' && row.nonce_sha256 === nonce)) throw new Error('ha_runtime_challenge_replay');
+  const issued = Date.parse(issue.issued_at);
+  const expires = Date.parse(issue.expires_at);
+  if (Number(now) < issued - 5000) throw new Error('ha_runtime_challenge_not_yet_valid');
+  if (expires <= Number(now)) throw new Error('ha_runtime_challenge_expired');
+  return issue;
+}
+
 class HARuntimeChallengeStore {
   constructor(filePath) {
     if (!filePath) throw new Error('ha_runtime_challenge_store_path_required');
@@ -61,6 +72,8 @@ class HARuntimeChallengeStore {
     for (let i = 0; i < list.length; i += 1) {
       const row = list[i];
       if (!row || !['ISSUED', 'CONSUMED'].includes(row.event) || row.sequence !== i + 1) throw new Error('ha_runtime_challenge_record_invalid');
+      if (row.schema !== 'g-bank-ha-runtime-challenge-event/v2') throw new Error('ha_runtime_challenge_schema_invalid');
+      if (row.grants_external_rights !== false || row.permits_value_movement_by_itself !== false) throw new Error('ha_runtime_challenge_boundary_invalid');
       if (row.previous_record_sha256 !== prior) throw new Error('ha_runtime_challenge_chain_broken');
       const supplied = hash64('ha_runtime_challenge_record_sha256', row.record_sha256);
       const copy = { ...row }; delete copy.record_sha256;
@@ -68,12 +81,16 @@ class HARuntimeChallengeStore {
       const nonce = hash64('ha_runtime_challenge_nonce_sha256', row.nonce_sha256);
       if (row.event === 'ISSUED') {
         if (issued.has(nonce)) throw new Error('ha_runtime_challenge_duplicate_nonce');
-        if (!Number.isFinite(Date.parse(row.issued_at)) || !Number.isFinite(Date.parse(row.expires_at)) || Date.parse(row.expires_at) <= Date.parse(row.issued_at)) throw new Error('ha_runtime_challenge_issue_time_invalid');
+        const issuedAt = Date.parse(row.issued_at);
+        const expiresAt = Date.parse(row.expires_at);
+        if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || expiresAt <= issuedAt || expiresAt - issuedAt > 60000) throw new Error('ha_runtime_challenge_issue_time_invalid');
         issued.set(nonce, row);
       } else {
-        if (!issued.has(nonce)) throw new Error('ha_runtime_challenge_consume_without_issue');
+        const issue = issued.get(nonce);
+        if (!issue) throw new Error('ha_runtime_challenge_consume_without_issue');
         if (consumed.has(nonce)) throw new Error('ha_runtime_challenge_duplicate_consume');
-        if (!Number.isFinite(Date.parse(row.consumed_at))) throw new Error('ha_runtime_challenge_consumed_at_invalid');
+        const consumedAt = Date.parse(row.consumed_at);
+        if (!Number.isFinite(consumedAt) || consumedAt < Date.parse(issue.issued_at) - 5000 || consumedAt >= Date.parse(issue.expires_at)) throw new Error('ha_runtime_challenge_consumed_at_invalid');
         hash64('ha_runtime_challenge_observation_sha256', row.observation_sha256);
         consumed.add(nonce);
       }
@@ -100,16 +117,21 @@ class HARuntimeChallengeStore {
     });
   }
 
+  assertUsable({ nonce_sha256, now = Date.now() } = {}) {
+    const nonce = hash64('ha_runtime_challenge_nonce_sha256', nonce_sha256);
+    if (!Number.isFinite(Number(now))) throw new Error('ha_runtime_challenge_now_invalid');
+    const proof = this.verify();
+    const issue = usableFromProof(proof, nonce, now);
+    return Object.freeze({ nonce_sha256: nonce, issued_at: issue.issued_at, expires_at: issue.expires_at, issue_record_sha256: issue.record_sha256, challenge_store_head_sha256: proof.head_sha256 });
+  }
+
   consume({ nonce_sha256, observation_sha256, now = Date.now() } = {}) {
     const nonce = hash64('ha_runtime_challenge_nonce_sha256', nonce_sha256);
     const observation = hash64('ha_runtime_challenge_observation_sha256', observation_sha256);
     if (!Number.isFinite(Number(now))) throw new Error('ha_runtime_challenge_now_invalid');
     return withLock(this.lockPath, () => {
       const proof = this.verify();
-      const issue = proof.rows.find(row => row.event === 'ISSUED' && row.nonce_sha256 === nonce);
-      if (!issue) throw new Error('ha_runtime_challenge_not_issued');
-      if (proof.rows.some(row => row.event === 'CONSUMED' && row.nonce_sha256 === nonce)) throw new Error('ha_runtime_challenge_replay');
-      if (Date.parse(issue.expires_at) <= Number(now)) throw new Error('ha_runtime_challenge_expired');
+      usableFromProof(proof, nonce, now);
       const body = {
         schema: 'g-bank-ha-runtime-challenge-event/v2', event: 'CONSUMED', sequence: proof.count + 1,
         nonce_sha256: nonce, observation_sha256: observation, consumed_at: new Date(now).toISOString(),
@@ -122,4 +144,4 @@ class HARuntimeChallengeStore {
   }
 }
 
-module.exports = { HARuntimeChallengeStore, appendDurable };
+module.exports = { HARuntimeChallengeStore, appendDurable, usableFromProof };
