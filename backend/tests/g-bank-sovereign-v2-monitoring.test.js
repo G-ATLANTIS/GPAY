@@ -139,9 +139,11 @@ function setup() {
   assert.equal(enforced.value_moved, false);
 
   const clearWhileSuspended = s.monitor.assess({ customer_id: CUSTOMER, monitoringEvidence: evidence, transactionAssessment: txAssessment(), now: NOW });
-  assert.equal(clearWhileSuspended.state, 'REVIEW_REQUIRED', 'existing open cases keep review state');
+  assert.equal(clearWhileSuspended.state, 'SUSPEND_REQUIRED', 'open CRITICAL case must keep fail-closed suspension state');
+  assert(clearWhileSuspended.reasons.includes('CRITICAL_MONITORING_CASE_OPEN'));
   const noReactivate = s.monitor.enforce(clearWhileSuspended, { now: NOW });
   assert.equal(noReactivate.automatic_reactivation_performed, false);
+  assert.equal(noReactivate.customer_suspension_performed, false, 'already-suspended customer remains suspended without duplicate transition');
   assert.equal(s.customers.get(CUSTOMER).status, 'SUSPENDED');
 
   const tamperedTx = { ...txAssessment(), transaction_count: 999 };
