@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { canonicalJson, sha256 } = require('../g-bank-live-v1/canonical');
+const { canonicalJson, sha256 } = require('./canonical');
 
 const TRANSITIONS = Object.freeze({
   CLAIMED: new Set(['HELD', 'FAILED_FINAL']),
@@ -23,6 +23,25 @@ class SovereignExecutionStore {
 
   _file(key) {
     return path.join(this.rootDir, `${sha256(String(key))}.json`);
+  }
+
+  _lockFile(key) {
+    return `${this._file(key)}.lock`;
+  }
+
+  _withLock(key, fn) {
+    let fd;
+    try {
+      fd = fs.openSync(this._lockFile(key), 'wx', 0o600);
+    } catch (err) {
+      if (err.code === 'EEXIST') throw new Error('execution_state_busy');
+      throw err;
+    }
+    try { return fn(); }
+    finally {
+      try { fs.closeSync(fd); } catch {}
+      try { fs.unlinkSync(this._lockFile(key)); } catch {}
+    }
   }
 
   read(key) {
@@ -54,7 +73,7 @@ class SovereignExecutionStore {
     }
   }
 
-  _transitionCurrent({ key, current, to, result = null }) {
+  _transitionUnlocked({ key, current, to, result = null }) {
     if (!TRANSITIONS[to]) throw new Error('execution_state_invalid');
     const allowed = TRANSITIONS[current.state];
     if (!allowed || !allowed.has(to)) throw new Error(`execution_transition_forbidden_${current.state}_to_${to}`);
@@ -67,19 +86,21 @@ class SovereignExecutionStore {
   }
 
   transition({ key, request, to, result = null }) {
-    const current = this.read(key);
-    if (!current) throw new Error('execution_state_missing');
-    if (current.request_sha256 !== sha256(canonicalJson(request))) throw new Error('execution_request_mismatch');
-    return this._transitionCurrent({ key, current, to, result });
+    return this._withLock(key, () => {
+      const current = this.read(key);
+      if (!current) throw new Error('execution_state_missing');
+      if (current.request_sha256 !== sha256(canonicalJson(request))) throw new Error('execution_request_mismatch');
+      return this._transitionUnlocked({ key, current, to, result });
+    });
   }
 
   transitionExisting({ key, to, result = null }) {
-    const current = this.read(key);
-    if (!current) throw new Error('execution_state_missing');
-    if (!current.request || current.request_sha256 !== sha256(canonicalJson(current.request))) {
-      throw new Error('execution_stored_request_invalid');
-    }
-    return this._transitionCurrent({ key, current, to, result });
+    return this._withLock(key, () => {
+      const current = this.read(key);
+      if (!current) throw new Error('execution_state_missing');
+      if (!current.request || current.request_sha256 !== sha256(canonicalJson(current.request))) throw new Error('execution_stored_request_invalid');
+      return this._transitionUnlocked({ key, current, to, result });
+    });
   }
 }
 
