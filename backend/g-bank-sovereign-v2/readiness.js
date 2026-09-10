@@ -18,7 +18,13 @@ function assessmentValid(value, schema, hashField) {
   return sha256(canonicalJson(body)) === supplied;
 }
 
-function assessSovereignReadiness({ env = process.env, transportPreflight = null, governance = null, prudential = null } = {}) {
+function assessSovereignReadiness({
+  env = process.env,
+  transportPreflight = null,
+  governance = null,
+  prudential = null,
+  monitoringAudit = null,
+} = {}) {
   const safeguarding = prudential?.safeguarding || null;
   const liquidity = prudential?.liquidity || null;
   const invariantAudit = prudential?.invariant_audit || null;
@@ -27,6 +33,7 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
   const configuredPrudentialHash = String(env.G_BANK_PRUDENTIAL_AUDIT_SHA256 || '').toLowerCase();
   const configuredOperationalHash = String(env.G_BANK_OPERATIONAL_RESILIENCE_SHA256 || '').toLowerCase();
   const configuredTreasuryHash = String(env.G_BANK_TREASURY_ASSESSMENT_SHA256 || '').toLowerCase();
+  const configuredMonitoringHash = String(env.G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256 || '').toLowerCase();
 
   const checks = {
     live_flag: env.G_BANK_ENABLE_LIVE === 'true',
@@ -52,6 +59,9 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     treasury_binding_present: sha256Present(configuredTreasuryHash),
     treasury_pass: assessmentValid(treasury, 'g-bank-treasury-position/v2', 'assessment_sha256'),
     treasury_binding_matches: sha256Present(configuredTreasuryHash) && configuredTreasuryHash === String(treasury?.assessment_sha256 || '').toLowerCase(),
+    customer_monitoring_binding_present: sha256Present(configuredMonitoringHash),
+    customer_monitoring_pass: assessmentValid(monitoringAudit, 'g-bank-monitoring-fleet-audit/v2', 'audit_sha256'),
+    customer_monitoring_binding_matches: sha256Present(configuredMonitoringHash) && configuredMonitoringHash === String(monitoringAudit?.audit_sha256 || '').toLowerCase(),
     transport_module_present: Boolean(String(env.G_BANK_SETTLEMENT_TRANSPORT_MODULE || '')),
     settlement_authorization_binding_present: sha256Present(env.G_BANK_SETTLEMENT_AUTHORIZATION_SHA256),
     legal_authorization_evidence_binding_present: sha256Present(env.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256),
@@ -87,12 +97,18 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     'operational_resilience_pass',
     'operational_resilience_binding_matches',
   ]);
-  const staticKeys = Object.keys(checks).filter(k => !transportKeys.has(k) && !prudentialKeys.has(k) && !operationalKeys.has(k));
+  const monitoringKeys = new Set([
+    'customer_monitoring_binding_present',
+    'customer_monitoring_pass',
+    'customer_monitoring_binding_matches',
+  ]);
+  const staticKeys = Object.keys(checks).filter(k => !transportKeys.has(k) && !prudentialKeys.has(k) && !operationalKeys.has(k) && !monitoringKeys.has(k));
   const static_configuration_ready = staticKeys.every(k => checks[k] === true);
   const external_transport_verified = [...transportKeys].every(k => checks[k] === true);
   const prudential_controls_verified = [...prudentialKeys].every(k => checks[k] === true);
   const operational_controls_verified = [...operationalKeys].every(k => checks[k] === true);
-  const direct_live_ready = static_configuration_ready && external_transport_verified && prudential_controls_verified && operational_controls_verified;
+  const customer_monitoring_verified = [...monitoringKeys].every(k => checks[k] === true);
+  const direct_live_ready = static_configuration_ready && external_transport_verified && prudential_controls_verified && operational_controls_verified && customer_monitoring_verified;
 
   return Object.freeze({
     schema: 'g-bank-sovereign-readiness/v2',
@@ -101,6 +117,7 @@ function assessSovereignReadiness({ env = process.env, transportPreflight = null
     external_transport_verified,
     prudential_controls_verified,
     operational_controls_verified,
+    customer_monitoring_verified,
     direct_live_ready,
     checks,
     value_movement_permitted_by_readiness: direct_live_ready,
