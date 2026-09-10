@@ -50,6 +50,7 @@ jobs:
           node --check backend/g-bank-sovereign-v2/recovery-readiness-audit.js
           node --check backend/g-bank-sovereign-v2/ha-runtime-attestation.js
           node --check backend/g-bank-sovereign-v2/ha-runtime-challenge-store.js
+          node --check backend/g-bank-sovereign-v2/settlement-operation-binding.js
           node --check backend/g-bank-sovereign-v2/runtime-promotion-gate.js
           node --check backend/g-bank-sovereign-v2/accounts.js
           node --check backend/g-bank-sovereign-v2/account-operation-lock.js
