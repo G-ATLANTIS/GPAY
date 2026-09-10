@@ -64,6 +64,8 @@ function fixture() {
     G_BANK_RUNTIME_READINESS_FILE: readinessFile,
     G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE: promotionFile,
     G_BANK_PROMOTION_CERTIFICATE_SHA256: certificate.certificate_sha256,
+    G_BANK_ACTIVE_POLICY_SHA256: H('c'),
+    G_BANK_ACTIVE_AUTHORITY_SET_SHA256: H('d'),
     G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256: evidence_bindings.legal_authorization_evidence_sha256,
     G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256: evidence_bindings.scheme_participation_evidence_sha256,
     G_BANK_SETTLEMENT_ACCESS_EVIDENCE_SHA256: evidence_bindings.settlement_access_evidence_sha256,
@@ -85,7 +87,25 @@ function fixture() {
   assert.equal(gate.grants_external_rights, false);
   assert.equal(gate.permits_value_movement_by_itself, false);
   assert.equal(gate.recovery_audit_sha256, H('a'));
+  assert.equal(gate.policy_sha256, H('c'));
+  assert.equal(gate.authority_set_sha256, H('d'));
   assert.match(gate.gate_sha256, /^[0-9a-f]{64}$/);
+})();
+
+(() => {
+  const f = fixture();
+  assert.throws(() => verifyRuntimePromotionGate({
+    env: { ...f.env, G_BANK_ACTIVE_POLICY_SHA256: H('f') },
+    now: NOW + 1000,
+  }), /runtime_promotion_policy_binding_mismatch/);
+})();
+
+(() => {
+  const f = fixture();
+  assert.throws(() => verifyRuntimePromotionGate({
+    env: { ...f.env, G_BANK_ACTIVE_AUTHORITY_SET_SHA256: H('f') },
+    now: NOW + 1000,
+  }), /runtime_promotion_authority_binding_mismatch/);
 })();
 
 (() => {
