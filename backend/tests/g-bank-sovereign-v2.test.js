@@ -13,6 +13,7 @@ const { createSovereignApproval, verifySovereignApproval } = require('../g-bank-
 const { evaluatePaymentPolicy } = require('../g-bank-sovereign-v2/risk-policy');
 const { approvalPayload } = require('../g-bank-sovereign-v2/authority');
 const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/promotion-certificate');
+const { configureSyntheticRuntimeHA } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
 
 const H = c => c.repeat(64);
 const NOW = Date.parse('2026-09-10T06:30:00.000Z');
@@ -51,6 +52,11 @@ function instruction(id = 'PAY0000000000001') {
 }
 
 function configureRuntimePromotion(root, e, policySha256, authoritySetSha256) {
+  const fenceValidUntil = new Date(NOW + 240000).toISOString();
+  const runtimeHA = configureSyntheticRuntimeHA({
+    root, env: e, state_root_sha256: H('6'), cluster_authority_root_sha256: H('8'), voter_journal_root_sha256: H('7'),
+    fence_valid_until: fenceValidUntil, now: NOW,
+  });
   const evidenceBindings = {
     legal_authorization_evidence_sha256: e.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256,
     scheme_participation_evidence_sha256: e.G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256,
@@ -67,8 +73,8 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256) {
     customer_monitoring_verified: true, recovery_controls_verified: true, ha_controls_verified: true, ha_deployment_verified: true,
     direct_live_ready: true, checks: { synthetic_runtime_fixture_verified: true }, evidence_bindings: evidenceBindings,
     recovery_checkpoint_state_root_sha256: H('6'), ha_checkpoint_state_root_sha256: H('6'),
-    ha_voter_journal_root_sha256: H('7'), ha_cluster_authority_root_sha256: H('8'),
-    ha_fence_valid_until: new Date(NOW + 240000).toISOString(), transport_scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT',
+    ha_voter_journal_root_sha256: runtimeHA.voter_journal_root_sha256, ha_cluster_authority_root_sha256: runtimeHA.cluster_authority_root_sha256,
+    ha_fence_valid_until: runtimeHA.fence_valid_until, transport_scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT',
     value_movement_permitted_by_readiness: true, note: 'test fixture only',
   };
   const certificate = createTechnicalPromotionCertificate({
@@ -83,7 +89,7 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256) {
   e.G_BANK_RUNTIME_READINESS_FILE = readinessPath;
   e.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = promotionPath;
   e.G_BANK_PROMOTION_CERTIFICATE_SHA256 = certificate.certificate_sha256;
-  return { readiness, certificate };
+  return { readiness, certificate, runtimeHA };
 }
 
 function setup(transport, { promotion = true } = {}) {
@@ -133,10 +139,12 @@ function authoritySignatures(s, prepared, validation, key) {
       assert.match(request.promotion_certificate_sha256, /^[0-9a-f]{64}$/);
       assert.equal(request.recovery_audit_sha256, H('5'));
       assert.equal(request.customer_monitoring_audit_sha256, H('4'));
-      assert.equal(request.ha_audit_sha256, H('0'));
-      assert.equal(request.ha_deployment_audit_sha256, H('f'));
+      assert.match(request.ha_audit_sha256, /^[0-9a-f]{64}$/);
+      assert.match(request.ha_deployment_audit_sha256, /^[0-9a-f]{64}$/);
       assert.equal(request.ha_voter_journal_root_sha256, H('7'));
       assert.equal(request.ha_cluster_authority_root_sha256, H('8'));
+      assert.match(request.ha_runtime_attestation_audit_sha256, /^[0-9a-f]{64}$/);
+      assert.match(request.ha_runtime_observation_sha256, /^[0-9a-f]{64}$/);
       return { submission_id: 'SUB-001', status: 'SUBMITTED', external_receipt_sha256: H('6'), provider_request_id: 'REQ-001' };
     },
     async readback() { return { status: 'SETTLED', settlement_reference: 'SETTLE-001', external_receipt_sha256: H('7') }; },
