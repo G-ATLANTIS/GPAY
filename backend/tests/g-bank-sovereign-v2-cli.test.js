@@ -13,6 +13,8 @@ fs.writeFileSync(transport, `'use strict';\nrequire('node:fs').writeFileSync(${J
 
 const script = path.resolve(__dirname, '../../scripts/g-bank-sovereign-v2.js');
 const dummy = path.join(root, 'does-not-need-to-exist.json');
+const challengeStore = path.join(root, 'runtime-ha-challenges.jsonl');
+const challengeOut = path.join(root, 'runtime-ha-challenge.json');
 const baseArgs = [
   script, 'execute',
   '--prepared', dummy,
@@ -30,17 +32,30 @@ const baseEnv = {
 };
 
 (() => {
+  const result = spawnSync(process.execPath, [script, 'issue-ha-challenge', '--challenge-store', challengeStore, '--out', challengeOut, '--ttl-ms', '30000'], { env: baseEnv, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  const challenge = JSON.parse(fs.readFileSync(challengeOut, 'utf8'));
+  assert.equal(parsed.state, 'HA_RUNTIME_CHALLENGE_ISSUED');
+  assert.match(challenge.nonce_sha256, /^[0-9a-f]{64}$/);
+  assert.match(challenge.issue_record_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(challenge.grants_external_rights, false);
+  assert.equal(challenge.permits_value_movement_by_itself, false);
+  assert.equal(fs.existsSync(marker), false, 'issuing an HA challenge must never load settlement transport');
+})();
+
+(() => {
   const result = spawnSync(process.execPath, baseArgs, { env: baseEnv, encoding: 'utf8' });
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /--runtime-ha-attestation --runtime-ha-observer_required/);
+  assert.match(result.stderr, /--runtime-ha-attestation --runtime-ha-observer --runtime-ha-challenge-store_required/);
   assert.equal(fs.existsSync(marker), false, 'transport module must not load when runtime HA arguments are absent');
 })();
 
 (() => {
-  const result = spawnSync(process.execPath, [...baseArgs, '--runtime-ha-attestation', dummy], { env: baseEnv, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [...baseArgs, '--runtime-ha-attestation', dummy, '--runtime-ha-observer', dummy], { env: baseEnv, encoding: 'utf8' });
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /--runtime-ha-attestation --runtime-ha-observer_required/);
-  assert.equal(fs.existsSync(marker), false, 'transport module must not load when trusted runtime observer is absent');
+  assert.match(result.stderr, /--runtime-ha-challenge-store_required/);
+  assert.equal(fs.existsSync(marker), false, 'transport module must not load when runtime HA challenge store is absent');
 })();
 
 console.log('G-BANK sovereign v2 CLI runtime-HA contract tests: PASS');
