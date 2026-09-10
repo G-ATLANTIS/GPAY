@@ -1,5 +1,5 @@
 {
-  "version": "1.10.0",
+  "version": "1.11.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -25,8 +25,12 @@
     "shared_runtime_cas_contention_test_implemented": true,
     "postgres_engine_integration_test_implemented": true,
     "postgres_engine_ci_service_isolated_from_unit_suite": true,
-    "postgres_ci_driver_ephemeral_only": true,
     "postgres_engine_cas_contention_verified_in_ci": true,
+    "postgres_driver_in_locked_runtime_dependencies": true,
+    "postgres_integration_uses_locked_npm_ci_only": true,
+    "production_preflight_validates_payment_state_backend": true,
+    "production_preflight_postgres_requires_connection_url": true,
+    "production_preflight_postgres_requires_driver": true,
     "gpay_payment_intent_created_before_provider_payment": true,
     "gpay_payment_intent_id_bound_into_mollie_metadata": true,
     "gpay_payment_intent_provider_binding_immutable": true,
@@ -55,11 +59,13 @@
     "recovery_state_machine_ci": "passed",
     "combined_main_reconciliation_ci": "passed",
     "postgres_engine_integration_ci": "passed",
-    "postgres_engine_integration_commit": "9e722877293cf60cfa82f45247a26be82c690503",
-    "postgres_engine_integration_run_id": 34522149501,
-    "postgres_engine_integration_run_number": 98,
-    "payment_intent_binding_ci": "pending",
-    "payment_intent_binding_test_commit": "d51cb38cde6fb7d033d5d82000dc5aefb65e974a"
+    "postgres_engine_integration_initial_run_id": 34522149501,
+    "payment_intent_binding_ci": "passed",
+    "payment_intent_binding_run_id": 34522444143,
+    "locked_postgres_and_preflight_ci": "passed",
+    "locked_postgres_and_preflight_commit": "e3a974f56b1d111c555d4d7a6105891c63324c23",
+    "locked_postgres_and_preflight_run_id": 34523056665,
+    "locked_postgres_and_preflight_run_number": 126
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -73,7 +79,6 @@
     "crash_safe_exactly_once_external_side_effects": true,
     "multi_process_distributed_locking": true,
     "payment_intent_store_shared_across_hosts": true,
-    "postgres_driver_in_locked_production_dependencies": true,
     "postgres_production_database_provisioned": true,
     "postgres_backend_activated_in_production": true,
     "multi_host_transactional_state_store_verified_live": true,
