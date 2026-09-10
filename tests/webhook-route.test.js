@@ -37,7 +37,10 @@ test('webhook route is mounted and app import does not require Mollie credential
       body: JSON.stringify({ id: 'tr_test_route_probe' }),
     });
     assert.equal(missingConfig.status, 503);
-    assert.deepEqual(await missingConfig.json(), { error: 'MOLLIE_API_KEY is required' });
+    assert.deepEqual(await missingConfig.json(), {
+      error: 'MOLLIE_API_KEY is required',
+      code: 'CONFIG_ERROR',
+    });
   } finally {
     await close(server);
     if (originalKey === undefined) delete process.env.MOLLIE_API_KEY;
