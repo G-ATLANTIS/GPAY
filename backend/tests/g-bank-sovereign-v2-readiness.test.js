@@ -42,8 +42,13 @@ function makeHAAudit(extra = {}) {
   return hashed('g-bank-ha-readiness-audit/v2', 'audit_sha256', {
     cluster_sha256: H('5'), cluster_epoch: 1, active_voter_count: 3, quorum: 2, latest_term: 8, leader_node_id: 'NODE:A',
     fence_record_sha256: H('6'), fence_valid_until: new Date(NOW + 120000).toISOString(), latest_commit_index: 42,
-    latest_commit_sha256: H('7'), replicated_state_root_sha256: H('3'), checkpoint_state_root_sha256: H('3'), reasons: [],
-    audited_at: new Date(NOW).toISOString(), grants_external_rights: false, permits_value_movement_by_itself: false,
+    latest_commit_sha256: H('7'), replicated_state_root_sha256: H('3'), checkpoint_state_root_sha256: H('3'),
+    voter_journal_store_count: 3,
+    voter_journal_heads: { 'NODE:A': H('a'), 'NODE:B': H('b'), 'NODE:C': null },
+    voter_journal_root_sha256: H('0'),
+    durable_fence_signer_count: 2,
+    durable_commit_signer_count: 2,
+    reasons: [], audited_at: new Date(NOW).toISOString(), grants_external_rights: false, permits_value_movement_by_itself: false,
     distributed_network_verified: false, ...extra,
   });
 }
@@ -93,10 +98,28 @@ assert.equal(ready.recovery_controls_verified, true);
 assert.equal(ready.ha_controls_verified, true);
 assert.equal(ready.ha_deployment_verified, true);
 assert.equal(ready.checks.ha_checkpoint_matches_recovery, true);
+assert.equal(ready.checks.ha_voter_journal_root_present, true);
+assert.equal(ready.checks.ha_voter_journal_store_coverage_complete, true);
+assert.equal(ready.checks.ha_durable_fence_quorum, true);
+assert.equal(ready.checks.ha_durable_commit_quorum, true);
 assert.equal(ready.checks.ha_fence_current, true);
 assert.equal(ready.checks.ha_distributed_network_verified, true);
 assert.equal(ready.evidence_bindings.ha_deployment_audit_sha256, haDeploymentAudit.audit_sha256);
 assert.equal(ready.ha_checkpoint_state_root_sha256, H('3'));
+assert.equal(ready.ha_voter_journal_root_sha256, H('0'));
+
+for (const [field, value, check] of [
+  ['voter_journal_root_sha256', null, 'ha_voter_journal_root_present'],
+  ['voter_journal_store_count', 2, 'ha_voter_journal_store_coverage_complete'],
+  ['durable_fence_signer_count', 1, 'ha_durable_fence_quorum'],
+  ['durable_commit_signer_count', 1, 'ha_durable_commit_quorum'],
+]) {
+  const weakHA = makeHAAudit({ [field]: value });
+  const weakEnv = { ...completeEnv, G_BANK_HA_AUDIT_SHA256: weakHA.audit_sha256 };
+  const result = assess({ env: weakEnv, haAudit: weakHA });
+  assert.equal(result.direct_live_ready, false);
+  assert.equal(result.checks[check], false);
+}
 
 const noDeployment = assess({ haDeploymentAudit: null });
 assert.equal(noDeployment.direct_live_ready, false);
