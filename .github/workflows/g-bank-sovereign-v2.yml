@@ -84,6 +84,7 @@ jobs:
           node --check backend/g-bank-sovereign-v2/readiness.js
           node --check backend/g-bank-sovereign-v2/sovereign-core.js
           node --check backend/tests/g-bank-sovereign-v2-runtime-ha-fixture.js
+          node --check backend/tests/g-bank-sovereign-v2-cli.test.js
           node --check scripts/g-bank-sovereign-v2.js
       - name: No-network sovereign safety tests
         run: |
@@ -109,3 +110,4 @@ jobs:
           node backend/tests/g-bank-sovereign-v2-monitoring-cycle.test.js
           node backend/tests/g-bank-sovereign-v2-recovery.test.js
           node backend/tests/g-bank-sovereign-v2-runtime-gate.test.js
+          node backend/tests/g-bank-sovereign-v2-cli.test.js
