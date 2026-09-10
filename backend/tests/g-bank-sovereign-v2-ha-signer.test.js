@@ -58,6 +58,19 @@ const replayA = signers1['NODE:A'].sign(fence1);
 assert.equal(replayA.signature_base64, sigA.signature_base64);
 assert.equal(signers1['NODE:A'].verifyJournal().count, 1, 'exact replay must not append a second vote reservation');
 
+const laterClockSignerA = new HADurableSigner({
+  cluster: cluster1,
+  node_id: 'NODE:A',
+  private_key: nodes[0].privateKey,
+  vote_store: stores['NODE:A'],
+  clock: () => NOW + 60000,
+});
+const laterReplayA = laterClockSignerA.sign(fence1);
+assert.equal(laterReplayA.signed_at, sigA.signed_at, 'implicit replay must reuse the original reserved timestamp');
+assert.equal(laterReplayA.signature_base64, sigA.signature_base64, 'implicit replay must reproduce the exact Ed25519 signature');
+assert.equal(stores['NODE:A'].verify().count, 1);
+assert.throws(() => laterClockSignerA.sign(fence1, { signed_at: new Date(NOW + 60000).toISOString() }), /ha_vote_replay_envelope_mismatch/);
+
 const conflictingFence1 = createFenceProposal({
   cluster: cluster1,
   term: 1,
