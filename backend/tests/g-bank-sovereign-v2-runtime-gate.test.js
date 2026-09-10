@@ -18,14 +18,15 @@ function fixture() {
     settlement_access_evidence_sha256: H('3'), production_identity_evidence_sha256: H('4'),
     transport_preflight_receipt_sha256: H('5'), prudential_audit_sha256: H('6'),
     operational_resilience_sha256: H('7'), treasury_assessment_sha256: H('8'),
-    customer_monitoring_audit_sha256: H('9'), recovery_audit_sha256: H('a'), ha_audit_sha256: H('f'),
+    customer_monitoring_audit_sha256: H('9'), recovery_audit_sha256: H('a'),
+    ha_audit_sha256: H('f'), ha_deployment_audit_sha256: H('0'),
   };
   const readiness = {
     schema: 'g-bank-sovereign-readiness/v2', state: 'DIRECT_LIVE_READY',
     static_configuration_ready: true, external_transport_verified: true, prudential_controls_verified: true,
     operational_controls_verified: true, customer_monitoring_verified: true, recovery_controls_verified: true,
-    ha_controls_verified: true, direct_live_ready: true,
-    checks: { live_flag: true, recovery_audit_pass: true, customer_monitoring_pass: true, ha_audit_pass: true },
+    ha_controls_verified: true, ha_deployment_verified: true, direct_live_ready: true,
+    checks: { live_flag: true, recovery_audit_pass: true, customer_monitoring_pass: true, ha_audit_pass: true, ha_deployment_pass: true },
     evidence_bindings,
     recovery_checkpoint_state_root_sha256: H('b'), ha_checkpoint_state_root_sha256: H('b'), ha_fence_valid_until: FENCE,
     transport_scheme: 'SCT_INST', settlement_system: 'TEST-DIRECT', value_movement_permitted_by_readiness: true,
@@ -57,6 +58,7 @@ function fixture() {
     G_BANK_CUSTOMER_MONITORING_AUDIT_SHA256: evidence_bindings.customer_monitoring_audit_sha256,
     G_BANK_RECOVERY_AUDIT_SHA256: evidence_bindings.recovery_audit_sha256,
     G_BANK_HA_AUDIT_SHA256: evidence_bindings.ha_audit_sha256,
+    G_BANK_HA_DEPLOYMENT_AUDIT_SHA256: evidence_bindings.ha_deployment_audit_sha256,
   };
   return { root, readiness, certificate, readinessFile, promotionFile, env };
 }
@@ -70,6 +72,7 @@ function fixture() {
   assert.equal(gate.permits_value_movement_by_itself, false);
   assert.equal(gate.recovery_audit_sha256, H('a'));
   assert.equal(gate.ha_audit_sha256, H('f'));
+  assert.equal(gate.ha_deployment_audit_sha256, H('0'));
   assert.equal(gate.ha_fence_valid_until, FENCE);
   assert.equal(gate.policy_sha256, H('c'));
   assert.equal(gate.authority_set_sha256, H('d'));
@@ -81,7 +84,8 @@ for (const [field, value, pattern] of [
   ['G_BANK_ACTIVE_POLICY_SHA256', H('0'), /runtime_promotion_policy_binding_mismatch/],
   ['G_BANK_ACTIVE_AUTHORITY_SET_SHA256', H('0'), /runtime_promotion_authority_binding_mismatch/],
   ['G_BANK_RECOVERY_AUDIT_SHA256', H('0'), /runtime_promotion_evidence_binding_mismatch:recovery_audit_sha256/],
-  ['G_BANK_HA_AUDIT_SHA256', H('0'), /runtime_promotion_evidence_binding_mismatch:ha_audit_sha256/],
+  ['G_BANK_HA_AUDIT_SHA256', H('1'), /runtime_promotion_evidence_binding_mismatch:ha_audit_sha256/],
+  ['G_BANK_HA_DEPLOYMENT_AUDIT_SHA256', H('1'), /runtime_promotion_evidence_binding_mismatch:ha_deployment_audit_sha256/],
   ['G_BANK_PROMOTION_CERTIFICATE_SHA256', H('0'), /runtime_promotion_certificate_binding_mismatch/],
 ]) {
   const f = fixture();
