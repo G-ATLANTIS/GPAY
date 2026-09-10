@@ -1,5 +1,5 @@
 {
-  "version": "1.8.1",
+  "version": "1.9.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -23,6 +23,9 @@
     "postgres_backend_missing_driver_fails_closed": true,
     "no_silent_postgres_to_local_fallback": true,
     "shared_runtime_cas_contention_test_implemented": true,
+    "postgres_engine_integration_test_implemented": true,
+    "postgres_engine_ci_service_isolated_from_unit_suite": true,
+    "postgres_ci_driver_ephemeral_only": true,
     "gcoin_canonical_identity_bound": true,
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
@@ -43,9 +46,11 @@
   "verification": {
     "webhook_mount_and_lazy_client_ci": "passed",
     "recovery_state_machine_ci": "passed",
+    "combined_main_reconciliation_ci": "passed",
     "v1_8_ci": "failed_only_on_webhook_structured_error_assertion",
     "v1_8_assertion_fix_commit": "165dfeaf35637edd5fd5b7e97208aef9ab9a47d3",
-    "v1_8_1_ci": "pending"
+    "postgres_engine_integration_ci": "pending",
+    "v1_9_ci_head": "9e722877293cf60cfa82f45247a26be82c690503"
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
@@ -58,9 +63,9 @@
   "not_yet_guaranteed": {
     "crash_safe_exactly_once_external_side_effects": true,
     "multi_process_distributed_locking": true,
-    "postgres_driver_installed": true,
+    "postgres_driver_in_locked_production_dependencies": true,
     "postgres_production_database_provisioned": true,
-    "postgres_backend_activated": true,
+    "postgres_backend_activated_in_production": true,
     "multi_host_transactional_state_store_verified_live": true,
     "production_deployment": true,
     "actual_live_transaction_evidence_captured": true,
