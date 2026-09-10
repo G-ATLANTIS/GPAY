@@ -2,7 +2,8 @@ const assert = require('assert');
 const {
   extractRequestId,
   buildEvidence,
-  createMolliePaymentWithEvidence
+  createMolliePaymentWithEvidence,
+  getMolliePaymentWithEvidence
 } = require('./provider-evidence-client');
 
 async function run() {
@@ -30,18 +31,39 @@ async function run() {
       assert.strictEqual(config.headers['Idempotency-Key'], 'idem-2');
       return {
         status: 201,
-        headers: { 'x-request-id': 'mollie-req-2' },
-        data: { id: 'tr_test', _links: { checkout: { href: 'https://example.test/checkout' } } }
+        headers: { 'x-request-id': 'mollie-create-req' },
+        data: { id: 'tr_test', metadata: { proof_marker: 'marker' }, _links: { checkout: { href: 'https://example.test/checkout' } } }
+      };
+    },
+    async get(url, config) {
+      assert.strictEqual(url, 'https://api.mollie.com/v2/payments/tr_test');
+      assert.strictEqual(config.headers.Authorization, 'Bearer test_key');
+      return {
+        status: 200,
+        headers: { 'x-request-id': 'mollie-read-req' },
+        data: { id: 'tr_test', status: 'open', metadata: { proof_marker: 'marker' } }
       };
     }
   };
 
-  const result = await createMolliePaymentWithEvidence(
-    { amount: { currency: 'EUR', value: '1.00' }, description: 'test' },
+  const created = await createMolliePaymentWithEvidence(
+    { amount: { currency: 'EUR', value: '1.00' }, description: 'test', metadata: { proof_marker: 'marker' } },
     { apiKey: 'test_key', idempotencyKey: 'idem-2', httpClient: fakeHttp }
   );
-  assert.strictEqual(result.evidence.provider_request_id, 'mollie-req-2');
-  assert.strictEqual(result.evidence.production_binding_verified, true);
+  assert.strictEqual(created.evidence.provider_request_id, 'mollie-create-req');
+  assert.strictEqual(created.evidence.production_binding_verified, true);
+  assert.strictEqual(created.evidence.version, '2.5.0');
+
+  const readback = await getMolliePaymentWithEvidence('tr_test', { apiKey: 'test_key', httpClient: fakeHttp });
+  assert.strictEqual(readback.payment.id, 'tr_test');
+  assert.strictEqual(readback.evidence.provider_scope, 'payments:read');
+  assert.strictEqual(readback.evidence.provider_request_id, 'mollie-read-req');
+  assert.strictEqual(readback.evidence.production_binding_verified, true);
+
+  await assert.rejects(
+    () => getMolliePaymentWithEvidence('invalid', { apiKey: 'test_key', httpClient: fakeHttp }),
+    /invalid Mollie payment id/
+  );
 
   console.log('provider-evidence-client tests passed');
 }
