@@ -52,7 +52,7 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Run real PostgreSQL CAS integration test
+      - name: Run real PostgreSQL integration proofs
         env:
           GPAY_POSTGRES_URL: postgresql://gpay:gpay@127.0.0.1:5432/gpay
-        run: node --test integration/payment-state-postgres.test.js
+        run: node --test integration/*.test.js
