@@ -94,6 +94,7 @@ function configureRuntimePromotion(root, e) {
     direct_live_ready: true,
     checks: { synthetic_runtime_fixture_verified: true },
     evidence_bindings: evidenceBindings,
+    recovery_checkpoint_state_root_sha256: H('6'),
     transport_scheme: 'SCT_INST',
     settlement_system: 'TEST-DIRECT',
     value_movement_permitted_by_readiness: true,
