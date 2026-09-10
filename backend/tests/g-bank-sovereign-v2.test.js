@@ -69,7 +69,7 @@ function instruction(id = 'PAY0000000000001') {
   };
 }
 
-function configureRuntimePromotion(root, e) {
+function configureRuntimePromotion(root, e, policySha256, authoritySetSha256) {
   const evidenceBindings = {
     legal_authorization_evidence_sha256: e.G_BANK_LEGAL_AUTHORIZATION_EVIDENCE_SHA256,
     scheme_participation_evidence_sha256: e.G_BANK_SCHEME_PARTICIPATION_EVIDENCE_SHA256,
@@ -103,7 +103,7 @@ function configureRuntimePromotion(root, e) {
   const certificate = createTechnicalPromotionCertificate({
     readiness,
     checkpoint: { schema: 'g-bank-sovereign-state-checkpoint/v2', state_root_sha256: H('6') },
-    governance: { policy_sha256: H('7'), authority_set_sha256: H('8') },
+    governance: { policy_sha256: policySha256, authority_set_sha256: authoritySetSha256 },
     evidence_bindings: evidenceBindings,
     trusted_signing_key_binding_sha256: H('f'),
     ttl_seconds: 300,
@@ -169,7 +169,6 @@ function setup(transport, { promotion = true } = {}) {
     policy_epoch: 1,
   };
 
-  const runtimePromotion = promotion ? configureRuntimePromotion(root, e) : null;
   const settlement = new DirectSettlementAdapter({ transport, env: e, clock: () => NOW });
   const core = new GBankSovereignCore({
     accounts,
@@ -180,6 +179,9 @@ function setup(transport, { promotion = true } = {}) {
     stateDir: path.join(root, 'state'),
     env: e,
   });
+  const runtimePromotion = promotion
+    ? configureRuntimePromotion(root, e, core.riskPolicy.policy_sha256, core.authoritySet.authority_set_sha256)
+    : null;
   return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimePromotion };
 }
 
