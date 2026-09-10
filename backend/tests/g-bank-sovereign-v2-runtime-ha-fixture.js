@@ -14,8 +14,8 @@ function hashed(schema, hashField, extra = {}) {
   return Object.freeze({ ...body, [hashField]: sha256(canonicalJson(body)) });
 }
 
-function configureSyntheticRuntimeHA({ root, env, state_root_sha256 = H('6'), cluster_authority_root_sha256 = H('a'), voter_journal_root_sha256 = H('b'), fence_valid_until, now }) {
-  if (!root || !env || !Number.isFinite(Number(now))) throw new Error('synthetic_runtime_ha_fixture_invalid');
+function configureSyntheticHAState({ env, state_root_sha256 = H('6'), cluster_authority_root_sha256 = H('a'), voter_journal_root_sha256 = H('b'), fence_valid_until, now }) {
+  if (!env || !Number.isFinite(Number(now))) throw new Error('synthetic_ha_state_fixture_invalid');
   const fenceUntil = new Date(fence_valid_until).toISOString();
   const haAudit = hashed('g-bank-ha-readiness-audit/v2', 'audit_sha256', {
     cluster_sha256: H('c'), cluster_epoch: 1, cluster_authority_root_sha256, cluster_transition_count: 0, cluster_transition_head_sha256: null,
@@ -33,30 +33,42 @@ function configureSyntheticRuntimeHA({ root, env, state_root_sha256 = H('6'), cl
     all_active_voters_healthy: true, unique_machine_identities_verified: true, unique_endpoints_verified: true,
     unique_failure_domains_verified: true, grants_external_rights: false, permits_value_movement_by_itself: false,
   });
-
   env.G_BANK_HA_AUDIT_SHA256 = haAudit.audit_sha256;
   env.G_BANK_HA_DEPLOYMENT_AUDIT_SHA256 = haDeploymentAudit.audit_sha256;
+  return Object.freeze({ haAudit, haDeploymentAudit, cluster_authority_root_sha256, voter_journal_root_sha256, fence_valid_until: fenceUntil });
+}
 
+function issueSyntheticRuntimeHAWitness({ root, env, haAudit, haDeploymentAudit, operation_binding_sha256, now }) {
+  if (!root || !env || !haAudit || !haDeploymentAudit || !Number.isFinite(Number(now))) throw new Error('synthetic_runtime_ha_witness_fixture_invalid');
   const challengePath = path.join(root, 'runtime-ha-challenges.jsonl');
   const challengeStore = new HARuntimeChallengeStore(challengePath);
-  const challenge = challengeStore.issue({ ttl_ms: 30000, now });
+  const challenge = challengeStore.issue({ operation_binding_sha256, ttl_ms: 30000, now });
   env.G_BANK_RUNTIME_HA_CHALLENGE_STORE = challengePath;
 
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const observer = { observer_id: 'OBSERVER:RUNTIME:TEST', public_key_pem: publicKey.export({ type: 'spki', format: 'pem' }).toString() };
-  const payload = runtimeHAObservationPayload({ haAudit, haDeploymentAudit, observer, observed_at: new Date(now).toISOString(), nonce_sha256: challenge.nonce_sha256 });
+  const payload = runtimeHAObservationPayload({
+    haAudit,
+    haDeploymentAudit,
+    observer,
+    observed_at: new Date(now).toISOString(),
+    nonce_sha256: challenge.nonce_sha256,
+    operation_binding_sha256,
+  });
   const observation = signHARuntimeObservation({ payload, private_key: privateKey });
-  const observationPath = path.join(root, 'runtime-ha-attestation.json');
-  const observerPath = path.join(root, 'runtime-ha-observer.json');
-  fs.writeFileSync(observationPath, JSON.stringify(observation, null, 2) + '\n', { mode: 0o600 });
-  fs.writeFileSync(observerPath, JSON.stringify(observer, null, 2) + '\n', { mode: 0o600 });
+  const observationPath = path.join(root, `runtime-ha-attestation-${challenge.nonce_sha256.slice(0, 12)}.json`);
+  const observerPath = path.join(root, `runtime-ha-observer-${challenge.nonce_sha256.slice(0, 12)}.json`);
+  fs.writeFileSync(observationPath, JSON.stringify(observation, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  fs.writeFileSync(observerPath, JSON.stringify(observer, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   env.G_BANK_RUNTIME_HA_ATTESTATION_FILE = observationPath;
   env.G_BANK_RUNTIME_HA_OBSERVER_FILE = observerPath;
-
-  return Object.freeze({
-    haAudit, haDeploymentAudit, observation, observer, challenge, challenge_store_path: challengePath,
-    cluster_authority_root_sha256, voter_journal_root_sha256, fence_valid_until: fenceUntil,
-  });
+  return Object.freeze({ observation, observer, challenge, challenge_store_path: challengePath, operation_binding_sha256 });
 }
 
-module.exports = { configureSyntheticRuntimeHA, hashed };
+function configureSyntheticRuntimeHA({ root, env, operation_binding_sha256, now, ...stateOptions }) {
+  const state = configureSyntheticHAState({ env, now, ...stateOptions });
+  const witness = issueSyntheticRuntimeHAWitness({ root, env, haAudit: state.haAudit, haDeploymentAudit: state.haDeploymentAudit, operation_binding_sha256, now });
+  return Object.freeze({ ...state, ...witness });
+}
+
+module.exports = { configureSyntheticHAState, issueSyntheticRuntimeHAWitness, configureSyntheticRuntimeHA, hashed };
