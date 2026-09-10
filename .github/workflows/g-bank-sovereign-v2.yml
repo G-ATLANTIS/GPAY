@@ -38,6 +38,7 @@ jobs:
           node --check backend/g-bank-sovereign-v2/authority.js
           node --check backend/g-bank-sovereign-v2/governance.js
           node --check backend/g-bank-sovereign-v2/checkpoint.js
+          node --check backend/g-bank-sovereign-v2/velocity-store.js
           node --check backend/g-bank-sovereign-v2/safeguarding.js
           node --check backend/g-bank-sovereign-v2/liquidity.js
           node --check backend/g-bank-sovereign-v2/invariant-auditor.js
@@ -53,5 +54,6 @@ jobs:
           node backend/tests/g-bank-sovereign-v2-readiness.test.js
           node backend/tests/g-bank-sovereign-v2-integrity.test.js
           node backend/tests/g-bank-sovereign-v2-governance.test.js
+          node backend/tests/g-bank-sovereign-v2-velocity.test.js
           node backend/tests/g-bank-sovereign-v2-prudential.test.js
           node backend/tests/g-bank-sovereign-v2-resilience.test.js
