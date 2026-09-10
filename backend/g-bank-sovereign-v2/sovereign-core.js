@@ -165,7 +165,7 @@ class GBankSovereignCore {
       require_external: true,
     });
     if (schemeProof.scheme !== prepared.instruction.scheme) throw new Error('scheme_validation_scheme_mismatch');
-    const approval = verifySovereignApproval(approvalToken, { prepared, idempotencyKey }, this.env);
+    const approval = verifySovereignApproval(approvalToken, { prepared, schemeValidationEvidence, idempotencyKey }, this.env);
     const request = this._request(prepared, schemeProof, approval);
 
     const preflight = await this.settlement.preflight();
