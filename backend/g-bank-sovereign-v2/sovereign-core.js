@@ -180,14 +180,26 @@ class GBankSovereignCore {
     let hold;
     try {
       hold = this._hold({ request, key: idempotencyKey });
-      this.executions.transition({ key: idempotencyKey, request, to: 'HELD', result: {
-        hold_transaction_id: hold.transaction_id,
-        hold_record_sha256: hold.record_sha256,
-      }});
+      this.executions.transition({
+        key: idempotencyKey,
+        request,
+        to: 'HELD',
+        result: {
+          hold_transaction_id: hold.transaction_id,
+          hold_record_sha256: hold.record_sha256,
+        },
+      });
     } catch (err) {
-      this.executions.transition({ key: idempotencyKey, request, to: 'FAILED_FINAL', result: this._result(request, {
-        state: 'FAILED_FINAL', error: err.message, value_moved: false,
-      }));
+      this.executions.transition({
+        key: idempotencyKey,
+        request,
+        to: 'FAILED_FINAL',
+        result: this._result(request, {
+          state: 'FAILED_FINAL',
+          error: err.message,
+          value_moved: false,
+        }),
+      });
       throw err;
     }
 
