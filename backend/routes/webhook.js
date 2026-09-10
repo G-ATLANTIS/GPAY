@@ -11,6 +11,7 @@ const { createGcoinSettlementIntent } = require('../utils/gcoin-settlement-inten
 const { createPaymentStateRuntime } = require('../utils/payment-state-runtime');
 const { createPaymentIntentRuntime } = require('../utils/payment-intent-runtime');
 const { createPaymentEffectLedger } = require('../utils/payment-effect-ledger');
+const { prepareVerifiedPaymentTransaction } = require('../utils/payment-postgres-transaction');
 const router = express.Router();
 
 function requireMollieConfig() {
@@ -30,6 +31,10 @@ function getMollieClient() {
 
 function effectData(record) {
   return record?.data || {};
+}
+
+function postgresMode() {
+  return String(process.env.GPAY_PAYMENT_STATE_BACKEND || 'local').trim().toLowerCase() === 'postgres';
 }
 
 router.post('/mollie/webhook', async (req, res) => {
@@ -94,16 +99,43 @@ router.post('/mollie/webhook', async (req, res) => {
       return res.status(200).json({ status: payment.status, providerPaymentId: id, processed: false });
     }
 
-    const begun = await stateRuntime.begin('mollie', id);
-    const processedAt = begun.state.processedAt;
-    await stateRuntime.advance('mollie', id, 'PROVIDER_VERIFIED', {
-      gpayIntentId,
-      orderId,
-      amount: String(providerAmount),
-      currency,
-    });
-
+    let processedAt;
     const rewardEventId = crypto.createHash('sha256').update(`mollie:${id}:${orderId}:reward`).digest('hex');
+
+    if (postgresMode()) {
+      const pool = stateRuntime?.adapter?.pool;
+      if (!pool) {
+        const err = new Error('PostgreSQL payment state runtime did not expose a pool for atomic preparation');
+        err.code = 'PAYMENT_TX_POOL_REQUIRED';
+        throw err;
+      }
+      const txResult = await prepareVerifiedPaymentTransaction({
+        pool,
+        provider: 'mollie',
+        providerPaymentId: id,
+        intentId: gpayIntentId,
+        orderId,
+        amount: providerAmount,
+        currency,
+        email,
+        effectData: {
+          reward: { orderId, rewardEventId },
+          invoice: { orderId },
+          'gcoin-intent': { orderId, rewardEventId },
+        },
+      });
+      processedAt = txResult.state.processedAt;
+    } else {
+      const begun = await stateRuntime.begin('mollie', id);
+      processedAt = begun.state.processedAt;
+      await stateRuntime.advance('mollie', id, 'PROVIDER_VERIFIED', {
+        gpayIntentId,
+        orderId,
+        amount: String(providerAmount),
+        currency,
+      });
+    }
+
     const rewardPrepared = await effectLedger.prepare('mollie', id, 'reward', {
       gpayIntentId,
       orderId,
@@ -207,7 +239,8 @@ router.post('/mollie/webhook', async (req, res) => {
       err.code === 'PAYMENT_STATE_CONFIG_MISSING' ||
       err.code === 'PAYMENT_STATE_DRIVER_MISSING' ||
       err.code === 'PAYMENT_EFFECT_CONFIG_MISSING' ||
-      err.code === 'PAYMENT_EFFECT_DRIVER_MISSING'
+      err.code === 'PAYMENT_EFFECT_DRIVER_MISSING' ||
+      err.code === 'PAYMENT_TX_POOL_REQUIRED'
     ) {
       return res.status(503).json({ error: err.message, code: err.code });
     }
