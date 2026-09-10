@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "branch": "feature/investor-grade-payment-hardening-v1",
   "guarantees": {
     "provider_credentials_fail_closed": true,
@@ -11,7 +11,10 @@
     "gcoin_settlement_intent_deterministic": true,
     "gcoin_broadcast_denied": true,
     "gcoin_signer_used": false,
-    "gcoin_execution_status": "not_attempted"
+    "gcoin_execution_status": "not_attempted",
+    "production_preflight_distinguishes_test_vs_live_mollie_key_shape": true,
+    "production_preflight_requires_public_https_base_url": true,
+    "production_preflight_performs_no_external_execution": true
   },
   "gcoin_identity": {
     "network": "ethereum-mainnet",
