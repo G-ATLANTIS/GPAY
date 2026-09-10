@@ -75,6 +75,7 @@ function setup() {
   const event = inboundEvent();
   const pending = s.processor.ingest(event, { now: NOW });
   assert.equal(pending.state, 'PENDING');
+  assert.equal(pending.settlement_business_date, new Date(event.observed_at).toISOString().slice(0, 10));
   assert.equal(s.ledger.balance('G:CUSTOMER:001', 'EUR'), 0);
   assert.equal(s.ledger.balance('G:SUSPENSE:INBOUND', 'EUR'), 5000);
   assert.equal(s.ledger.records().length, 1);
@@ -159,6 +160,7 @@ function setup() {
     target_account_id: target.account_id,
     amount_minor: event.amount_minor,
     currency: event.currency,
+    settlement_business_date: new Date(event.observed_at).toISOString().slice(0, 10),
     now: NOW,
   });
   assert.equal(claim.record.state, 'CLAIMED');
@@ -174,6 +176,7 @@ function setup() {
       kind: 'INBOUND_SETTLEMENT_PENDING',
       inbound_id: event.inbound_id,
       inbound_event_sha256: event.event_sha256,
+      settlement_business_date: new Date(event.observed_at).toISOString().slice(0, 10),
       target_account_id: target.account_id,
     },
   });
