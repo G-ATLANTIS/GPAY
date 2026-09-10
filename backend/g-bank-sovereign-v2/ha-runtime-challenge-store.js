@@ -46,10 +46,12 @@ function appendDurable(filePath, record) {
   finally { fs.closeSync(fd); }
 }
 
-function usableFromProof(proof, nonce, now) {
+function usableFromProof(proof, nonce, now, expectedOperationBindingSha256) {
   const issue = proof.rows.find(row => row.event === 'ISSUED' && row.nonce_sha256 === nonce);
   if (!issue) throw new Error('ha_runtime_challenge_not_issued');
   if (proof.rows.some(row => row.event === 'CONSUMED' && row.nonce_sha256 === nonce)) throw new Error('ha_runtime_challenge_replay');
+  const expectedBinding = hash64('ha_runtime_challenge_expected_operation_binding_sha256', expectedOperationBindingSha256);
+  if (issue.operation_binding_sha256 !== expectedBinding) throw new Error('ha_runtime_challenge_operation_binding_mismatch');
   const issued = Date.parse(issue.issued_at);
   const expires = Date.parse(issue.expires_at);
   if (Number(now) < issued - 5000) throw new Error('ha_runtime_challenge_not_yet_valid');
@@ -79,6 +81,7 @@ class HARuntimeChallengeStore {
       const copy = { ...row }; delete copy.record_sha256;
       if (sha256(canonicalJson(copy)) !== supplied) throw new Error('ha_runtime_challenge_record_hash_mismatch');
       const nonce = hash64('ha_runtime_challenge_nonce_sha256', row.nonce_sha256);
+      const operationBinding = hash64('ha_runtime_challenge_operation_binding_sha256', row.operation_binding_sha256);
       if (row.event === 'ISSUED') {
         if (issued.has(nonce)) throw new Error('ha_runtime_challenge_duplicate_nonce');
         const issuedAt = Date.parse(row.issued_at);
@@ -89,6 +92,7 @@ class HARuntimeChallengeStore {
         const issue = issued.get(nonce);
         if (!issue) throw new Error('ha_runtime_challenge_consume_without_issue');
         if (consumed.has(nonce)) throw new Error('ha_runtime_challenge_duplicate_consume');
+        if (issue.operation_binding_sha256 !== operationBinding) throw new Error('ha_runtime_challenge_consume_operation_binding_mismatch');
         const consumedAt = Date.parse(row.consumed_at);
         if (!Number.isFinite(consumedAt) || consumedAt < Date.parse(issue.issued_at) - 5000 || consumedAt >= Date.parse(issue.expires_at)) throw new Error('ha_runtime_challenge_consumed_at_invalid');
         hash64('ha_runtime_challenge_observation_sha256', row.observation_sha256);
@@ -99,7 +103,8 @@ class HARuntimeChallengeStore {
     return Object.freeze({ verified: true, count: list.length, head_sha256: prior, issued_count: issued.size, consumed_count: consumed.size, rows: Object.freeze(list.map(r => Object.freeze({ ...r }))) });
   }
 
-  issue({ ttl_ms = 30000, now = Date.now() } = {}) {
+  issue({ operation_binding_sha256, ttl_ms = 30000, now = Date.now() } = {}) {
+    const operationBinding = hash64('ha_runtime_challenge_operation_binding_sha256', operation_binding_sha256);
     const ttl = Number(ttl_ms);
     if (!Number.isSafeInteger(ttl) || ttl < 5000 || ttl > 60000) throw new Error('ha_runtime_challenge_ttl_invalid');
     if (!Number.isFinite(Number(now))) throw new Error('ha_runtime_challenge_now_invalid');
@@ -108,38 +113,40 @@ class HARuntimeChallengeStore {
       const nonceSha256 = sha256(crypto.randomBytes(32));
       const body = {
         schema: 'g-bank-ha-runtime-challenge-event/v2', event: 'ISSUED', sequence: proof.count + 1,
-        nonce_sha256: nonceSha256, issued_at: new Date(now).toISOString(), expires_at: new Date(Number(now) + ttl).toISOString(),
+        nonce_sha256: nonceSha256, operation_binding_sha256: operationBinding,
+        issued_at: new Date(now).toISOString(), expires_at: new Date(Number(now) + ttl).toISOString(),
         previous_record_sha256: proof.head_sha256, grants_external_rights: false, permits_value_movement_by_itself: false,
       };
       const record = { ...body, record_sha256: sha256(canonicalJson(body)) };
       appendDurable(this.filePath, record);
-      return Object.freeze({ nonce_sha256: nonceSha256, issued_at: body.issued_at, expires_at: body.expires_at, issue_record_sha256: record.record_sha256 });
+      return Object.freeze({ nonce_sha256: nonceSha256, operation_binding_sha256: operationBinding, issued_at: body.issued_at, expires_at: body.expires_at, issue_record_sha256: record.record_sha256 });
     });
   }
 
-  assertUsable({ nonce_sha256, now = Date.now() } = {}) {
+  assertUsable({ nonce_sha256, operation_binding_sha256, now = Date.now() } = {}) {
     const nonce = hash64('ha_runtime_challenge_nonce_sha256', nonce_sha256);
     if (!Number.isFinite(Number(now))) throw new Error('ha_runtime_challenge_now_invalid');
     const proof = this.verify();
-    const issue = usableFromProof(proof, nonce, now);
-    return Object.freeze({ nonce_sha256: nonce, issued_at: issue.issued_at, expires_at: issue.expires_at, issue_record_sha256: issue.record_sha256, challenge_store_head_sha256: proof.head_sha256 });
+    const issue = usableFromProof(proof, nonce, now, operation_binding_sha256);
+    return Object.freeze({ nonce_sha256: nonce, operation_binding_sha256: issue.operation_binding_sha256, issued_at: issue.issued_at, expires_at: issue.expires_at, issue_record_sha256: issue.record_sha256, challenge_store_head_sha256: proof.head_sha256 });
   }
 
-  consume({ nonce_sha256, observation_sha256, now = Date.now() } = {}) {
+  consume({ nonce_sha256, operation_binding_sha256, observation_sha256, now = Date.now() } = {}) {
     const nonce = hash64('ha_runtime_challenge_nonce_sha256', nonce_sha256);
+    const operationBinding = hash64('ha_runtime_challenge_operation_binding_sha256', operation_binding_sha256);
     const observation = hash64('ha_runtime_challenge_observation_sha256', observation_sha256);
     if (!Number.isFinite(Number(now))) throw new Error('ha_runtime_challenge_now_invalid');
     return withLock(this.lockPath, () => {
       const proof = this.verify();
-      usableFromProof(proof, nonce, now);
+      usableFromProof(proof, nonce, now, operationBinding);
       const body = {
         schema: 'g-bank-ha-runtime-challenge-event/v2', event: 'CONSUMED', sequence: proof.count + 1,
-        nonce_sha256: nonce, observation_sha256: observation, consumed_at: new Date(now).toISOString(),
+        nonce_sha256: nonce, operation_binding_sha256: operationBinding, observation_sha256: observation, consumed_at: new Date(now).toISOString(),
         previous_record_sha256: proof.head_sha256, grants_external_rights: false, permits_value_movement_by_itself: false,
       };
       const record = { ...body, record_sha256: sha256(canonicalJson(body)) };
       appendDurable(this.filePath, record);
-      return Object.freeze({ nonce_sha256: nonce, observation_sha256: observation, consumed_at: body.consumed_at, consume_record_sha256: record.record_sha256, challenge_store_head_sha256: record.record_sha256 });
+      return Object.freeze({ nonce_sha256: nonce, operation_binding_sha256: operationBinding, observation_sha256: observation, consumed_at: body.consumed_at, consume_record_sha256: record.record_sha256, challenge_store_head_sha256: record.record_sha256 });
     });
   }
 }
