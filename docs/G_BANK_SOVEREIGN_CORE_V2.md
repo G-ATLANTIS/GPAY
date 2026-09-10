@@ -117,7 +117,7 @@ available balance = 0
 pending/claimed inbound count = 0
 ```
 
-A closed or suspended customer cannot receive an availability credit. Account status transitions require a 64-byte evidence binding and are stored in the registry hash root.
+A closed or suspended customer cannot receive an availability credit. Account status transitions require a 64-hex-character SHA-256 evidence binding and are stored in the registry hash root.
 
 ## Account balances and statements
 
