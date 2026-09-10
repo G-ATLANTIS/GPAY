@@ -13,6 +13,7 @@ const { createSovereignApproval, verifySovereignApproval } = require('../g-bank-
 const { evaluatePaymentPolicy } = require('../g-bank-sovereign-v2/risk-policy');
 const { approvalPayload } = require('../g-bank-sovereign-v2/authority');
 const { createTechnicalPromotionCertificate } = require('../g-bank-sovereign-v2/promotion-certificate');
+const { normalizePromotionSignerAuthority } = require('../g-bank-sovereign-v2/promotion-signer-authority');
 const { settlementOperationBinding } = require('../g-bank-sovereign-v2/settlement-operation-binding');
 const { createSyntheticRuntimeObserver, configureSyntheticHAState, issueSyntheticRuntimeHAWitness } = require('./g-bank-sovereign-v2-runtime-ha-fixture');
 const { createSyntheticPromotionSigner, configureSyntheticPromotionSignature } = require('./g-bank-sovereign-v2-promotion-signing-fixture');
@@ -53,7 +54,7 @@ function instruction(id = 'PAY0000000000001') {
   };
 }
 
-function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, runtimeObserver, promotionSigner) {
+function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, runtimeObserver, promotionSigner, promotionSignerAuthority) {
   const fenceValidUntil = new Date(NOW + 240000).toISOString();
   const haState = configureSyntheticHAState({ env: e, state_root_sha256: H('6'), cluster_authority_root_sha256: H('8'), voter_journal_root_sha256: H('7'), fence_valid_until: fenceValidUntil, now: NOW });
   const evidenceBindings = {
@@ -81,6 +82,9 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, ru
     governance: { policy_sha256: policySha256, authority_set_sha256: authoritySetSha256 }, evidence_bindings: evidenceBindings,
     trusted_signing_key_binding_sha256: promotionSigner.key_binding_sha256,
     trusted_runtime_ha_observer_sha256: runtimeObserver.observer_public_key_binding_sha256,
+    promotion_signer_authority_root_sha256: promotionSignerAuthority.authority_root_sha256,
+    promotion_signer_authority_epoch: promotionSignerAuthority.authority_epoch,
+    promotion_signature_quorum: promotionSignerAuthority.quorum,
     ttl_seconds: 300, now: NOW,
   });
   const readinessPath = path.join(root, 'runtime-readiness.json');
@@ -91,7 +95,7 @@ function configureRuntimePromotion(root, e, policySha256, authoritySetSha256, ru
   e.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE = promotionPath;
   e.G_BANK_PROMOTION_CERTIFICATE_SHA256 = certificate.certificate_sha256;
   const promotionSignature = configureSyntheticPromotionSignature({ root, env: e, certificate, promotionSigner, now: NOW });
-  return { readiness, certificate, haState, runtimeObserver, promotionSigner, promotionSignature };
+  return { readiness, certificate, haState, runtimeObserver, promotionSigner, promotionSignerAuthority, promotionSignature };
 }
 
 function setup(transport, { promotion = true } = {}) {
@@ -116,9 +120,16 @@ function setup(transport, { promotion = true } = {}) {
   const settlement = new DirectSettlementAdapter({ transport, env: e, clock: () => NOW });
   const core = new GBankSovereignCore({ accounts, ledger, settlement, riskPolicy, authoritySet, stateDir: path.join(root, 'state'), env: e });
   const runtimeObserver = createSyntheticRuntimeObserver();
-  const promotionSigner = createSyntheticPromotionSigner();
-  const runtimePromotion = promotion ? configureRuntimePromotion(root, e, core.riskPolicy.policy_sha256, core.authoritySet.authority_set_sha256, runtimeObserver, promotionSigner) : null;
-  return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimeObserver, promotionSigner, runtimePromotion };
+  const promotionSigner = createSyntheticPromotionSigner('SIGNER:PROMOTION:A');
+  const promotionSignerB = createSyntheticPromotionSigner('SIGNER:PROMOTION:B');
+  const promotionSignerC = createSyntheticPromotionSigner('SIGNER:PROMOTION:C');
+  const promotionSignerAuthority = normalizePromotionSignerAuthority({
+    authority_epoch: 1,
+    quorum: 2,
+    signers: [promotionSigner, promotionSignerB, promotionSignerC].map(s => ({ signer_id: s.signer_id, status: 'ACTIVE', public_key_pem: s.public_key_pem })),
+  });
+  const runtimePromotion = promotion ? configureRuntimePromotion(root, e, core.riskPolicy.policy_sha256, core.authoritySet.authority_set_sha256, runtimeObserver, promotionSigner, promotionSignerAuthority) : null;
+  return { root, e, accounts, ledger, core, riskPolicy, authoritySet, operator, runtimeObserver, promotionSigner, promotionSignerAuthority, runtimePromotion };
 }
 
 function bindRuntimeWitness(s, prepared, idempotencyKey) {
@@ -174,6 +185,8 @@ function authoritySignatures(s, prepared, validation, key) {
   assert.equal(runtime.witness.challenge.operation_binding_sha256, runtime.operation.operation_binding_sha256);
   assert.equal(s.runtimePromotion.certificate.trusted_runtime_ha_observer_sha256, s.runtimeObserver.observer_public_key_binding_sha256);
   assert.equal(s.runtimePromotion.certificate.trusted_signing_key_binding_sha256, s.promotionSigner.key_binding_sha256);
+  assert.equal(s.runtimePromotion.certificate.promotion_signer_authority_root_sha256, s.promotionSignerAuthority.authority_root_sha256);
+  assert.equal(s.runtimePromotion.certificate.promotion_signature_quorum, 2);
   assert.equal(s.ledger.balance('G:CUSTOMER:001', 'EUR'), 9000);
   assert.equal(s.ledger.balance('G:SUSPENSE:OUTBOUND', 'EUR'), 0);
   assert.equal(s.ledger.balance('G:SETTLEMENT:OUTBOUND', 'EUR'), 1000);
@@ -219,5 +232,5 @@ function authoritySignatures(s, prepared, validation, key) {
   await assert.rejects(a.core.execute({ prepared: p2, schemeValidationEvidence: v2, approvalToken: ap2, authoritySignatures: sig2, idempotencyKey: k2, now: NOW }), /execution_exists_unknown_use_reconcile/);
   assert.equal(ambiguousSubmits, 1);
 
-  console.log('G-BANK sovereign v2 externally-signed promotion no-network safety tests: PASS');
+  console.log('G-BANK sovereign v2 quorum-bound externally-signed promotion no-network safety tests: PASS');
 })().catch(err => { console.error(err); process.exit(1); });
