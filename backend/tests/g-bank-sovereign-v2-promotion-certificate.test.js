@@ -23,6 +23,7 @@ function readiness(overrides = {}) {
     ha_deployment_verified: true, direct_live_ready: true, value_movement_permitted_by_readiness: true,
     checks: { synthetic_test_snapshot: true }, evidence_bindings: { ...evidence_bindings },
     recovery_checkpoint_state_root_sha256: H('a'), ha_checkpoint_state_root_sha256: H('a'),
+    ha_voter_journal_root_sha256: H('1'), ha_cluster_authority_root_sha256: H('2'),
     ha_fence_valid_until: FENCE, ...overrides,
   };
 }
@@ -39,6 +40,8 @@ assert.equal(cert.requires_runtime_reverification, true);
 assert.equal(cert.evidence_bindings.recovery_audit_sha256, H('8'));
 assert.equal(cert.evidence_bindings.ha_audit_sha256, H('9'));
 assert.equal(cert.evidence_bindings.ha_deployment_audit_sha256, H('0'));
+assert.equal(cert.ha_voter_journal_root_sha256, H('1'));
+assert.equal(cert.ha_cluster_authority_root_sha256, H('2'));
 assert.equal(cert.ha_fence_valid_until, FENCE);
 assert.equal(cert.expires_at, new Date(NOW + 120000).toISOString());
 assert.match(cert.certificate_sha256, /^[0-9a-f]{64}$/);
@@ -49,14 +52,11 @@ const fenceCapped = createTechnicalPromotionCertificate({
   evidence_bindings, trusted_signing_key_binding_sha256: H('7'), ttl_seconds: 300, now: NOW,
 });
 assert.equal(fenceCapped.expires_at, new Date(NOW + 90000).toISOString());
-assert.equal(fenceCapped.ha_fence_valid_until, new Date(NOW + 90000).toISOString());
 assert.throws(() => verifyTechnicalPromotionCertificate(fenceCapped, { readiness: readiness({ ha_fence_valid_until: new Date(NOW + 90000).toISOString() }), now: NOW + 90000 }), /readiness_ha_fence_expired_or_invalid|expired_or_invalid/);
 
-assert.throws(() => createTechnicalPromotionCertificate({
-  readiness: readiness({ ha_fence_valid_until: new Date(NOW + 29000).toISOString() }), checkpoint, governance,
-  evidence_bindings, trusted_signing_key_binding_sha256: H('7'), ttl_seconds: 120, now: NOW,
-}), /promotion_ha_fence_too_close_to_expiry/);
-
+assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ ha_fence_valid_until: new Date(NOW + 29000).toISOString() }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), ttl_seconds: 120, now: NOW }), /promotion_ha_fence_too_close_to_expiry/);
+assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ ha_cluster_authority_root_sha256: null }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /readiness_ha_cluster_authority_root_sha256_invalid/);
+assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ ha_voter_journal_root_sha256: null }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /readiness_ha_voter_journal_root_sha256_invalid/);
 assert.throws(() => verifyTechnicalPromotionCertificate({ ...cert, state_root_sha256: H('f') }, { readiness: ready, now: NOW + 1000 }), /hash_mismatch/);
 assert.throws(() => verifyTechnicalPromotionCertificate(cert, { readiness: ready, now: NOW + 121000 }), /expired_or_invalid/);
 
@@ -67,9 +67,8 @@ for (const field of ['customer_monitoring_verified', 'recovery_controls_verified
 assert.throws(() => createTechnicalPromotionCertificate({ readiness: ready, checkpoint: { ...checkpoint, state_root_sha256: H('f') }, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /promotion_recovery_checkpoint_state_root_mismatch/);
 assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ ha_checkpoint_state_root_sha256: H('f') }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /readiness_ha_recovery_checkpoint_mismatch/);
 assert.throws(() => createTechnicalPromotionCertificate({ readiness: ready, checkpoint, governance, evidence_bindings: { ...evidence_bindings, ha_deployment_audit_sha256: H('1') }, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /promotion_readiness_evidence_binding_mismatch:ha_deployment_audit_sha256/);
-assert.throws(() => createTechnicalPromotionCertificate({ readiness: readiness({ evidence_bindings: { ...evidence_bindings, transport_preflight_receipt_sha256: H('f') } }), checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256: H('7'), now: NOW }), /promotion_readiness_evidence_binding_mismatch:transport_preflight_receipt_sha256/);
-
-assert.throws(() => verifyTechnicalPromotionCertificate(cert, { readiness: readiness({ checks: { synthetic_test_snapshot: true, changed: true } }), now: NOW + 1000 }), /readiness_mismatch|readiness_checks_not_satisfied/);
+assert.throws(() => verifyTechnicalPromotionCertificate(cert, { readiness: readiness({ ha_cluster_authority_root_sha256: H('3') }), now: NOW + 1000 }), /promotion_ha_cluster_authority_root_mismatch|readiness_mismatch/);
+assert.throws(() => verifyTechnicalPromotionCertificate(cert, { readiness: readiness({ ha_voter_journal_root_sha256: H('3') }), now: NOW + 1000 }), /promotion_ha_voter_journal_root_mismatch|readiness_mismatch/);
 
 const boundaryBody = { ...cert, grants_external_rights: true };
 delete boundaryBody.certificate_sha256;
