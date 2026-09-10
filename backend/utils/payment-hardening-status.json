@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "branch": "feature/investor-grade-payment-hardening-v1",
+  "guarantees": {
+    "provider_credentials_fail_closed": true,
+    "mollie_public_https_callbacks_required": true,
+    "provider_state_reread_on_webhook": true,
+    "duplicate_completed_webhooks_return_existing_receipt": true,
+    "deterministic_receipt_hash": true
+  },
+  "not_yet_guaranteed": {
+    "crash_safe_exactly_once_side_effects": true,
+    "multi_process_distributed_locking": true,
+    "production_deployment": true,
+    "live_transaction_evidence": true,
+    "receipt_signature": true
+  }
+}
