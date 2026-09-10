@@ -7,6 +7,7 @@ const generateInvoice = require('../utils/invoice-generator');
 const sendMail = require('../utils/mailer');
 const { createReceipt } = require('../utils/payment-receipt');
 const { getProcessed, recordProcessed } = require('../utils/payment-idempotency-store');
+const { acquirePaymentLock } = require('../utils/payment-lock');
 const router = express.Router();
 
 function requireMollieConfig() {
@@ -21,8 +22,17 @@ router.post('/mollie/webhook', async (req, res) => {
   const id = typeof req.body?.id === 'string' ? req.body.id.trim() : '';
   if (!id) return res.status(400).json({ error: 'Missing payment id' });
 
+  let lock;
   try {
     requireMollieConfig();
+
+    lock = acquirePaymentLock('mollie', id);
+    if (!lock.acquired) {
+      return res.status(202).json({
+        status: 'processing',
+        providerPaymentId: id,
+      });
+    }
 
     const alreadyProcessed = getProcessed('mollie', id);
     if (alreadyProcessed) {
@@ -33,7 +43,7 @@ router.post('/mollie/webhook', async (req, res) => {
       });
     }
 
-    // Do not trust callback body for payment state. Re-read canonical state from Mollie.
+    // Never trust callback body for canonical payment state; re-read it from Mollie.
     const payment = await mollieClient.payments.get(id);
     const { orderId, amount, email } = payment.metadata || {};
 
@@ -55,9 +65,11 @@ router.post('/mollie/webhook', async (req, res) => {
       .update(`mollie:${id}:${orderId}:reward`)
       .digest('hex');
 
+    // Current rewardTokens is a deterministic calculation/log, not an external token transfer.
     const tokens = rewardTokens(amount, email, { eventId: rewardEventId });
-    const invoicePath = generateInvoice(orderId, amount, email);
-    await sendMail(email, invoicePath);
+
+    // Invoice generation is deterministic for orderId and resolves only after the PDF is durable.
+    const invoicePath = await generateInvoice(orderId, amount, email);
 
     const receipt = createReceipt({
       provider: 'mollie',
@@ -71,6 +83,7 @@ router.post('/mollie/webhook', async (req, res) => {
       tokens,
     });
 
+    // Commit financial processing before best-effort notification. Duplicate callbacks stop here.
     const result = recordProcessed('mollie', id, receipt);
     if (!result.created) {
       return res.status(200).json({
@@ -86,10 +99,20 @@ router.post('/mollie/webhook', async (req, res) => {
       `[OK] ${orderId} provider=mollie payment=${id} status=paid receipt=${receipt.receiptHash}\n`
     );
 
+    let notification = 'sent';
+    try {
+      await sendMail(email, invoicePath);
+    } catch (mailErr) {
+      // Notification is deliberately non-transactional: payment processing stays committed.
+      notification = 'failed';
+      console.error('Payment confirmation email failed:', mailErr.message);
+    }
+
     return res.status(200).json({
       status: 'processed',
       providerPaymentId: id,
       receiptHash: receipt.receiptHash,
+      notification,
     });
   } catch (err) {
     if (err.code === 'CONFIG_ERROR') {
@@ -97,6 +120,8 @@ router.post('/mollie/webhook', async (req, res) => {
     }
     console.error('Mollie webhook error:', err.message);
     return res.status(500).json({ error: 'Webhook processing failed' });
+  } finally {
+    if (lock?.acquired) lock.release();
   }
 });
 
