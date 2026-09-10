@@ -17,35 +17,25 @@ function verifyReadiness(readiness) {
     'operational_controls_verified',
     'customer_monitoring_verified',
     'recovery_controls_verified',
+    'ha_controls_verified',
     'direct_live_ready',
     'value_movement_permitted_by_readiness',
   ];
-  if (readiness.state !== 'DIRECT_LIVE_READY' || required.some(k => readiness[k] !== true)) {
-    throw new Error('direct_live_readiness_not_satisfied');
-  }
-  if (!readiness.checks || typeof readiness.checks !== 'object' || !Object.keys(readiness.checks).length) {
-    throw new Error('readiness_checks_required');
-  }
+  if (readiness.state !== 'DIRECT_LIVE_READY' || required.some(k => readiness[k] !== true)) throw new Error('direct_live_readiness_not_satisfied');
+  if (!readiness.checks || typeof readiness.checks !== 'object' || !Object.keys(readiness.checks).length) throw new Error('readiness_checks_required');
   if (Object.values(readiness.checks).some(value => value !== true)) throw new Error('readiness_checks_not_satisfied');
-  hash64('readiness_recovery_checkpoint_state_root_sha256', readiness.recovery_checkpoint_state_root_sha256);
+  const recoveryRoot = hash64('readiness_recovery_checkpoint_state_root_sha256', readiness.recovery_checkpoint_state_root_sha256);
+  const haRoot = hash64('readiness_ha_checkpoint_state_root_sha256', readiness.ha_checkpoint_state_root_sha256);
+  if (haRoot !== recoveryRoot) throw new Error('readiness_ha_recovery_checkpoint_mismatch');
   return readiness;
 }
 
-function createTechnicalPromotionCertificate({
-  readiness,
-  checkpoint,
-  governance,
-  evidence_bindings,
-  trusted_signing_key_binding_sha256,
-  ttl_seconds = 120,
-  now = Date.now(),
-}) {
+function createTechnicalPromotionCertificate({ readiness, checkpoint, governance, evidence_bindings, trusted_signing_key_binding_sha256, ttl_seconds = 120, now = Date.now() }) {
   verifyReadiness(readiness);
   if (!checkpoint || checkpoint.schema !== 'g-bank-sovereign-state-checkpoint/v2') throw new Error('checkpoint_required');
   const stateRoot = hash64('state_root_sha256', checkpoint.state_root_sha256);
-  if (stateRoot !== String(readiness.recovery_checkpoint_state_root_sha256).toLowerCase()) {
-    throw new Error('promotion_recovery_checkpoint_state_root_mismatch');
-  }
+  if (stateRoot !== String(readiness.recovery_checkpoint_state_root_sha256).toLowerCase()) throw new Error('promotion_recovery_checkpoint_state_root_mismatch');
+  if (stateRoot !== String(readiness.ha_checkpoint_state_root_sha256).toLowerCase()) throw new Error('promotion_ha_checkpoint_state_root_mismatch');
   const policyHash = hash64('policy_sha256', governance?.policy_sha256);
   const authorityHash = hash64('authority_set_sha256', governance?.authority_set_sha256);
   const signingKeyHash = hash64('trusted_signing_key_binding_sha256', trusted_signing_key_binding_sha256);
@@ -61,12 +51,11 @@ function createTechnicalPromotionCertificate({
     treasury_assessment_sha256: hash64('treasury_assessment_sha256', evidence.treasury_assessment_sha256),
     customer_monitoring_audit_sha256: hash64('customer_monitoring_audit_sha256', evidence.customer_monitoring_audit_sha256),
     recovery_audit_sha256: hash64('recovery_audit_sha256', evidence.recovery_audit_sha256),
+    ha_audit_sha256: hash64('ha_audit_sha256', evidence.ha_audit_sha256),
   };
   if (!readiness.evidence_bindings || typeof readiness.evidence_bindings !== 'object') throw new Error('readiness_evidence_bindings_required');
   for (const [key, value] of Object.entries(bindings)) {
-    if (String(readiness.evidence_bindings[key] || '').toLowerCase() !== value) {
-      throw new Error(`promotion_readiness_evidence_binding_mismatch:${key}`);
-    }
+    if (String(readiness.evidence_bindings[key] || '').toLowerCase() !== value) throw new Error(`promotion_readiness_evidence_binding_mismatch:${key}`);
   }
   const ttl = Number(ttl_seconds);
   if (!Number.isSafeInteger(ttl) || ttl < 30 || ttl > 300) throw new Error('promotion_certificate_ttl_invalid');
@@ -95,32 +84,21 @@ function verifyTechnicalPromotionCertificate(certificate, { readiness, now = Dat
   const { certificate_sha256, ...body } = certificate;
   if (sha256(canonicalJson(body)) !== supplied) throw new Error('promotion_certificate_hash_mismatch');
   if (certificate.state !== 'TECHNICAL_GATES_SATISFIED') throw new Error('promotion_certificate_state_invalid');
-  if (certificate.grants_external_rights !== false || certificate.permits_value_movement_by_itself !== false || certificate.requires_runtime_reverification !== true) {
-    throw new Error('promotion_certificate_boundary_invalid');
-  }
+  if (certificate.grants_external_rights !== false || certificate.permits_value_movement_by_itself !== false || certificate.requires_runtime_reverification !== true) throw new Error('promotion_certificate_boundary_invalid');
   const issued = Date.parse(certificate.issued_at);
   const expires = Date.parse(certificate.expires_at);
-  if (!Number.isFinite(issued) || !Number.isFinite(expires) || issued > now + 30000 || expires <= now || expires - issued > 300000) {
-    throw new Error('promotion_certificate_expired_or_invalid');
-  }
+  if (!Number.isFinite(issued) || !Number.isFinite(expires) || issued > now + 30000 || expires <= now || expires - issued > 300000) throw new Error('promotion_certificate_expired_or_invalid');
   if (readiness) {
     verifyReadiness(readiness);
-    if (certificate.state_root_sha256 !== String(readiness.recovery_checkpoint_state_root_sha256).toLowerCase()) {
-      throw new Error('promotion_recovery_checkpoint_state_root_mismatch');
-    }
+    if (certificate.state_root_sha256 !== String(readiness.recovery_checkpoint_state_root_sha256).toLowerCase()) throw new Error('promotion_recovery_checkpoint_state_root_mismatch');
+    if (certificate.state_root_sha256 !== String(readiness.ha_checkpoint_state_root_sha256).toLowerCase()) throw new Error('promotion_ha_checkpoint_state_root_mismatch');
     if (certificate.readiness_snapshot_sha256 !== sha256(canonicalJson(readiness))) throw new Error('promotion_certificate_readiness_mismatch');
     if (!readiness.evidence_bindings || typeof readiness.evidence_bindings !== 'object') throw new Error('readiness_evidence_bindings_required');
     for (const [key, value] of Object.entries(certificate.evidence_bindings || {})) {
-      if (String(readiness.evidence_bindings[key] || '').toLowerCase() !== String(value || '').toLowerCase()) {
-        throw new Error(`promotion_readiness_evidence_binding_mismatch:${key}`);
-      }
+      if (String(readiness.evidence_bindings[key] || '').toLowerCase() !== String(value || '').toLowerCase()) throw new Error(`promotion_readiness_evidence_binding_mismatch:${key}`);
     }
   }
   return true;
 }
 
-module.exports = {
-  createTechnicalPromotionCertificate,
-  verifyTechnicalPromotionCertificate,
-  verifyReadiness,
-};
+module.exports = { createTechnicalPromotionCertificate, verifyTechnicalPromotionCertificate, verifyReadiness };
