@@ -6,6 +6,7 @@ const { canonicalJson, sha256 } = require('./canonical');
 const { verifyTechnicalPromotionCertificate, verifyReadiness } = require('./promotion-certificate');
 const { verifyHARuntimeObservation } = require('./ha-runtime-attestation');
 const { HARuntimeChallengeStore } = require('./ha-runtime-challenge-store');
+const { settlementOperationBinding } = require('./settlement-operation-binding');
 
 function hash64(name, value) {
   const hash = String(value || '').toLowerCase();
@@ -38,7 +39,7 @@ const RUNTIME_BINDINGS = Object.freeze([
   ['ha_deployment_audit_sha256', 'G_BANK_HA_DEPLOYMENT_AUDIT_SHA256'],
 ]);
 
-function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consumeChallenge = false } = {}) {
+function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consumeChallenge = false, expectedOperation } = {}) {
   const readinessFile = readJsonFile('runtime_readiness', env.G_BANK_RUNTIME_READINESS_FILE);
   const promotionFile = readJsonFile('runtime_promotion_certificate', env.G_BANK_RUNTIME_PROMOTION_CERTIFICATE_FILE);
   const runtimeHAFile = readJsonFile('runtime_ha_attestation', env.G_BANK_RUNTIME_HA_ATTESTATION_FILE);
@@ -68,6 +69,14 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
   }
   if (mismatches.length) throw new Error(`runtime_promotion_evidence_binding_mismatch:${mismatches.sort().join(',')}`);
 
+  if (!expectedOperation || typeof expectedOperation !== 'object') throw new Error('runtime_settlement_operation_required');
+  const operationBinding = settlementOperationBinding({
+    message_sha256: expectedOperation.message_sha256,
+    instruction_sha256: expectedOperation.instruction_sha256,
+    idempotency_key: expectedOperation.idempotency_key,
+    promotion_certificate_sha256: certificate.certificate_sha256,
+  });
+
   const runtimeHAAudit = verifyHARuntimeObservation({
     observation: runtimeHAFile.value,
     trustedObserver: runtimeHAObserverFile.value,
@@ -78,13 +87,19 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
       ha_audit_sha256: certificate.evidence_bindings.ha_audit_sha256,
       ha_deployment_audit_sha256: certificate.evidence_bindings.ha_deployment_audit_sha256,
       fence_valid_until: certificate.ha_fence_valid_until,
+      operation_binding_sha256: operationBinding.operation_binding_sha256,
     },
     now,
   });
 
-  const challengeUsable = challengeStore.assertUsable({ nonce_sha256: runtimeHAFile.value.nonce_sha256, now });
+  const challengeUsable = challengeStore.assertUsable({
+    nonce_sha256: runtimeHAFile.value.nonce_sha256,
+    operation_binding_sha256: operationBinding.operation_binding_sha256,
+    now,
+  });
   const challengeConsumption = consumeChallenge ? challengeStore.consume({
     nonce_sha256: runtimeHAFile.value.nonce_sha256,
+    operation_binding_sha256: operationBinding.operation_binding_sha256,
     observation_sha256: runtimeHAAudit.observation_sha256,
     now,
   }) : null;
@@ -94,6 +109,10 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
     state: 'PASS',
     readiness_snapshot_sha256: sha256(canonicalJson(readiness)),
     promotion_certificate_sha256: certificate.certificate_sha256,
+    settlement_operation_binding_sha256: operationBinding.operation_binding_sha256,
+    settlement_message_sha256: operationBinding.message_sha256,
+    settlement_instruction_sha256: operationBinding.instruction_sha256,
+    settlement_idempotency_key: operationBinding.idempotency_key,
     state_root_sha256: certificate.state_root_sha256,
     policy_sha256: certificate.policy_sha256,
     authority_set_sha256: certificate.authority_set_sha256,
@@ -102,6 +121,7 @@ function verifyRuntimePromotionGate({ env = process.env, now = Date.now(), consu
     ha_runtime_attestation_audit_sha256: runtimeHAAudit.audit_sha256,
     ha_runtime_observation_sha256: runtimeHAAudit.observation_sha256,
     ha_runtime_challenge_nonce_sha256: challengeUsable.nonce_sha256,
+    ha_runtime_challenge_operation_binding_sha256: challengeUsable.operation_binding_sha256,
     ha_runtime_challenge_issue_record_sha256: challengeUsable.issue_record_sha256,
     ha_runtime_challenge_consumed: Boolean(challengeConsumption),
     ha_runtime_challenge_consume_record_sha256: challengeConsumption?.consume_record_sha256 || null,
