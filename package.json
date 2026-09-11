@@ -5,7 +5,7 @@
   "scripts": {
     "test": "node backend/utils/provider-evidence-client.test.js",
     "test:provider-evidence": "node backend/utils/provider-evidence-client.test.js",
-    "test:ether-web": "node backend/transmission/etherWeb.test.js && node backend/transmission/router.test.js && node backend/transmission/providers/reticulumSelfHosted.test.js && node backend/transmission/peerDiscovery.test.js",
+    "test:ether-web": "node backend/transmission/etherWeb.test.js && node backend/transmission/router.test.js && node backend/transmission/providers/reticulumSelfHosted.test.js && node backend/transmission/peerDiscovery.test.js && node backend/transmission/discovery/mdnsLan.test.js",
     "proof:mollie:sandbox": "node scripts/run-mollie-sandbox-proof.js"
   },
   "keywords": [],
