@@ -1,0 +1,107 @@
+name: Mollie Sandbox Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      amount_eur:
+        description: "Sandbox amount in EUR (max 1.00)"
+        required: false
+        default: "1.00"
+      confirm_test_payment:
+        description: "Type ALLOW_TEST_PAYMENT to authorize one Mollie test-mode payment"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  G_MOLLIE_SANDBOX_PROOF_OUT: .secrets/evidence/mollie-sandbox-proof-v2-5.json
+
+jobs:
+  generate-mollie-sandbox-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fail closed unless explicitly authorized
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm_test_payment }}" != "ALLOW_TEST_PAYMENT" ]; then
+            echo "BLOCKED: confirm_test_payment must equal ALLOW_TEST_PAYMENT" >&2
+            exit 2
+          fi
+          if [ -z "${{ secrets.MOLLIE_API_KEY }}" ]; then
+            echo "BLOCKED: repository/environment secret MOLLIE_API_KEY is missing" >&2
+            exit 2
+          fi
+          case "${{ secrets.MOLLIE_API_KEY }}" in
+            test_*) ;;
+            *) echo "BLOCKED: only Mollie test_ keys are permitted" >&2; exit 2 ;;
+          esac
+
+      - name: Run provider evidence unit tests
+        run: npm run test:provider-evidence
+
+      - name: Generate real Mollie test-mode write/readback proof
+        env:
+          MOLLIE_API_KEY: ${{ secrets.MOLLIE_API_KEY }}
+          G_MOLLIE_SANDBOX_PROOF: ALLOW_TEST_PAYMENT
+          G_MOLLIE_SANDBOX_AMOUNT: ${{ inputs.amount_eur }}
+        run: npm run proof:mollie:sandbox
+
+      - name: Validate proof artifact exists and contains no API key
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$G_MOLLIE_SANDBOX_PROOF_OUT"
+          if grep -q 'test_' "$G_MOLLIE_SANDBOX_PROOF_OUT"; then
+            echo "BLOCKED: proof artifact appears to contain an API key-like value" >&2
+            exit 2
+          fi
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = process.env.G_MOLLIE_SANDBOX_PROOF_OUT;
+          const proof = JSON.parse(fs.readFileSync(p, 'utf8'));
+          const requiredTrue = [
+            'create_transport_id_verified',
+            'readback_transport_id_verified',
+            'readback_match',
+            'external_write_verified',
+            'production_binding_verified',
+            'test_mode_only'
+          ];
+          for (const k of requiredTrue) {
+            if (proof[k] !== true) throw new Error(`proof field ${k} not true`);
+          }
+          if (proof.live_value_movement !== false) throw new Error('live_value_movement must be false');
+          if (proof.mode !== 'test') throw new Error('mode must be test');
+          if (!String(proof.payment_id || '').startsWith('tr_')) throw new Error('invalid payment_id');
+          if (!proof.create_provider_request_id || !proof.readback_provider_request_id) throw new Error('transport request IDs missing');
+          if (!/^[0-9a-f]{64}$/.test(String(proof.proof_hash || ''))) throw new Error('invalid proof_hash');
+          console.log(JSON.stringify({
+            status: 'VERIFIED_MOLLIE_SANDBOX_PROOF_ARTIFACT',
+            payment_id: proof.payment_id,
+            proof_hash: proof.proof_hash,
+            live_value_movement: proof.live_value_movement
+          }, null, 2));
+          NODE
+
+      - name: Upload sandbox proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mollie-sandbox-proof-v2-5
+          path: .secrets/evidence/mollie-sandbox-proof-v2-5.json
+          if-no-files-found: error
+          retention-days: 7
