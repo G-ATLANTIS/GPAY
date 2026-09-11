@@ -1,0 +1,27 @@
+name: G Transmission Ether Web CI
+
+on:
+  pull_request:
+    paths:
+      - 'backend/transmission/**'
+      - 'package.json'
+      - '.github/workflows/g-transmission-ether-web-ci.yml'
+  push:
+    branches:
+      - g-transmission-ether-web-v1
+    paths:
+      - 'backend/transmission/**'
+      - 'package.json'
+      - '.github/workflows/g-transmission-ether-web-ci.yml'
+
+jobs:
+  ether-web-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm run test:ether-web
