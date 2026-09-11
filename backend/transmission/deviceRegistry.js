@@ -43,6 +43,10 @@ class DeviceRegistry {
     if (device) device.allowed = false;
   }
 
+  isAllowed(fingerprint) {
+    return Boolean(this.devices.has(fingerprint) && this.allowlist.has(fingerprint));
+  }
+
   assertAllowed(fingerprint) {
     const device = this.devices.get(fingerprint);
     if (!device || !this.allowlist.has(fingerprint)) {
