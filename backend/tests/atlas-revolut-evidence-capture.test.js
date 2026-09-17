@@ -4,8 +4,14 @@ const assert=require('node:assert/strict');
 const {sha256Object,validateEvidence,deriveManualEvidence}=require('../../scripts/atlas-revolut-evidence-capture');
 const {evaluateRevolutManualRelease,buildManualAppInstruction}=require('../../scripts/atlas-revolut-manual-release');
 const now=new Date('2026-09-17T14:00:00Z');
+const sourceType={
+ CURRENT_ACCOUNT:'REVOLUT_ACCOUNT_CONFIRMATION',
+ AVAILABLE_FUNDS:'REVOLUT_APP_BALANCE_CAPTURE',
+ SINGLE_PAYMENT_LIMIT:'REVOLUT_SECURITY_LIMITS_CAPTURE',
+ SCA_PATH:'REVOLUT_APP_SCA_OBSERVATION'
+};
 function proof(kind,data={},times={observed_at:'2026-09-17T13:59:00Z',expires_at:'2026-09-17T14:10:00Z'}){
- const payload={rail_id:'revolut-manual-sca',provider:'REVOLUT',evidence_kind:kind,probe_verified:true,...times,...data};
+ const payload={rail_id:'revolut-manual-sca',provider:'REVOLUT',evidence_kind:kind,source_type:sourceType[kind],probe_verified:true,...times,...data};
  return {probe_verified:true,source_reference:`manual-evidence:${kind}:receipt-1`,proof_payload:payload,proof_sha256:sha256Object(payload)};
 }
 const records={
@@ -38,4 +44,8 @@ const stale=proof('CURRENT_ACCOUNT',{account_status_current:true},{observed_at:'
 assert.equal(validateEvidence(stale,{kind:'CURRENT_ACCOUNT',now}).verified,false);
 const replay=proof('CURRENT_ACCOUNT',{account_status_current:true}); replay.proof_payload.rail_id='bunq-native-draft'; replay.proof_sha256=sha256Object(replay.proof_payload);
 assert.equal(validateEvidence(replay,{kind:'CURRENT_ACCOUNT',now}).verified,false);
+const wrongSource=proof('CURRENT_ACCOUNT',{account_status_current:true}); wrongSource.proof_payload.source_type='REVOLUT_APP_BALANCE_CAPTURE'; wrongSource.proof_sha256=sha256Object(wrongSource.proof_payload);
+const wrongSourceResult=validateEvidence(wrongSource,{kind:'CURRENT_ACCOUNT',now});
+assert.equal(wrongSourceResult.verified,false);
+assert.ok(wrongSourceResult.reasons.includes('SOURCE_TYPE_NOT_ALLOWED_FOR_EVIDENCE_KIND'));
 console.log('atlas-revolut-evidence-capture: PASS');
