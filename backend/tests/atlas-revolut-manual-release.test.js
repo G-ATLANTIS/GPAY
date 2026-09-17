@@ -14,7 +14,7 @@ assert.equal(blocked.payment_splitting_to_evade_limits,'DENY');
 
 const readyInput = {
   amount_in_minor:29490000,currency:'EUR', current_account_verified:true,
-  funds_available_verified:true, bank_limit_verified:true, amount_covered:true,
+  funds_available_verified:true, funds_sufficient:true, bank_limit_verified:true, amount_covered:true,
   dealer_identity_verified:true, beneficiary_verified:true, invoice_verified:true,
   vin_verified:true, payment_reference_verified:true, exact_amount_bound:true,
   beneficiary_bound:true, sca_path_verified:true, fresh_owner_approval:true,

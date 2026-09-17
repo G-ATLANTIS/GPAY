@@ -9,6 +9,7 @@ function evaluateRevolutManualRelease(input = {}) {
   const checks = [
     ['current_account_verified', 'CURRENT_REVOLUT_ACCOUNT_EVIDENCE_REQUIRED'],
     ['funds_available_verified', 'AVAILABLE_FUNDS_VERIFICATION_REQUIRED'],
+    ['funds_sufficient', 'AVAILABLE_FUNDS_INSUFFICIENT'],
     ['bank_limit_verified', 'BANK_LIMIT_VERIFICATION_REQUIRED'],
     ['amount_covered', 'BANK_LIMIT_INSUFFICIENT'],
     ['dealer_identity_verified', 'DEALER_IDENTITY_VERIFICATION_REQUIRED'],
