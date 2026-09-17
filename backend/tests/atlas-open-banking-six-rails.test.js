@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { normalizeIntent, routeIntent } = require('../../scripts/atlas-open-banking-core');
 const {
+  RevolutManualScaAdapter,
   AdyenOutboundAdapter,
   TinkOpenBankingAdapter,
   DirectSepaAdapter,
@@ -15,7 +16,7 @@ const h = v => crypto.createHash('sha256').update(v).digest('hex');
 
 const registryIds = buildDefaultAdapters({ env: {} }).map(x => x.id);
 assert.deepEqual(registryIds, [
-  'bunq-native-draft', 'atlas-direct-sepa', 'atlas-own-pisp',
+  'revolut-manual-sca', 'bunq-native-draft', 'atlas-direct-sepa', 'atlas-own-pisp',
   'adyen-api', 'yapily-connect', 'tink-open-banking'
 ]);
 
@@ -26,6 +27,7 @@ const intent = normalizeIntent({
 });
 
 for (const adapter of [
+  new RevolutManualScaAdapter({ env: {} }),
   new AdyenOutboundAdapter({ env: {} }),
   new TinkOpenBankingAdapter({ env: {} }),
   new DirectSepaAdapter({ env: {} })
@@ -72,4 +74,20 @@ for (const req of [adyenReq, tinkReq, sepaReq]) {
   assert.equal(req.value_moved, false);
 }
 assert.equal(sepaReq.requires_explicit_owner_authorization, true);
-console.log('atlas-open-banking-six-rails: PASS');
+const revolut = new RevolutManualScaAdapter({ env: {
+  ATLAS_REVOLUT_CURRENT_ACCOUNT_VERIFIED:'true',
+  ATLAS_REVOLUT_LIMIT_EVIDENCE_VERIFIED:'true',
+  ATLAS_REVOLUT_SCA_PATH_VERIFIED:'true',
+  ATLAS_REVOLUT_BENEFICIARY_VERIFIED:'true',
+  ATLAS_REVOLUT_PURCHASE_BINDING_VERIFIED:'true',
+  ATLAS_REVOLUT_VERIFIED_MAX_PAYMENT_EUR:'300000'
+}});
+const revolutRoute = routeIntent({ intent, adapters:[revolut] });
+assert.equal(revolutRoute.decision, 'BLOCKED');
+assert.ok(revolutRoute.evaluated[0].blockers.includes('MANUAL_USER_BANK_APPROVAL_REQUIRED'));
+assert.equal(revolutRoute.provider_call_permitted, false);
+const revReq = revolut.buildInitiationRequest({ intent, raw_beneficiary_iban:'FR7612345678901234567890185' });
+assert.equal(revReq.requires_user_bank_approval, true);
+assert.equal(revReq.payment_endpoint_call_permitted, false);
+assert.equal(revReq.value_moved, false);
+console.log('atlas-open-banking-seven-core-paths: PASS');

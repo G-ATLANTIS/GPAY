@@ -331,8 +331,56 @@ module.exports.TinkOpenBankingAdapter = TinkOpenBankingAdapter;
 module.exports.DirectSepaAdapter = DirectSepaAdapter;
 
 
+class RevolutManualScaAdapter extends OpenBankingAdapter {
+  constructor({ env = process.env } = {}) {
+    super({ id: 'revolut-manual-sca', type: 'MANUAL_SCA', priority: 5 });
+    this.env = env;
+  }
+  capabilitySnapshot() {
+    const account = bool(this.env.ATLAS_REVOLUT_CURRENT_ACCOUNT_VERIFIED);
+    const limit = bool(this.env.ATLAS_REVOLUT_LIMIT_EVIDENCE_VERIFIED);
+    const sca = bool(this.env.ATLAS_REVOLUT_SCA_PATH_VERIFIED);
+    const beneficiary = bool(this.env.ATLAS_REVOLUT_BENEFICIARY_VERIFIED);
+    const purchase = bool(this.env.ATLAS_REVOLUT_PURCHASE_BINDING_VERIFIED);
+    const max = Number(this.env.ATLAS_REVOLUT_VERIFIED_MAX_PAYMENT_EUR || 0);
+    const blockers = [];
+    if (!account) blockers.push('CURRENT_ACCOUNT_EVIDENCE_REQUIRED');
+    if (!limit) blockers.push('BANK_LIMIT_EVIDENCE_REQUIRED');
+    if (!sca) blockers.push('SCA_PATH_REQUIRED');
+    if (!beneficiary) blockers.push('BENEFICIARY_VERIFICATION_REQUIRED');
+    if (!purchase) blockers.push('PURCHASE_DOCUMENT_BINDING_REQUIRED');
+    blockers.push('MANUAL_USER_BANK_APPROVAL_REQUIRED');
+    return {
+      environment: 'PRODUCTION',
+      authenticated: account,
+      execution_authorized: false,
+      currency: 'EUR',
+      max_amount_in_minor: limit && Number.isFinite(max) ? Math.round(max * 100) : 0,
+      blockers
+    };
+  }
+  buildInitiationRequest({ intent, raw_beneficiary_iban }) {
+    if (!raw_beneficiary_iban) throw new Error('beneficiary_iban_required');
+    return {
+      schema: 'atlas-revolut-manual-sca-instruction-v1',
+      provider: 'revolut', mode: 'MANUAL_BANK_SCA',
+      amount_in_minor: intent.amount_in_minor, currency: 'EUR',
+      beneficiary_iban: String(raw_beneficiary_iban), beneficiary_name: intent.beneficiary_name,
+      reference: intent.reference, intent_binding_sha256: intent.intent_binding_sha256,
+      requires_user_bank_approval: true,
+      payment_endpoint_call_permitted: false,
+      network_request_performed: false,
+      value_moved: false
+    };
+  }
+  normalizeStatus(resource = {}) { return String(resource.normalized_status || 'MANUAL_PENDING').toUpperCase(); }
+}
+module.exports.RevolutManualScaAdapter = RevolutManualScaAdapter;
+
+
 function buildDefaultAdapters({ env = process.env } = {}) {
   return [
+    new RevolutManualScaAdapter({ env }),
     new BunqNativeAdapter({ env }),
     new DirectSepaAdapter({ env }),
     new OwnPispAdapter({ env }),
