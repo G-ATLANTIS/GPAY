@@ -1,0 +1,14 @@
+'use strict';
+const assert = require('node:assert/strict');
+const { discover } = require('../../scripts/atlas-open-banking-bank-discovery');
+const { evaluateCanary } = require('../../scripts/atlas-open-banking-canary');
+const { evaluateHighValueRelease } = require('../../scripts/atlas-open-banking-high-value-release');
+const { evaluateMercedesIntent } = require('../../scripts/atlas-mercedes-payment-intent');
+assert.equal(discover({}).state, 'BLOCKED_NO_BANK_CREDENTIALS');
+assert.equal(evaluateCanary({ amount_in_minor: 1 }).state, 'BLOCKED');
+assert.equal(evaluateCanary({ amount_in_minor: 101 }).blockers.includes('CANARY_AMOUNT_MUST_BE_AT_MOST_1_EUR'), true);
+assert.equal(evaluateHighValueRelease({ amount_in_minor: 29490000 }).state, 'BLOCKED');
+assert.equal(evaluateMercedesIntent({}).state, 'BLOCKED');
+const good = evaluateMercedesIntent({ invoice_sha256:'a'.repeat(64), beneficiary_iban_sha256:'b'.repeat(64), vin:'TESTVIN', payment_reference:'TESTREF', dealer_identity_verified:true, beneficiary_verified:true, invoice_verified:true, vin_verified:true });
+assert.equal(good.state, 'VERIFIED_INTENT_READY');
+console.log('atlas-open-banking-live-readiness: PASS');
