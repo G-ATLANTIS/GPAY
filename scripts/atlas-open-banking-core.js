@@ -8,7 +8,8 @@ const ADAPTER_TYPES = Object.freeze([
   'OWN_PISP',
   'SPONSORED_PISP',
   'OUTBOUND_PROVIDER',
-  'DIRECT_SEPA'
+  'DIRECT_SEPA',
+  'MANUAL_SCA'
 ]);
 
 function sha256(value) {

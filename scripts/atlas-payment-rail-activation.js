@@ -4,12 +4,14 @@
 const crypto = require('node:crypto');
 
 const RAILS = Object.freeze([
-  { id:'bunq-native-draft', activation_rank:10, credential_env:['BUNQ_API_KEY'], production_env:['BUNQ_ENV=production'], external_gates:[], probe:'bunq-readonly-v1' },
-  { id:'adyen-api', activation_rank:20, credential_env:['ADYEN_API_KEY','ADYEN_API_USERNAME','ADYEN_BALANCE_ACCOUNT_ID','ADYEN_LIVE_URL_PREFIX'], production_env:['ADYEN_ENV=production'], external_gates:['ADYEN_OUTBOUND_ONBOARDING_VERIFIED'], probe:'adyen-readonly-v1' },
-  { id:'tink-open-banking', activation_rank:30, credential_env:['TINK_CLIENT_ID','TINK_CLIENT_SECRET'], production_env:['TINK_ENV=production'], external_gates:['TINK_PRODUCTION_ONBOARDING_VERIFIED'], probe:'tink-readonly-v1' },
-  { id:'yapily-connect', activation_rank:40, credential_env:['YAPILY_APPLICATION_KEY','YAPILY_APPLICATION_SECRET'], production_env:['YAPILY_ENV=production'], external_gates:['YAPILY_CONNECT_APPROVED'], probe:'yapily-readonly-v1' },
-  { id:'atlas-own-pisp', activation_rank:90, credential_env:[], production_env:['ATLAS_PISP_PRODUCTION=true'], external_gates:['ATLAS_PISP_DNB_AUTHORISED','ATLAS_PISP_EIDAS_READY','ATLAS_PISP_BANK_REGISTRATION_VERIFIED'], probe:'own-pisp-readonly-v1' },
-  { id:'atlas-direct-sepa', activation_rank:100, credential_env:[], production_env:['ATLAS_DIRECT_SEPA_PRODUCTION=true'], external_gates:['ATLAS_DIRECT_SEPA_PSP_AUTHORIZATION_VERIFIED','ATLAS_DIRECT_SEPA_EPC_ADHERENCE_VERIFIED','ATLAS_DIRECT_SEPA_SETTLEMENT_ACCESS_VERIFIED','ATLAS_DIRECT_SEPA_NETWORK_ACCESS_VERIFIED','ATLAS_DIRECT_SEPA_HSM_VERIFIED','ATLAS_DIRECT_SEPA_VOP_VERIFIED'], probe:'direct-sepa-readonly-v1' }
+  { id:'revolut-manual-sca', mode:'MANUAL_SCA', activation_rank:5, credential_env:[], production_env:[], external_gates:[], probe:'revolut-manual-evidence-v1' },
+  { id:'bunq-native-draft', mode:'BANK_NATIVE', activation_rank:10, applicability_env:'ATLAS_RAIL_BUNQ_APPLICABLE', applicability_default:true, credential_env:['BUNQ_API_KEY'], production_env:['BUNQ_ENV=production'], external_gates:[], probe:'bunq-readonly-v1' },
+  { id:'revolut-open-banking', mode:'OPEN_BANKING_TARGET', activation_rank:15, credential_env:[], production_env:[], external_gates:['REVOLUT_PISP_TRANSPORT_VERIFIED','REVOLUT_OPEN_BANKING_ROUTE_VERIFIED'], probe:'revolut-open-banking-readonly-v1' },
+  { id:'adyen-api', mode:'OUTBOUND_PROVIDER', activation_rank:20, credential_env:['ADYEN_API_KEY','ADYEN_API_USERNAME','ADYEN_BALANCE_ACCOUNT_ID','ADYEN_LIVE_URL_PREFIX'], production_env:['ADYEN_ENV=production'], external_gates:['ADYEN_OUTBOUND_ONBOARDING_VERIFIED'], probe:'adyen-readonly-v1' },
+  { id:'tink-open-banking', mode:'SPONSORED_PISP', activation_rank:30, credential_env:['TINK_CLIENT_ID','TINK_CLIENT_SECRET'], production_env:['TINK_ENV=production'], external_gates:['TINK_PRODUCTION_ONBOARDING_VERIFIED'], probe:'tink-readonly-v1' },
+  { id:'yapily-connect', mode:'SPONSORED_PISP', activation_rank:40, credential_env:['YAPILY_APPLICATION_KEY','YAPILY_APPLICATION_SECRET'], production_env:['YAPILY_ENV=production'], external_gates:['YAPILY_CONNECT_APPROVED'], probe:'yapily-readonly-v1' },
+  { id:'atlas-own-pisp', mode:'OWN_PISP', activation_rank:90, credential_env:[], production_env:['ATLAS_PISP_PRODUCTION=true'], external_gates:['ATLAS_PISP_DNB_AUTHORISED','ATLAS_PISP_EIDAS_READY','ATLAS_PISP_BANK_REGISTRATION_VERIFIED'], probe:'own-pisp-readonly-v1' },
+  { id:'atlas-direct-sepa', mode:'DIRECT_SEPA', activation_rank:100, credential_env:[], production_env:['ATLAS_DIRECT_SEPA_PRODUCTION=true'], external_gates:['ATLAS_DIRECT_SEPA_PSP_AUTHORIZATION_VERIFIED','ATLAS_DIRECT_SEPA_EPC_ADHERENCE_VERIFIED','ATLAS_DIRECT_SEPA_SETTLEMENT_ACCESS_VERIFIED','ATLAS_DIRECT_SEPA_NETWORK_ACCESS_VERIFIED','ATLAS_DIRECT_SEPA_HSM_VERIFIED','ATLAS_DIRECT_SEPA_VOP_VERIFIED'], probe:'direct-sepa-readonly-v1' }
 ]);
 
 function stable(value) {
@@ -23,6 +25,12 @@ function yes(env, key) { return String(env[key] || '').trim().toLowerCase() === 
 function productionSatisfied(env, expression) {
   const [key, expected] = expression.split('=');
   return String(env[key] || '').trim().toLowerCase() === expected.toLowerCase();
+}
+function railApplicable(rail, env) {
+  if (!rail.applicability_env) return rail.applicability_default !== false;
+  const raw = String(env[rail.applicability_env] || '').trim();
+  if (!raw) return rail.applicability_default !== false;
+  return raw.toLowerCase() === 'true';
 }
 function validProof(item, now = new Date(), expectedRailId = null) {
   if (!item || item.probe_verified !== true) return false;
@@ -39,21 +47,25 @@ function validProof(item, now = new Date(), expectedRailId = null) {
   return Number.isFinite(observed) && Number.isFinite(expires) && observed <= t + 60000 && expires > t;
 }
 function evaluateRail(rail, {env = process.env, evidence = {}, now = new Date()} = {}) {
+  const applicable = railApplicable(rail, env);
+  const proof = evidence[rail.id];
+  const readOnlyVerified = applicable && validProof(proof, now, rail.id);
   const missingCredentials = rail.credential_env.filter(k => !present(env, k));
   const missingProduction = rail.production_env.filter(x => !productionSatisfied(env, x));
   const missingExternal = rail.external_gates.filter(k => !yes(env, k));
-  const proof = evidence[rail.id];
-  const readOnlyVerified = validProof(proof, now, rail.id);
-  let state = 'READY_FOR_READONLY_PROBE';
-  if (missingCredentials.length) state = 'BLOCKED_CREDENTIALS';
+  let state;
+  if (!applicable) state = 'NOT_APPLICABLE';
+  else if (readOnlyVerified) state = rail.mode === 'MANUAL_SCA' ? 'ACCOUNT_EVIDENCE_VERIFIED' : 'VERIFIED_READ_ONLY';
+  else if (rail.mode === 'MANUAL_SCA') state = 'READY_FOR_MANUAL_ACCOUNT_VERIFICATION';
+  else if (missingCredentials.length) state = 'BLOCKED_CREDENTIALS';
   else if (missingProduction.length) state = 'BLOCKED_PRODUCTION_CONFIG';
   else if (missingExternal.length) state = 'BLOCKED_EXTERNAL_ONBOARDING';
-  else if (readOnlyVerified) state = 'VERIFIED_READ_ONLY';
+  else state = 'READY_FOR_READONLY_PROBE';
   return {
-    rail_id: rail.id, activation_rank: rail.activation_rank, state,
-    missing_credentials: missingCredentials,
-    missing_production: missingProduction,
-    missing_external_gates: missingExternal,
+    rail_id: rail.id, mode: rail.mode, activation_rank: rail.activation_rank, applicable, state,
+    missing_credentials: applicable ? missingCredentials : [],
+    missing_production: applicable ? missingProduction : [],
+    missing_external_gates: applicable ? missingExternal : [],
     probe_contract: rail.probe,
     read_only_verified: readOnlyVerified,
     proof_sha256: readOnlyVerified ? proof.proof_sha256 : null,
@@ -65,13 +77,21 @@ function evaluateRail(rail, {env = process.env, evidence = {}, now = new Date()}
 }
 function activationMatrix({env = process.env, evidence = {}, now = new Date()} = {}) {
   const rails = RAILS.map(r => evaluateRail(r, {env,evidence,now})).sort((a,b)=>a.activation_rank-b.activation_rank);
-  const verified = rails.filter(r => r.read_only_verified);
-  const probeable = rails.filter(r => r.state === 'READY_FOR_READONLY_PROBE');
-  const next = verified[0] || probeable[0] || rails[0] || null;
+  const applicable = rails.filter(r => r.applicable);
+  const readOnly = applicable.filter(r => r.state === 'VERIFIED_READ_ONLY');
+  const manualVerified = applicable.filter(r => r.state === 'ACCOUNT_EVIDENCE_VERIFIED');
+  const pendingManual = applicable.filter(r => r.state === 'READY_FOR_MANUAL_ACCOUNT_VERIFICATION');
+  const probeable = applicable.filter(r => r.state === 'READY_FOR_READONLY_PROBE');
+  const primaryManual = applicable.find(r => r.rail_id === 'revolut-manual-sca') || null;
+  const next = pendingManual[0] || probeable[0] || applicable.find(r => !['VERIFIED_READ_ONLY','ACCOUNT_EVIDENCE_VERIFIED'].includes(r.state)) || null;
   return {
-    schema:'atlas-payment-rail-activation-matrix-v1', generated_at:now.toISOString(),
-    target:'FIRST_VERIFIED_READ_ONLY_RAIL', total_rails:rails.length,
-    verified_read_only_count:verified.length,
+    schema:'atlas-payment-rail-activation-matrix-v2', generated_at:now.toISOString(),
+    target:'EXISTING_BANK_PRIMARY_WITH_OPEN_BANKING_AUTOMATION', total_rails:rails.length,
+    applicable_rail_count:applicable.length,
+    not_applicable_count:rails.length-applicable.length,
+    verified_read_only_count:readOnly.length,
+    verified_manual_account_count:manualVerified.length,
+    primary_payment_path_id:primaryManual?.rail_id || null,
     next_activation_rail_id:next?.rail_id || null,
     rails,
     payment_write_enabled:false, provider_call_permitted:false, value_moved:false
@@ -79,4 +99,4 @@ function activationMatrix({env = process.env, evidence = {}, now = new Date()} =
 }
 
 if (require.main === module) console.log(JSON.stringify(activationMatrix(), null, 2));
-module.exports = { RAILS, stable, sha256Object, validProof, evaluateRail, activationMatrix };
+module.exports = { RAILS, stable, sha256Object, railApplicable, validProof, evaluateRail, activationMatrix };
