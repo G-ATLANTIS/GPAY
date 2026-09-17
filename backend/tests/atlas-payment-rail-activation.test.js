@@ -2,7 +2,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { activationMatrix, validProof } = require('../../scripts/atlas-payment-rail-activation');
+const { activationMatrix, validProof, sha256Object } = require('../../scripts/atlas-payment-rail-activation');
 const { probePlan } = require('../../scripts/atlas-payment-rail-probe-contracts');
 const h = s => crypto.createHash('sha256').update(s).digest('hex');
 const now = new Date('2026-09-17T13:45:00.000Z');
@@ -21,20 +21,25 @@ assert.equal(bunqReady.rails[0].state, 'READY_FOR_READONLY_PROBE');
 assert.equal(probePlan({rail_id:'bunq-native-draft', env:bunqEnv, now}).can_run_readonly_network_probe, false);
 assert.equal(probePlan({rail_id:'bunq-native-draft', env:{...bunqEnv,ATLAS_ALLOW_READONLY_NETWORK_PROBE:'true'}, now}).can_run_readonly_network_probe, true);
 
-const proof = {probe_verified:true, proof_sha256:h('bunq-proof'), source_reference:'provider:request:123', observed_at:'2026-09-17T13:44:00Z', expires_at:'2026-09-17T14:00:00Z'};
-assert.equal(validProof(proof, now), true);
+const proofPayload = {rail_id:'bunq-native-draft', probe_verified:true, stage:'BALANCE_READ_VERIFIED', observed_at:'2026-09-17T13:44:00Z', expires_at:'2026-09-17T14:00:00Z', provider_evidence_sha256:h('provider-evidence')};
+const proof = {probe_verified:true, proof_payload:proofPayload, proof_sha256:sha256Object(proofPayload), source_reference:'provider:request:123'};
+assert.equal(validProof(proof, now, 'bunq-native-draft'), true);
 const verified = activationMatrix({env:bunqEnv, evidence:{'bunq-native-draft':proof}, now});
 assert.equal(verified.verified_read_only_count, 1);
 assert.equal(verified.rails[0].state, 'VERIFIED_READ_ONLY');
 assert.equal(verified.rails[0].payment_write_enabled, false);
 assert.equal(verified.rails[0].provider_call_permitted, false);
 
-const stale = {...proof, expires_at:'2026-09-17T13:40:00Z'};
-assert.equal(validProof(stale, now), false);
+const stalePayload = {...proofPayload, expires_at:'2026-09-17T13:40:00Z'};
+const stale = {...proof, proof_payload:stalePayload, proof_sha256:sha256Object(stalePayload)};
+assert.equal(validProof(stale, now, 'bunq-native-draft'), false);
 const noSource = {...proof, source_reference:''};
-assert.equal(validProof(noSource, now), false);
+assert.equal(validProof(noSource, now, 'bunq-native-draft'), false);
 const badHash = {...proof, proof_sha256:'not-a-hash'};
-assert.equal(validProof(badHash, now), false);
+assert.equal(validProof(badHash, now, 'bunq-native-draft'), false);
+const wrongRailPayload = {...proofPayload, rail_id:'adyen-api'};
+const wrongRail = {...proof, proof_payload:wrongRailPayload, proof_sha256:sha256Object(wrongRailPayload)};
+assert.equal(validProof(wrongRail, now, 'bunq-native-draft'), false);
 
 const adyenEnv = {ADYEN_API_KEY:'x',ADYEN_API_USERNAME:'u',ADYEN_BALANCE_ACCOUNT_ID:'b',ADYEN_LIVE_URL_PREFIX:'https://live.example',ADYEN_ENV:'production',ADYEN_OUTBOUND_ONBOARDING_VERIFIED:'true',ATLAS_ALLOW_READONLY_NETWORK_PROBE:'true'};
 assert.equal(probePlan({rail_id:'adyen-api', env:adyenEnv, now}).can_run_readonly_network_probe, false);

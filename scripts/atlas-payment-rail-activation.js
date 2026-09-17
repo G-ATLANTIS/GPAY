@@ -12,18 +12,29 @@ const RAILS = Object.freeze([
   { id:'atlas-direct-sepa', activation_rank:100, credential_env:[], production_env:['ATLAS_DIRECT_SEPA_PRODUCTION=true'], external_gates:['ATLAS_DIRECT_SEPA_PSP_AUTHORIZATION_VERIFIED','ATLAS_DIRECT_SEPA_EPC_ADHERENCE_VERIFIED','ATLAS_DIRECT_SEPA_SETTLEMENT_ACCESS_VERIFIED','ATLAS_DIRECT_SEPA_NETWORK_ACCESS_VERIFIED','ATLAS_DIRECT_SEPA_HSM_VERIFIED','ATLAS_DIRECT_SEPA_VOP_VERIFIED'], probe:'direct-sepa-readonly-v1' }
 ]);
 
+function stable(value) {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, stable(value[k])]));
+  return value;
+}
+function sha256Object(value) { return crypto.createHash('sha256').update(JSON.stringify(stable(value))).digest('hex'); }
 function present(env, key) { return typeof env[key] === 'string' && env[key].trim().length > 0; }
 function yes(env, key) { return String(env[key] || '').trim().toLowerCase() === 'true'; }
 function productionSatisfied(env, expression) {
   const [key, expected] = expression.split('=');
   return String(env[key] || '').trim().toLowerCase() === expected.toLowerCase();
 }
-function validProof(item, now = new Date()) {
+function validProof(item, now = new Date(), expectedRailId = null) {
   if (!item || item.probe_verified !== true) return false;
-  if (!/^[0-9a-f]{64}$/i.test(String(item.proof_sha256 || ''))) return false;
   if (!String(item.source_reference || '').trim()) return false;
-  const observed = Date.parse(item.observed_at || '');
-  const expires = Date.parse(item.expires_at || '');
+  const payload = item.proof_payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+  if (expectedRailId && payload.rail_id !== expectedRailId) return false;
+  if (payload.probe_verified !== true) return false;
+  if (!/^[0-9a-f]{64}$/i.test(String(item.proof_sha256 || ''))) return false;
+  if (sha256Object(payload) !== String(item.proof_sha256).toLowerCase()) return false;
+  const observed = Date.parse(payload.observed_at || '');
+  const expires = Date.parse(payload.expires_at || '');
   const t = now.getTime();
   return Number.isFinite(observed) && Number.isFinite(expires) && observed <= t + 60000 && expires > t;
 }
@@ -32,7 +43,7 @@ function evaluateRail(rail, {env = process.env, evidence = {}, now = new Date()}
   const missingProduction = rail.production_env.filter(x => !productionSatisfied(env, x));
   const missingExternal = rail.external_gates.filter(k => !yes(env, k));
   const proof = evidence[rail.id];
-  const readOnlyVerified = validProof(proof, now);
+  const readOnlyVerified = validProof(proof, now, rail.id);
   let state = 'READY_FOR_READONLY_PROBE';
   if (missingCredentials.length) state = 'BLOCKED_CREDENTIALS';
   else if (missingProduction.length) state = 'BLOCKED_PRODUCTION_CONFIG';
@@ -68,4 +79,4 @@ function activationMatrix({env = process.env, evidence = {}, now = new Date()} =
 }
 
 if (require.main === module) console.log(JSON.stringify(activationMatrix(), null, 2));
-module.exports = { RAILS, validProof, evaluateRail, activationMatrix };
+module.exports = { RAILS, stable, sha256Object, validProof, evaluateRail, activationMatrix };
