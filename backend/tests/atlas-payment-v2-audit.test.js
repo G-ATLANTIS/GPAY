@@ -8,7 +8,7 @@ const ready = combineReports({
   state: 'READY_TO_CREATE_PAYMENT',
   amount_eur: 294900,
   amount_in_minor: 29_490_000,
-  scheme_selection: 'SEPA_CREDIT',
+  scheme_selection: 'USER_SELECTED_SEPA',
   blockers: [],
   provider_oauth_error: null,
   configured_max_payment_eur: 300000
@@ -25,7 +25,7 @@ const blocked = combineReports({
   state: 'BLOCKED',
   amount_eur: 294900,
   amount_in_minor: 29_490_000,
-  scheme_selection: 'SEPA_CREDIT',
+  scheme_selection: 'USER_SELECTED_SEPA',
   blockers: ['PROVIDER_ENTITLEMENT_REQUIRED'],
   provider_oauth_error: 'invalid_scope',
   configured_max_payment_eur: 100

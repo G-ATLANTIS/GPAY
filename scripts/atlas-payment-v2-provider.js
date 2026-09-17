@@ -38,13 +38,15 @@ function validateReturnUri(value) {
 function buildProviderSelection({ amount_in_minor, provider_id, country_code = 'NL' }) {
   const highValue = amount_in_minor >= HIGH_VALUE_EUR_MINOR;
   if (highValue) {
-    const providerId = required(provider_id, 'provider_id', 200);
     return {
-      type: 'preselected',
-      provider_id: providerId,
+      type: 'user_selected',
+      filter: {
+        countries: [required(country_code, 'country_code', 2).toUpperCase()],
+        customer_segments: ['retail']
+      },
       scheme_selection: {
-        type: 'preselected',
-        scheme_id: 'sepa_credit_transfer'
+        type: 'user_selected',
+        allow_remitter_fee: false
       }
     };
   }

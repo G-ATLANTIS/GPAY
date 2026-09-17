@@ -14,7 +14,7 @@ function requirePositiveMinor(value) {
 function schemeForEur(amountInMinor) {
   const amount = requirePositiveMinor(amountInMinor);
   return amount >= HIGH_VALUE_EUR_MINOR
-    ? 'SEPA_CREDIT'
+    ? 'USER_SELECTED_SEPA'
     : 'INSTANT_PREFERRED';
 }
 
@@ -41,11 +41,8 @@ function evaluatePreExecution(input = {}) {
   if (input.live_gate_enabled !== true) blockers.push('LIVE_GATE_DISABLED');
 
   const highValue = currency === 'EUR' && amount >= HIGH_VALUE_EUR_MINOR;
-  if (highValue && input.provider_id_verified !== true) {
-    blockers.push('HIGH_VALUE_PROVIDER_PRESELECTION_REQUIRED');
-  }
-  if (highValue && input.provider_supports_sepa_credit !== true) {
-    blockers.push('HIGH_VALUE_SEPA_CREDIT_SUPPORT_REQUIRED');
+  if (highValue && input.scheme_selection_capable !== true) {
+    blockers.push('HIGH_VALUE_SCHEME_SELECTION_REQUIRED');
   }
 
   const scheme = currency === 'EUR' ? schemeForEur(amount) : null;

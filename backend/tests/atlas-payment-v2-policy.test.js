@@ -18,17 +18,16 @@ const green = {
   signing_ready: true,
   idempotency_bound: true,
   sca_capable: true,
-  provider_id_verified: true,
-  provider_supports_sepa_credit: true,
+  scheme_selection_capable: true,
   live_gate_enabled: true
 };
 
-assert.equal(schemeForEur(29_490_000), 'SEPA_CREDIT');
+assert.equal(schemeForEur(29_490_000), 'USER_SELECTED_SEPA');
 assert.equal(schemeForEur(9_999_999), 'INSTANT_PREFERRED');
 
 const ready = evaluatePreExecution(green);
 assert.equal(ready.state, 'READY_TO_CREATE_PAYMENT');
-assert.equal(ready.scheme_selection, 'SEPA_CREDIT');assert.equal(ready.sca_required, true);
+assert.equal(ready.scheme_selection, 'USER_SELECTED_SEPA');assert.equal(ready.sca_required, true);
 assert.equal(ready.payment_created, false);
 assert.equal(ready.value_moved, false);
 

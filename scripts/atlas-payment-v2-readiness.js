@@ -44,6 +44,28 @@ function latestOauthProof(baseDir) {
   return { file: null, proof: null };
 }
 
+function latestBankLimitProof(baseDir) {
+  const file = path.join(baseDir, '.secrets/evidence/atlas-bank-limit-proof.json');
+  if (!fs.existsSync(file)) return { file: null, proof: null, verified: false };
+  try {
+    const proof = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const observedAt = Date.parse(proof.observed_at);
+    const ageMs = Date.now() - observedAt;
+    const verified =
+      proof.schema === 'atlas-bank-limit-proof-v1' &&
+      proof.verified === true &&
+      proof.source === 'BANK_PROVIDER_READBACK' &&
+      String(proof.currency || '').toUpperCase() === 'EUR' &&
+      Number.isSafeInteger(proof.max_amount_in_minor) &&
+      proof.max_amount_in_minor > 0 &&
+      /^[0-9a-f]{64}$/i.test(String(proof.evidence_sha256 || '')) &&
+      Number.isFinite(observedAt) && ageMs >= -5000 && ageMs <= 24 * 60 * 60 * 1000;
+    return { file, proof, verified };
+  } catch {
+    return { file, proof: null, verified: false };
+  }
+}
+
 function evaluateCurrent({ baseDir, amountEur }) {
   const active = loadEnvFile(path.join(baseDir, '.env'));
   const prodPath = path.join(baseDir, '.secrets/production/truelayer.env');
@@ -67,8 +89,12 @@ function evaluateCurrent({ baseDir, amountEur }) {
   const effectiveMaxEur = Number(
     prod.G_BANK_MAX_PAYMENT_EUR || active.G_BANK_MAX_PAYMENT_EUR || 0
   );
-  const bankLimitMinor = Number.isFinite(effectiveMaxEur)
+  const localPolicyLimitMinor = Number.isFinite(effectiveMaxEur)
     ? Math.round(effectiveMaxEur * 100)
+    : 0;
+  const bankLimit = latestBankLimitProof(baseDir);
+  const bankLimitMinor = bankLimit.verified
+    ? Number(bankLimit.proof.max_amount_in_minor)
     : 0;
 
   const policy = evaluatePreExecution({
@@ -77,18 +103,21 @@ function evaluateCurrent({ baseDir, amountEur }) {
     owner_approved: false,
     provider_entitlement_verified: providerEntitlementVerified,
     beneficiary_verified: false,
-    bank_limit_verified: bankLimitMinor > 0,
+    bank_limit_verified: bankLimit.verified,
     bank_limit_minor: bankLimitMinor,
     signing_ready: signingReady,
     idempotency_bound: false,
     sca_capable: false,
     live_gate_enabled: isTrue(prod.G_BANK_ENABLE_LIVE),
-    provider_id_verified: false,
-    provider_supports_sepa_credit: false
+    scheme_selection_capable: true
   });
 
+  const blockers = [...policy.blockers];
+  if (localPolicyLimitMinor < amount) blockers.push('LOCAL_POLICY_LIMIT_INSUFFICIENT');
+  const uniqueBlockers = Array.from(new Set(blockers)).sort();
+
   return {
-    schema: 'atlas-payment-v2-readiness-v1',
+    schema: 'atlas-payment-v2-readiness-v2',
     amount_eur: Number(amountEur),
     amount_in_minor: amount,
     production_config_present: fs.existsSync(prodPath),
@@ -98,11 +127,15 @@ function evaluateCurrent({ baseDir, amountEur }) {
     provider_entitlement_verified: providerEntitlementVerified,
     provider_oauth_error: proof?.oauth_error || null,
     configured_max_payment_eur: effectiveMaxEur || null,
+    local_policy_limit_in_minor: localPolicyLimitMinor,
+    bank_limit_evidence_present: Boolean(bankLimit.file),
+    bank_limit_verified: bankLimit.verified,
+    bank_limit_in_minor: bankLimitMinor || null,
     live_gate_enabled: isTrue(prod.G_BANK_ENABLE_LIVE),
     scheme_selection: policy.scheme_selection,
     sca_required: policy.sca_required,
-    state: policy.state,
-    blockers: policy.blockers,
+    state: uniqueBlockers.length === 0 ? 'READY_TO_CREATE_PAYMENT' : 'BLOCKED',
+    blockers: uniqueBlockers,
     payment_endpoint_called: false,
     payment_created: false,
     value_moved: false,
@@ -131,4 +164,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { eurToMinor, loadEnvFile, evaluateCurrent };
+module.exports = { eurToMinor, loadEnvFile, latestBankLimitProof, evaluateCurrent };

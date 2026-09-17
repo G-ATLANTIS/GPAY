@@ -28,6 +28,7 @@ const executed = verifyStatusResource({
   resource: {
     id: paymentId,
     status: 'executed',
+    payment_method: { scheme_id: 'sepa_credit_transfer' },
     amount_in_minor: amount,
     currency: 'EUR'
   },
@@ -43,7 +44,8 @@ const webhook = verifyWebhook({
   event: {
     type: 'payment_executed',
     event_id: eventId,
-    payment_id: paymentId
+    payment_id: paymentId,
+    payment_method: { scheme_id: 'sepa_credit_transfer' }
   },
   expected_payment_id: paymentId,
   signature_verified: true
@@ -54,7 +56,8 @@ assert.throws(() => verifyWebhook({
   event: {
     type: 'payment_executed',
     event_id: eventId,
-    payment_id: paymentId
+    payment_id: paymentId,
+    payment_method: { scheme_id: 'sepa_credit_transfer' }
   },
   expected_payment_id: paymentId,
   signature_verified: false
@@ -64,6 +67,7 @@ assert.throws(() => verifyStatusResource({
   resource: {
     id: paymentId,
     status: 'executed',
+    payment_method: { scheme_id: 'sepa_credit_transfer' },
     amount_in_minor: amount - 1,
     currency: 'EUR'
   },

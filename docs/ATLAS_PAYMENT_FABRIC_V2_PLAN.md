@@ -64,12 +64,12 @@ Acceptance:
 - Replace the current `ELIGIBLE_WITHOUT_NEW_SCA` assumption.
 - Treat `SCA_REQUIRED` as the normal safe state for a new bank payment.
 - TrueLayer external-account EUR payment is the primary rail.
-- For amount >= EUR 100,000, force SEPA Credit compatible routing; never use `instant_only`.
+- For high-value EUR, use Hosted Page `user_selected` provider + scheme selection so the owner can choose an actually supported SEPA rail; never assume bank capability.
 - For smaller amounts use `instant_preferred` unless provider evidence says otherwise.
 - Query/verify selected bank capability and applicable amount limit before payment creation.
 
 Acceptance:
-- EUR 294,900 routes to SEPA Credit-compatible mode;
+- EUR 294,900 routes to `USER_SELECTED_SEPA`; the executed scheme ID is verified from provider evidence;
 - SCA requirement does not cause a false rejection;
 - unknown bank limit -> BLOCKED, never assumed.
 ## Phase 4 — owner approval and execution authorization
@@ -111,14 +111,14 @@ Acceptance:
 - Verify webhook signature before state transition.
 - Correlate provider payment ID, intent hash, amount, currency and beneficiary binding.
 - Use GET payment readback as independent status confirmation.
-- `SETTLED` requires provider evidence; `RECONCILED` requires final settlement/confirmation evidence.
+- For an external-account pay-in, provider `executed` proves bank acceptance/submission but not creditor receipt; `CREDITOR_SETTLEMENT_CONFIRMED` requires independent creditor-side evidence before reconciliation.
 - UNKNOWN is a first-class state: never retry value movement blindly.
 
 Acceptance:
 - forged webhook cannot move state;
 - duplicate webhook is idempotent;
 - conflicting webhook/readback -> UNKNOWN/BLOCKED;
-- settled amount and currency must exactly match intent.
+- provider execution and creditor-settlement amount/currency must exactly match intent.
 ## Phase 8 — high-value EUR policy
 For the Mercedes target amount, EUR 294,900:
 - production provider entitlement must be verified;
@@ -127,8 +127,8 @@ For the Mercedes target amount, EUR 294,900:
 - ATLAS policy limit must be changed only after these checks, not before;
 - require explicit high-value owner approval close to execution;
 - require SCA at the bank;
-- route to SEPA Credit-compatible scheme, not `instant_only`;
-- monitor until final provider settlement evidence exists.
+- use user-selected SEPA scheme routing; verify the executed `scheme_id` is an allowed EUR scheme;
+- monitor provider execution separately from independent creditor-settlement confirmation.
 
 No code may split the payment into smaller transactions to evade a bank/provider/policy limit.
 
@@ -140,3 +140,29 @@ No code may split the payment into smaller transactions to evade a bank/provider
 
 ## Go-live definition
 `ATLAS_PAYMENT_LIVE_READY=true` only when all phases 0-9 pass with fresh evidence. A live switch is a separate deliberate action after the readiness report. The first production transaction should be a controlled low-value validation transaction to an owned/verified beneficiary before any high-value dealer payment.
+## Verified implementation status — 2026-09-17
+
+Implemented and locally tested:
+- high-value EUR policy: EUR 294,900 selects `USER_SELECTED_SEPA`
+- SCA as a first-class state rather than a failure condition
+- TrueLayer v3 payload materialization with Hosted Page bank + scheme selection
+- provider create/status/webhook evidence verification
+- creditor-settlement confirmation separated from provider `executed`
+- cryptographic settlement proof chain with tamper detection
+- public webhook/return network readiness probes
+- aggregate production audit for a requested EUR amount
+- secret files hardened to mode 0600
+
+Current external blockers for EUR 294,900:
+- TrueLayer live OAuth `payments` entitlement returns `invalid_scope`
+- production `G_BANK_ENABLE_LIVE` remains false by design
+- configured local max payment remains EUR 100
+- dealer beneficiary IBAN/invoice has not yet been independently verified
+- high-value bank transfer limit has not yet been independently verified
+- user SCA path not yet exercised in live mode
+- `https://bank.gijs.live` webhook and return paths currently return HTTP 530
+- existing Vercel webhook is reachable but reports sandbox environment
+- existing Vercel deployment has no deployed `/api/open-banking/return` route
+- current Vercel connector access to the linked project returns 403 for deployment listing
+
+No `/v3/payments` call has been made and no value has moved.

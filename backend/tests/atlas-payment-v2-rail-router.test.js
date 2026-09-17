@@ -17,7 +17,7 @@ const highValue = evaluateRail({
   new_sca_required: true
 });
 assert.equal(highValue.state, 'ELIGIBLE_REQUIRES_SCA');
-assert.equal(highValue.scheme_selection, 'SEPA_CREDIT');
+assert.equal(highValue.scheme_selection, 'USER_SELECTED_SEPA');
 assert.equal(highValue.execution_candidate, true);
 assert.equal(highValue.sca_required, true);
 assert.deepEqual(highValue.blockers, []);

@@ -40,14 +40,36 @@ assert.equal(report.production_environment, 'live');
 assert.equal(report.provider_credentials_present, true);
 assert.equal(report.provider_entitlement_verified, false);
 assert.equal(report.configured_max_payment_eur, 100);
-assert.equal(report.scheme_selection, 'SEPA_CREDIT');
+assert.equal(report.scheme_selection, 'USER_SELECTED_SEPA');
 assert.equal(report.sca_required, true);
 assert.equal(report.state, 'BLOCKED');
-assert(report.blockers.includes('BANK_LIMIT_INSUFFICIENT'));
+assert(report.blockers.includes('BANK_LIMIT_VERIFICATION_REQUIRED'));
+assert(report.blockers.includes('LOCAL_POLICY_LIMIT_INSUFFICIENT'));
+assert.equal(report.bank_limit_verified, false);
 assert(report.blockers.includes('PROVIDER_ENTITLEMENT_REQUIRED'));
 assert(report.blockers.includes('SCA_PATH_NOT_READY'));
 assert.equal(report.payment_endpoint_called, false);
 assert.equal(report.value_moved, false);
+
+fs.writeFileSync(path.join(root, '.env'), 'G_BANK_MAX_PAYMENT_EUR=300000\n');
+fs.writeFileSync(
+  path.join(root, '.secrets/evidence/atlas-bank-limit-proof.json'),
+  JSON.stringify({
+    schema: 'atlas-bank-limit-proof-v1',
+    verified: true,
+    source: 'BANK_PROVIDER_READBACK',
+    currency: 'EUR',
+    max_amount_in_minor: 30_000_000,
+    evidence_sha256: 'a'.repeat(64),
+    observed_at: new Date().toISOString()
+  })
+);
+const withBankProof = evaluateCurrent({ baseDir: root, amountEur: '294900' });
+assert.equal(withBankProof.bank_limit_verified, true);
+assert.equal(withBankProof.bank_limit_in_minor, 30_000_000);
+assert(!withBankProof.blockers.includes('BANK_LIMIT_VERIFICATION_REQUIRED'));
+assert(!withBankProof.blockers.includes('BANK_LIMIT_INSUFFICIENT'));
+assert(!withBankProof.blockers.includes('LOCAL_POLICY_LIMIT_INSUFFICIENT'));
 
 fs.rmSync(root, { recursive: true, force: true });
 console.log('atlas-payment-v2-readiness: PASS');

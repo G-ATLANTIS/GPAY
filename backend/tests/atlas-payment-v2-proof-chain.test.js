@@ -27,6 +27,7 @@ const status = verifyStatusResource({
   resource: {
     id: paymentId,
     status: 'executed',
+    payment_method: { scheme_id: 'sepa_credit_transfer' },
     amount_in_minor: amount,
     currency: 'EUR'
   },
