@@ -7,7 +7,8 @@ const ADAPTER_TYPES = Object.freeze([
   'BANK_NATIVE',
   'OWN_PISP',
   'SPONSORED_PISP',
-  'OUTBOUND_PROVIDER'
+  'OUTBOUND_PROVIDER',
+  'DIRECT_SEPA'
 ]);
 
 function sha256(value) {
